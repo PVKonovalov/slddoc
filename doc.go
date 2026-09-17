@@ -13,8 +13,11 @@
 // corpus-faithful behavior here; and sld-editor
 // (github.com/PVKonovalov/sld-editor), an interactive diagram editor built
 // on top of Render, which needs to load the same XML format Extract
-// produces. Every id (Element/Node/Connector/VoltageClass/Layer, and every
-// field referencing one) is a plain int, never a string; 0 doubles as
-// "unset" for an optional reference since a real id from a source SVG is
-// never 0.
+// produces — the model and Render also carry sld-editor's own extensions
+// (JSON tags, per-diagram Editor settings, a Label's own id/color/font,
+// RenderMode's interactive-only markup, ...), which Extract's own output
+// simply leaves at their zero value. Every id (Element/Node/Connector/
+// VoltageClass/Layer, and every field referencing one) is a plain int,
+// never a string; 0 doubles as "unset" for an optional reference since a
+// real id from a source SVG is never 0.
 package slddoc

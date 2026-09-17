@@ -106,7 +106,7 @@ func parseSubpaths(d string) ([][]Point, error) {
 			// a device's electrical extremities), never its rendered
 			// shape, since rendering replays the original template text
 			// verbatim rather than reconstructing it from stored points.
-			for i := 0; i < 5; i++ { // rx, ry, x-axis-rotation, large-arc-flag, sweep-flag
+			for range 5 { // rx, ry, x-axis-rotation, large-arc-flag, sweep-flag
 				if _, err := next(); err != nil {
 					return nil, err
 				}

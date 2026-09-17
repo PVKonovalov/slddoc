@@ -26,6 +26,13 @@ func TestLoadSymbolLibrary(t *testing.T) {
 	}
 }
 
+func TestNewSymbolLibrary(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"41": "<path/>"})
+	if _, ok := lib.templates["41"]; !ok {
+		t.Fatalf("templates = %+v, want shape 41", lib.templates)
+	}
+}
+
 func TestRender_ProducesWellFormedSVG(t *testing.T) {
 	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
 	if err != nil {
@@ -35,19 +42,25 @@ func TestRender_ProducesWellFormedSVG(t *testing.T) {
 	state := 1
 	d := &Diagram{
 		Width: 100, Height: 100,
-		VoltageClasses: []VoltageClass{{ID: 1, Name: "10кВ", Color: "#962896"}},
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "10kV", Color: "#962896"}},
 		Elements: []Element{
-			{ID: 1, Class: ClassBusBarSection, Voltage: 1, Points: []Point{{0, 0}, {100, 0}}},
-			{ID: 2, Class: ClassBreaker, Shape: "41", Name: "В-1", Voltage: 1, X: 50, Y: 50, State: &state},
+			{ID: 1, Class: ClassBusBarSection, Voltage: 1, Points: []Point{{X: 0, Y: 0}, {X: 100, Y: 0}}},
+			{ID: 2, Class: ClassBreaker, Shape: "41", Name: "CB-1", Voltage: 1, X: 50, Y: 50, State: &state},
 		},
 		Connectors: []Connector{
-			{ID: 1, Voltage: 1, Points: []Point{{50, 0}, {50, 43}}},
+			{ID: 3, Points: []Point{{X: 50, Y: 0}, {X: 50, Y: 43}}},
 		},
 		Labels: []Label{{X: 10, Y: 10, Size: 13, Text: "line one\nline two"}},
 	}
 
+	stateColors := []StateColor{
+		{State: 0, Label: "Open", Color: "red"},
+		{State: 1, Label: "Close", Color: "lawngreen"},
+		{State: 2, Label: "Intermediate", Color: "yellow"},
+	}
+
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf); err != nil {
+	if err := Render(d, lib, &buf, Static, nil, stateColors...); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,6 +83,19 @@ func TestRender_ProducesWellFormedSVG(t *testing.T) {
 	}
 	if !strings.Contains(out, "<tspan") {
 		t.Errorf("multi-line label should emit a tspan: %s", out)
+	}
+}
+
+func TestRender_UsesEditorBackground(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{Width: 10, Height: 10, Editor: &EditorSettings{Background: "#ffffff"}}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "background-color: #ffffff") {
+		t.Errorf("editor background not applied: %s", buf.String())
 	}
 }
 
@@ -110,15 +136,15 @@ func TestRender_AnnotatesTypeGroups(t *testing.T) {
 			{ID: 3, Class: ClassLamp, Shape: "106", X: 3, Y: 3, Radius: 8},
 		},
 		Connectors: []Connector{
-			{ID: 1, Kind: KindOverheadLine, Points: []Point{{0, 0}, {1, 1}}},
-			{ID: 2, Kind: KindOverheadLine, Points: []Point{{1, 1}, {2, 2}}},
-			{ID: 3, Kind: KindCableLine, Points: []Point{{2, 2}, {3, 3}}},
+			{ID: 4, Kind: KindOverheadLine, Points: []Point{{X: 0, Y: 0}, {X: 1, Y: 1}}},
+			{ID: 5, Kind: KindOverheadLine, Points: []Point{{X: 1, Y: 1}, {X: 2, Y: 2}}},
+			{ID: 6, Kind: KindCableLine, Points: []Point{{X: 2, Y: 2}, {X: 3, Y: 3}}},
 		},
 	}
 	lib.templates["106"] = `<circle r="{radius}" style="fill:{color}" />`
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf); err != nil {
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -129,14 +155,63 @@ func TestRender_AnnotatesTypeGroups(t *testing.T) {
 	if !strings.Contains(out, "<!-- Lamp:106 -->") {
 		t.Errorf("missing Lamp:106 header: %s", out)
 	}
-	if n := strings.Count(out, "<!-- Overhead line -->"); n != 1 {
-		t.Errorf("want exactly one Overhead line header for the two consecutive connectors, got %d:\n%s", n, out)
+	if n := strings.Count(out, "<!-- Overhead line:22 -->"); n != 1 {
+		t.Errorf("want exactly one Overhead line:22 header for the two consecutive connectors, got %d:\n%s", n, out)
 	}
-	if !strings.Contains(out, "<!-- Cable line -->") {
-		t.Errorf("missing Cable line header: %s", out)
+	if !strings.Contains(out, "<!-- Cable line:23 -->") {
+		t.Errorf("missing Cable line:23 header: %s", out)
 	}
 	if !strings.Contains(out, `r="8"`) {
 		t.Errorf("lamp radius placeholder not substituted: %s", out)
+	}
+}
+
+func TestRender_CableLineIsDashedByDefaultOverheadLineIsNot(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Connectors: []Connector{
+			{ID: 1, Kind: KindOverheadLine, Points: []Point{{X: 0, Y: 0}, {X: 1, Y: 1}}},
+			{ID: 2, Kind: KindCableLine, Points: []Point{{X: 2, Y: 2}, {X: 3, Y: 3}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "stroke-dasharray: 6,5;") {
+		t.Errorf("cable line should default to a 6,5 dasharray: %s", out)
+	}
+	overhead := out[:strings.Index(out, `id="2"`)]
+	if strings.Contains(overhead, "dasharray") {
+		t.Errorf("overhead line should render solid by default: %s", overhead)
+	}
+}
+
+func TestResolveCableLineDash(t *testing.T) {
+	cases := []struct {
+		style ConnectorLineStyle
+		want  string
+	}{
+		{"", "stroke-dasharray: 6,5;"},
+		{LineStyleDashed, "stroke-dasharray: 6,5;"},
+		{LineStyleDashDot, "stroke-dasharray: 70 20 25 20;"},
+		{LineStyleDotted, "stroke-dasharray: 3,2;"},
+		{LineStyleSolid, ""},
+		{"garbage", "stroke-dasharray: 6,5;"},
+	}
+	for _, c := range cases {
+		t.Run(string(c.style), func(t *testing.T) {
+			if got := resolveCableLineDash(c.style); got != c.want {
+				t.Errorf("resolveCableLineDash(%q) = %q, want %q", c.style, got, c.want)
+			}
+		})
 	}
 }
 
@@ -150,11 +225,10 @@ func TestRender_ElevatedClassesDrawnAfterConnectors(t *testing.T) {
 	lib.templates["320003"] = `<circle r="{radius}" style="fill:{color}" />`
 	d := &Diagram{
 		Width: 100, Height: 100,
-		// Every elevated element is listed first in document order (as real
-		// corpus SVGs place standalone point/status symbols wherever they
-		// fall in the source), but each must still render after the
-		// connectors loop, so it paints on top of any wire it sits on
-		// instead of a later-painted wire cutting through it.
+		// Every elevated element is listed first in document order, but each
+		// must still render after the connectors loop, so it paints on top
+		// of any wire it sits on instead of a later-painted wire cutting
+		// through it.
 		Elements: []Element{
 			{ID: 1, Class: ClassJunctionPoint, Shape: "7", X: 0, Y: 0},
 			{ID: 2, Class: ClassLamp, Shape: "106", X: 1, Y: 1, Radius: 8},
@@ -162,12 +236,12 @@ func TestRender_ElevatedClassesDrawnAfterConnectors(t *testing.T) {
 			{ID: 4, Class: ClassBreaker, Shape: "41", X: 3, Y: 3},
 		},
 		Connectors: []Connector{
-			{ID: 1, Kind: KindOverheadLine, Points: []Point{{0, 0}, {2, 2}}},
+			{ID: 5, Kind: KindOverheadLine, Points: []Point{{X: 0, Y: 0}, {X: 2, Y: 2}}},
 		},
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf); err != nil {
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -200,7 +274,7 @@ func TestRender_ReportsMissingShape(t *testing.T) {
 		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 1, Y: 1}},
 	}
 	var buf bytes.Buffer
-	err = Render(d, lib, &buf)
+	err = Render(d, lib, &buf, Static, nil)
 	if err == nil {
 		t.Fatal("expected an error for a missing shape")
 	}
@@ -210,5 +284,189 @@ func TestRender_ReportsMissingShape(t *testing.T) {
 	// The rest of the document must still be written.
 	if !strings.Contains(buf.String(), "</svg>") {
 		t.Errorf("output should still be a complete document: %s", buf.String())
+	}
+}
+
+func TestRender_BusbarsAndConnectorsAreSelectable(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{
+			{ID: 1, Class: ClassBusBarSection, Points: []Point{{X: 0, Y: 0}, {X: 100, Y: 0}}},
+		},
+		Connectors: []Connector{
+			{ID: 2, Points: []Point{{X: 0, Y: 10}, {X: 100, Y: 10}}},
+		},
+		Labels: []Label{{ID: 3, X: 5, Y: 5, Size: 10, Text: "Note"}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `id="1" data-editor-kind="element"`) {
+		t.Errorf("busbar should carry its bare id and an element data-editor-kind marker: %s", out)
+	}
+	if !strings.Contains(out, `id="2" data-editor-kind="connector"`) {
+		t.Errorf("connector should carry its bare id and a connector data-editor-kind marker: %s", out)
+	}
+	if !strings.Contains(out, `id="3" x="5" y="5" style="` /* label's own <text> attribute order */) ||
+		!strings.Contains(out, `data-editor-kind="label"`) {
+		t.Errorf("label should carry its bare id and a label data-editor-kind marker: %s", out)
+	}
+}
+
+func TestRender_BusbarMatchesXsde2svgConventions(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 2200, Height: 600,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "110kV", Color: "#00A0F0"}},
+		Elements: []Element{{
+			ID: 957, Class: ClassBusBarSection, Shape: "24", Name: "1SEC 110kV", Voltage: 1,
+			Points: []Point{{X: 1670, Y: 520}, {X: 2150, Y: 520}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `stroke:#00A0F0;stroke-width:4`) {
+		t.Errorf("busbar should draw at 4px in its voltage class's color, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `data-name="1SEC 110kV"`) {
+		t.Errorf("busbar should carry its name as data-name, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `data-voltage="#00A0F0"`) {
+		t.Errorf("busbar should carry its resolved color as data-voltage, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `data-type="24"`) {
+		t.Errorf("busbar should carry its shape as data-type, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `id="957"`) {
+		t.Errorf("busbar should carry its own bare integer id, like a real xsde2svg busbar: %s", out)
+	}
+	if strings.Contains(out, "data-editor-kind") {
+		t.Errorf("Static mode should not carry this editor's own data-editor-kind marker: %s", out)
+	}
+}
+
+func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 2000, Height: 1200,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "10kV", Color: "#962896"}},
+		Connectors: []Connector{{
+			ID: 3988, Kind: KindBusWork, Voltage: 1,
+			Points: []Point{{X: 1310, Y: 560}, {X: 1310, Y: 670}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `data-type="21"`) {
+		t.Errorf("a BusWork connector (what diagramOps.connectElements creates) should carry data-type=\"21\", like a real xsde2svg connection: %s", out)
+	}
+	if !strings.Contains(out, `id="3988"`) {
+		t.Errorf("connector should carry its own bare integer id: %s", out)
+	}
+}
+
+func TestRender_SymbolElementsHaveAWiderHitTarget(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"41": `<path d="M 0 0" style="stroke:{color}"/>`})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 10, Y: 10}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `fill="transparent"`) {
+		t.Errorf("a symbol's tiny template geometry should get a wider invisible hit target: %s", buf.String())
+	}
+}
+
+func TestRender_StaticModeOmitsInteractiveMarkup(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"41": `<path d="M 0 0" style="stroke:{color}"/>`})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 10, Y: 10}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "data-editor-kind") {
+		t.Errorf("Static mode should not carry this editor's own data-editor-kind marker: %s", out)
+	}
+	if strings.Contains(out, `fill="transparent"`) {
+		t.Errorf("Static mode should not draw the interactive-only invisible hit-target circle: %s", out)
+	}
+	if !strings.Contains(out, `id="1"`) {
+		t.Errorf("Static mode should still carry the element's own bare id, like a real xsde2svg document: %s", out)
+	}
+}
+
+func TestRender_SwitchingDeviceCarriesDataFillAndDataState(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"41": `<path d="M -7 -7 h 14 v 14 h -14 z"{fillAttr} style="fill:{fill};stroke:{color};stroke-width:1" />
+<path d="{state:M 0 -5 v 10|M -5 0 h 10|M -3.5 -3.5 l 7 7}"{stateAttr} style="stroke:{color};stroke-width:1" />`,
+	})
+	state := 1
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 10, Y: 10, State: &state}},
+	}
+	stateColors := []StateColor{
+		{State: 0, Label: "Open", Color: "red"},
+		{State: 1, Label: "Close", Color: "lawngreen"},
+		{State: 2, Label: "Intermediate", Color: "yellow"},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil, stateColors...); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `data-fill="0:red,1:lawngreen,2:yellow"`) {
+		t.Errorf("switching device's fill path should carry a real xsde2svg data-fill legend built from the configured state colors: %s", out)
+	}
+	if !strings.Contains(out, `data-state="1"`) {
+		t.Errorf("switching device's state-indicator path should carry the element's own raw State as data-state: %s", out)
+	}
+	if !strings.Contains(out, `fill:lawngreen`) {
+		t.Errorf("state 1 should resolve to the configured lawngreen fill: %s", out)
+	}
+}
+
+func TestRender_MissingStateOmitsDataState(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"41": `<path d="{state:M 0 -5 v 10|M -5 0 h 10|M -3.5 -3.5 l 7 7}"{stateAttr} style="stroke:{color};stroke-width:1" />`,
+	})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 10, Y: 10}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil, StateColor{State: 0, Label: "Open", Color: "red"}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "data-state") {
+		t.Errorf("an element with no recorded State should carry no data-state attribute at all: %s", out)
 	}
 }

@@ -168,7 +168,7 @@ func parseState(n *rawNode) *int {
 // indicator, though the latter isn't read back here — see stateFill in
 // render.go) and returns the colors for index 0 and 1.
 func parseDataFill(dataFill string) (off, on string) {
-	for _, entry := range strings.Split(dataFill, ",") {
+	for entry := range strings.SplitSeq(dataFill, ",") {
 		k, v, found := strings.Cut(entry, ":")
 		if !found {
 			continue
@@ -514,7 +514,7 @@ var connectorKindByType = map[string]ConnectorKind{
 	"21": KindBusbarWire,
 	"22": KindOverheadLine,
 	"23": KindCableLine,
-	"28": KindObjectLink,
+	"28": KindBusWork,
 }
 
 // parseConnector handles the generic wire shapes (21, 22, 23, 28): a plain

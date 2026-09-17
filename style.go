@@ -6,7 +6,7 @@ import "strings"
 // attribute (semicolon-separated, as xsde2svg always emits it), returning
 // "" if the property isn't present.
 func styleProp(style, name string) string {
-	for _, decl := range strings.Split(style, ";") {
+	for decl := range strings.SplitSeq(style, ";") {
 		parts := strings.SplitN(decl, ":", 2)
 		if len(parts) != 2 {
 			continue
