@@ -30,7 +30,8 @@ var elementDataTypes = map[string]bool{
 	"41": true, "42": true, "43": true, "54": true, "71": true, "162": true,
 	"49": true, "47": true, "31": true, "33": true, "34": true, "35": true,
 	"203": true, "388": true, "106": true, "320003": true, "37": true,
-	"397": true,
+	"397": true, "29": true, "76": true, "154": true, "168": true,
+	"172": true, "173": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -42,9 +43,12 @@ var twoPortShapes = map[string]Class{
 	"33":  ClassChokeCoil,
 	"34":  ClassCurrentTransformer,
 	"35":  ClassSurgeArrester,
+	"29":  ClassSurgeArrester,
 	"203": ClassFuse,
+	"154": ClassFuse,
 	"388": ClassCapacitor,
 	"37":  ClassReactor,
+	"76":  ClassStarter,
 }
 
 // Extract parses raw as an xsde2svg-generated SVG and builds a Diagram.
@@ -153,7 +157,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37":
+		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
@@ -163,6 +167,30 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "397":
 			el, ports, voltage, err := parseReactorShunt(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "168":
+			el, ports, voltage, err := parseOnePortDevice(n, ClassSurgeArrester, "168")
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "172":
+			el, ports, voltage, err := parseOnePortDevice(n, ClassCapacitorBank, "172")
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "173":
+			el, ports, voltage, err := parseOnePortDevice(n, ClassGenerator, "173")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				continue

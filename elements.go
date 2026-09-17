@@ -16,8 +16,11 @@ import (
 //
 //   - Every two-terminal device this package supports (Breaker: 41/43;
 //     LoadBreakSwitch: 42; Disconnector: 162/71/49; ChokeCoil: 33;
-//     CurrentTransformer: 34; SurgeArrester: 35; Fuse: 203; Capacitor: 388;
-//     Reactor: 37) is handled by one function, parseTwoPortDevice: across every one of
+//     CurrentTransformer: 34; SurgeArrester: 35/29; Fuse: 203/154 (154 is
+//     the withdrawable variant — its own Position/data-trolley isn't
+//     extracted, same as the withdrawable Breaker/Disconnector: it's a
+//     purely render-side, this-editor-only concern); Capacitor: 388;
+//     Reactor: 37; Starter: 76) is handled by one function, parseTwoPortDevice: across every one of
 //     these shapes, the two electrical ports always turn out to be the pair
 //     of points reached furthest apart along the device's dominant axis,
 //     among *every* point of *every* path in the element — even though the
@@ -57,6 +60,14 @@ import (
 //     fallback convention (rotate() center when present, else the path's
 //     first point) rather than GroundSwitch's mandatory-rotate() one, since
 //     real instances appear both ways here too.
+//   - SurgeArrester (168, the grounded variant — as opposed to 35/29, both
+//     two-port), CapacitorBank (172), and Generator (173) are the same
+//     kind of single-electrical-port device as ReactorShunt, sharing its
+//     own fallback convention (rotate() center when present, else the
+//     combined path's own first point, which is always that device's real
+//     terminal for all three) — parseOnePortDevice is their common
+//     parser, parameterized by Class/Shape since it's otherwise identical
+//     for all four shapes.
 //   - PowerTransformer (47): only the 2-winding case is supported. Each
 //     winding's lead is a direct <path> child with exactly one subpath of
 //     exactly two points ("M x y h/v ±len"); the port is that subpath's
@@ -375,6 +386,53 @@ func parseReactorShunt(n *rawNode) (Element, []Point, string, error) {
 		Orient: orient,
 		Ports:  []Port{{Name: "1"}},
 	}, []Point{anchor}, n.attr("data-voltage"), nil
+}
+
+// parseOnePortDevice handles a single-electrical-port device whose real
+// connection point is its combined path's own first point: SurgeArrester
+// (168, the grounded variant), CapacitorBank (172), Generator (173). Same
+// fallback convention as parseReactorShunt (rotate() center when present,
+// else that first point), generalized across element/descendant search the
+// way parseTwoPortDevice's own rotate()/data-voltage lookups are, since
+// unlike ReactorShunt's own single top-level <path>, these shapes
+// sometimes carry rotate()/data-voltage on an inner element instead.
+func parseOnePortDevice(n *rawNode, class Class, shape string) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: no <path> geometry", n.attr("id"))
+	}
+
+	var anchor Point
+	var orient int
+	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		anchor, orient = center, angle
+	} else {
+		subpaths, err := parseSubpaths(paths[0].attr("d"))
+		if err != nil {
+			return Element{}, nil, "", err
+		}
+		if len(subpaths) == 0 || len(subpaths[0]) == 0 {
+			return Element{}, nil, "", fmt.Errorf("slddoc: element %s: empty path", n.attr("id"))
+		}
+		anchor = subpaths[0][0]
+	}
+
+	voltage := firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage"))
+	return Element{
+		ID:     id,
+		Class:  class,
+		Shape:  shape,
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
+		Ports:  []Port{{Name: "1"}},
+	}, []Point{anchor}, voltage, nil
 }
 
 // parsePowerTransformer handles shape 47 (power transformer), 2-winding
