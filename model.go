@@ -132,6 +132,7 @@ const (
 	ClassGenerator             Class = "Generator"
 	ClassBusBarSection         Class = "BusBarSection"
 	ClassJunctionPoint         Class = "JunctionPoint"
+	ClassNonIntersection       Class = "NonIntersection"
 	ClassLamp                  Class = "Lamp"
 	ClassFaultPassageIndicator Class = "FaultPassageIndicator"
 )

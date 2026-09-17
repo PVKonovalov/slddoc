@@ -183,6 +183,7 @@ func lampColor(e Element) string {
 // are labeled differently.
 var shapeName = map[string]string{
 	"7":      "Junction point",
+	"14":     "Non-intersection",
 	"24":     "Busbar",
 	"31":     "Ground terminal",
 	"33":     "Choke coil",

@@ -20,7 +20,12 @@ import (
 //     the withdrawable variant — its own Position/data-trolley isn't
 //     extracted, same as the withdrawable Breaker/Disconnector: it's a
 //     purely render-side, this-editor-only concern); Capacitor: 388;
-//     Reactor: 37; Starter: 76) is handled by one function, parseTwoPortDevice: across every one of
+//     Reactor: 37; Starter: 76; NonIntersection: 14, a purely decorative
+//     "hop" mark drawn where two crossing wires visually pass without
+//     connecting, modeled with two ports anyway — one on each side — since
+//     each one is still a real electrical node a wire's own end can land
+//     on, same as this pattern's every other shape) is handled by one
+//     function, parseTwoPortDevice: across every one of
 //     these shapes, the two electrical ports always turn out to be the pair
 //     of points reached furthest apart along the device's dominant axis,
 //     among *every* point of *every* path in the element — even though the
@@ -53,21 +58,20 @@ import (
 //     at the element's own rotation anchor (Ground falls back to its path's
 //     own first point when undrawn without a transform, since real
 //     instances appear both ways).
-//   - ReactorShunt (397) is also a single-electrical-port device (the
-//     grounded side has no port of its own, same as Ground/GroundSwitch):
-//     its own port is the top of its coil, which is exactly where its
-//     combined path's own first M command lands, so it follows Ground's own
-//     fallback convention (rotate() center when present, else the path's
-//     first point) rather than GroundSwitch's mandatory-rotate() one, since
-//     real instances appear both ways here too.
-//   - SurgeArrester (168, the grounded variant — as opposed to 35/29, both
-//     two-port), CapacitorBank (172), and Generator (173) are the same
-//     kind of single-electrical-port device as ReactorShunt, sharing its
-//     own fallback convention (rotate() center when present, else the
-//     combined path's own first point, which is always that device's real
-//     terminal for all three) — parseOnePortDevice is their common
-//     parser, parameterized by Class/Shape since it's otherwise identical
-//     for all four shapes.
+//   - ReactorShunt (397), SurgeArrester (168, the grounded variant — as
+//     opposed to 35/29, both two-port), CapacitorBank (172), and Generator
+//     (173) are all single-electrical-port devices too (the grounded/
+//     earthed/other side has no port of its own, same as
+//     Ground/GroundSwitch): the port is always the combined path's own
+//     first point, in the path's own *local* coordinates — but, unlike
+//     Ground, a rotate() transform's own center is *not* necessarily that
+//     same point for these four (e.g. Generator's own transform pivots on
+//     its circle's center, 25 units from its terminal), so a found
+//     transform has to be applied to that local point to get the real,
+//     global anchor, the same way parseTwoPortDevice's own ports are
+//     rotated, rather than just reusing the transform's center directly.
+//     parseOnePortDevice is their common parser, parameterized by
+//     Class/Shape since it's otherwise identical for all four shapes.
 //   - PowerTransformer (47): only the 2-winding case is supported. Each
 //     winding's lead is a direct <path> child with exactly one subpath of
 //     exactly two points ("M x y h/v ±len"); the port is that subpath's
@@ -342,60 +346,23 @@ func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 	}, []Point{center}, n.attr("data-voltage"), nil
 }
 
-// parseReactorShunt handles shape 397 (shunt reactor): a single electrical
-// port at the top of its coil — the earthed side, drawn as the same
-// decreasing-width bar fan Ground (31) uses, has no port of its own. Real
-// instances appear both with and without a rotate() transform; when
-// absent, the port is the combined path's own first point, the same
-// fallback parseGround uses (the element's formula always starts drawing
-// exactly at its own origin/anchor, here the coil's own top rather than
-// the earthed base).
-func parseReactorShunt(n *rawNode) (Element, []Point, string, error) {
-	id, err := parseElementID(n)
-	if err != nil {
-		return Element{}, nil, "", err
-	}
-	paths := elementPaths(n)
-	if len(paths) == 0 {
-		return Element{}, nil, "", fmt.Errorf("slddoc: reactor shunt %s: no <path> geometry", n.attr("id"))
-	}
-
-	var anchor Point
-	var orient int
-	if angle, center, ok := parseRotate(n.attr("transform")); ok {
-		anchor, orient = center, angle
-	} else {
-		subpaths, err := parseSubpaths(paths[0].attr("d"))
-		if err != nil {
-			return Element{}, nil, "", err
-		}
-		if len(subpaths) == 0 || len(subpaths[0]) == 0 {
-			return Element{}, nil, "", fmt.Errorf("slddoc: reactor shunt %s: empty path", n.attr("id"))
-		}
-		anchor = subpaths[0][0]
-	}
-
-	return Element{
-		ID:     id,
-		Class:  ClassReactorShunt,
-		Shape:  "397",
-		Name:   n.attr("data-name"),
-		Layer:  resolveLayer(n.attr("data-layer")),
-		X:      anchor.X,
-		Y:      anchor.Y,
-		Orient: orient,
-		Ports:  []Port{{Name: "1"}},
-	}, []Point{anchor}, n.attr("data-voltage"), nil
-}
-
 // parseOnePortDevice handles a single-electrical-port device whose real
-// connection point is its combined path's own first point: SurgeArrester
-// (168, the grounded variant), CapacitorBank (172), Generator (173). Same
-// fallback convention as parseReactorShunt (rotate() center when present,
-// else that first point), generalized across element/descendant search the
-// way parseTwoPortDevice's own rotate()/data-voltage lookups are, since
-// unlike ReactorShunt's own single top-level <path>, these shapes
-// sometimes carry rotate()/data-voltage on an inner element instead.
+// connection point is its combined path's own first point, *in the path's
+// own local/pre-rotation coordinates* — ReactorShunt (397), SurgeArrester
+// (168, the grounded variant), CapacitorBank (172), Generator (173). Real
+// instances appear both with and without a rotate() transform; when
+// absent, the anchor is exactly that first point (the element's formula
+// always starts drawing there). When present, the first point is *not*
+// simply the rotate() transform's own center the way Ground (31)'s
+// equivalent case is — for these four shapes the transform's center is a
+// different, shape-specific reference point (e.g. Generator's own circle
+// center, 25 units below its terminal), confirmed against a real corpus
+// instance (vres.svg, id 148791225: `M 3630 575 ... transform="rotate(
+// -270,3630,600)"` — center (3630,600) is 25 units from the path's own
+// first point (3630,575), not equal to it) — so the first point has to be
+// rotated *through* that transform to get the true, post-rotation anchor,
+// the same way parseTwoPortDevice's own ports are, rather than just
+// reusing the transform's center directly as parseGround does.
 func parseOnePortDevice(n *rawNode, class Class, shape string) (Element, []Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -405,20 +372,20 @@ func parseOnePortDevice(n *rawNode, class Class, shape string) (Element, []Point
 	if len(paths) == 0 {
 		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: no <path> geometry", n.attr("id"))
 	}
+	subpaths, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(subpaths) == 0 || len(subpaths[0]) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: empty path", n.attr("id"))
+	}
+	rawAnchor := subpaths[0][0]
 
-	var anchor Point
+	anchor := rawAnchor
 	var orient int
 	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
-		anchor, orient = center, angle
-	} else {
-		subpaths, err := parseSubpaths(paths[0].attr("d"))
-		if err != nil {
-			return Element{}, nil, "", err
-		}
-		if len(subpaths) == 0 || len(subpaths[0]) == 0 {
-			return Element{}, nil, "", fmt.Errorf("slddoc: element %s: empty path", n.attr("id"))
-		}
-		anchor = subpaths[0][0]
+		anchor = rotate(rawAnchor, center, float64(angle))
+		orient = angle
 	}
 
 	voltage := firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage"))
