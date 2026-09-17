@@ -16,8 +16,8 @@ import (
 //
 //   - Every two-terminal device this package supports (Breaker: 41/43;
 //     LoadBreakSwitch: 42; Disconnector: 162/71/49; ChokeCoil: 33;
-//     CurrentTransformer: 34; SurgeArrester: 35; Fuse: 203; Capacitor: 388)
-//     is handled by one function, parseTwoPortDevice: across every one of
+//     CurrentTransformer: 34; SurgeArrester: 35; Fuse: 203; Capacitor: 388;
+//     Reactor: 37) is handled by one function, parseTwoPortDevice: across every one of
 //     these shapes, the two electrical ports always turn out to be the pair
 //     of points reached furthest apart along the device's dominant axis,
 //     among *every* point of *every* path in the element — even though the
@@ -50,6 +50,13 @@ import (
 //     at the element's own rotation anchor (Ground falls back to its path's
 //     own first point when undrawn without a transform, since real
 //     instances appear both ways).
+//   - ReactorShunt (397) is also a single-electrical-port device (the
+//     grounded side has no port of its own, same as Ground/GroundSwitch):
+//     its own port is the top of its coil, which is exactly where its
+//     combined path's own first M command lands, so it follows Ground's own
+//     fallback convention (rotate() center when present, else the path's
+//     first point) rather than GroundSwitch's mandatory-rotate() one, since
+//     real instances appear both ways here too.
 //   - PowerTransformer (47): only the 2-winding case is supported. Each
 //     winding's lead is a direct <path> child with exactly one subpath of
 //     exactly two points ("M x y h/v ±len"); the port is that subpath's
@@ -322,6 +329,52 @@ func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 		State:  parseState(n),
 		Ports:  []Port{{Name: "1"}},
 	}, []Point{center}, n.attr("data-voltage"), nil
+}
+
+// parseReactorShunt handles shape 397 (shunt reactor): a single electrical
+// port at the top of its coil — the earthed side, drawn as the same
+// decreasing-width bar fan Ground (31) uses, has no port of its own. Real
+// instances appear both with and without a rotate() transform; when
+// absent, the port is the combined path's own first point, the same
+// fallback parseGround uses (the element's formula always starts drawing
+// exactly at its own origin/anchor, here the coil's own top rather than
+// the earthed base).
+func parseReactorShunt(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: reactor shunt %s: no <path> geometry", n.attr("id"))
+	}
+
+	var anchor Point
+	var orient int
+	if angle, center, ok := parseRotate(n.attr("transform")); ok {
+		anchor, orient = center, angle
+	} else {
+		subpaths, err := parseSubpaths(paths[0].attr("d"))
+		if err != nil {
+			return Element{}, nil, "", err
+		}
+		if len(subpaths) == 0 || len(subpaths[0]) == 0 {
+			return Element{}, nil, "", fmt.Errorf("slddoc: reactor shunt %s: empty path", n.attr("id"))
+		}
+		anchor = subpaths[0][0]
+	}
+
+	return Element{
+		ID:     id,
+		Class:  ClassReactorShunt,
+		Shape:  "397",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
+		Ports:  []Port{{Name: "1"}},
+	}, []Point{anchor}, n.attr("data-voltage"), nil
 }
 
 // parsePowerTransformer handles shape 47 (power transformer), 2-winding

@@ -122,6 +122,8 @@ const (
 	ClassPowerTransformer      Class = "PowerTransformer"
 	ClassCurrentTransformer    Class = "CurrentTransformer"
 	ClassChokeCoil             Class = "ChokeCoil"
+	ClassReactor               Class = "Reactor"
+	ClassReactorShunt          Class = "ReactorShunt"
 	ClassSurgeArrester         Class = "SurgeArrester"
 	ClassFuse                  Class = "Fuse"
 	ClassCapacitor             Class = "Capacitor"

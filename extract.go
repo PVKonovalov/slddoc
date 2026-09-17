@@ -29,7 +29,8 @@ var elementDataTypes = map[string]bool{
 	"7": true, "21": true, "22": true, "23": true, "24": true, "28": true,
 	"41": true, "42": true, "43": true, "54": true, "71": true, "162": true,
 	"49": true, "47": true, "31": true, "33": true, "34": true, "35": true,
-	"203": true, "388": true, "106": true, "320003": true,
+	"203": true, "388": true, "106": true, "320003": true, "37": true,
+	"397": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -43,6 +44,7 @@ var twoPortShapes = map[string]Class{
 	"35":  ClassSurgeArrester,
 	"203": ClassFuse,
 	"388": ClassCapacitor,
+	"37":  ClassReactor,
 }
 
 // Extract parses raw as an xsde2svg-generated SVG and builds a Diagram.
@@ -151,8 +153,16 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388":
+		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "397":
+			el, ports, voltage, err := parseReactorShunt(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				continue

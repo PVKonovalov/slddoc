@@ -187,6 +187,8 @@ var shapeName = map[string]string{
 	"31":     "Ground terminal",
 	"33":     "Choke coil",
 	"34":     "Current transformer",
+	"37":     "Reactor",
+	"397":    "Reactor (shunt)",
 	"35":     "Surge arrester",
 	"41":     "Breaker",
 	"42":     "Load-break switch",
