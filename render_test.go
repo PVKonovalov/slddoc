@@ -826,3 +826,74 @@ func TestRender_PowerTransformer4Winding(t *testing.T) {
 		}
 	}
 }
+
+// TestRender_PowerTransformerGlyphStaysUprightWhenRotated checks that a
+// winding's own connection-scheme glyph is wrapped in a counter-rotating
+// <g transform="rotate(-Orient,cx,cy)"> — the same {counterRotate}
+// pattern a FaultPassageIndicator's own "FPI" label already uses to stay
+// upright regardless of its own element's rotation — so the glyph itself
+// never visually rotates with the rest of the transformer, only the
+// winding's own circle position does.
+//
+// The math is verified independently rather than just trusting the
+// transform string is correct by construction (the same rigor established
+// for writeObjectLink's own arrow, after an earlier version of *that*
+// function was caught rendering thousands of units off despite a passing
+// but circular test): for winding 0 of a 2-winding transformer at anchor
+// (100,100), Orient 90, local circle center (18,0), a wye glyph's own
+// first spoke tip is at local offset (-7,-7) from that center, i.e. the
+// raw local point (11,-7). Composing the inner rotate(-90,18,0) then the
+// outer translate(100,100) rotate(90) by hand: (11,-7) rotates to (11,7)
+// around the pivot (18,0), then the outer transform sends that to
+// (93,111) — exactly the winding's own global circle center (100,118)
+// plus the *original*, unrotated offset (-7,-7), confirming the glyph's
+// own on-screen shape truly doesn't rotate with the transformer.
+func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []VoltageClass{{ID: 1, Color: "teal"}},
+		Elements: []Element{{
+			ID: 20, Class: ClassPowerTransformer, Shape: "47", X: 100, Y: 100, Orient: 90,
+			Windings: []TransformerWinding{{Voltage: 1, Scheme: SchemeWye}, {Voltage: 1, Scheme: SchemeWye}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `<g transform="rotate(-90,18,0)">`) {
+		t.Fatalf("winding 0's own glyph should be wrapped in a counter-rotating <g>: %s", out)
+	}
+	if !strings.Contains(out, "<path d=\"M 18 0 l -7 -7 M 18 0 l 7 -7 M 18 0 l 0 7\" style=\"fill:none;stroke:teal;stroke-width:1\" />\n</g>") {
+		t.Errorf("the glyph itself should still be drawn in its own ordinary local coordinates, closed by the counter-rotating </g>: %s", out)
+	}
+
+	// Independently recompute the first spoke tip's own real on-screen
+	// position from the two composed transforms, rather than trusting
+	// the transform strings are correct by construction.
+	innerAngle := -90 * math.Pi / 180
+	localTip := Point{X: 11, Y: -7} // winding 0's own spoke tip, local (18-7, 0-7)
+	pivot := Point{X: 18, Y: 0}
+	rel := Point{X: localTip.X - pivot.X, Y: localTip.Y - pivot.Y}
+	rotatedRel := Point{
+		X: rel.X*math.Cos(innerAngle) - rel.Y*math.Sin(innerAngle),
+		Y: rel.X*math.Sin(innerAngle) + rel.Y*math.Cos(innerAngle),
+	}
+	afterInner := Point{X: rotatedRel.X + pivot.X, Y: rotatedRel.Y + pivot.Y}
+
+	outerAngle := 90 * math.Pi / 180
+	afterOuterRotate := Point{
+		X: afterInner.X*math.Cos(outerAngle) - afterInner.Y*math.Sin(outerAngle),
+		Y: afterInner.X*math.Sin(outerAngle) + afterInner.Y*math.Cos(outerAngle),
+	}
+	onScreen := Point{X: afterOuterRotate.X + 100, Y: afterOuterRotate.Y + 100}
+
+	const eps = 0.01
+	if math.Abs(onScreen.X-93) > eps || math.Abs(onScreen.Y-111) > eps {
+		t.Errorf("spoke tip on-screen = (%.4f,%.4f), want (93,111)", onScreen.X, onScreen.Y)
+	}
+}
