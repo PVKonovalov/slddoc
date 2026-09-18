@@ -223,6 +223,7 @@ var connectorKindName = map[string]string{
 	string(KindOverheadLine): "Overhead line",
 	string(KindCableLine):    "Cable line",
 	string(KindBusWork):      "Buswork",
+	string(KindLinkToObject): "Object link",
 }
 
 // connectorTypeCode gives a Connector's data-type, mirroring an Element's
@@ -230,13 +231,14 @@ var connectorKindName = map[string]string{
 // connection (this schema's ClassObjectLink/KindBusWork — what
 // diagramOps.connectElements creates) is 21, KindOverheadLine's is 22
 // (confirmed against sld-viewer/assets/sld/IEEE9bus.svg's own real
-// xsde2svg-catalog-code documentation), and KindCableLine's is 23. A Kind
-// absent from this map renders with no data-type, same as before this
-// existed.
+// xsde2svg-catalog-code documentation), KindCableLine's is 23, and
+// KindLinkToObject's is 28. A Kind absent from this map renders with no
+// data-type, same as before this existed.
 var connectorTypeCode = map[ConnectorKind]string{
 	KindBusWork:      "21",
 	KindOverheadLine: "22",
 	KindCableLine:    "23",
+	KindLinkToObject: "28",
 }
 
 // namedLineStrokeWidth is a KindOverheadLine/KindCableLine connector's
@@ -468,6 +470,10 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, fpiSta
 			writeNamedLine(w, c, voltageColor[c.Voltage], code, mode)
 			continue
 		}
+		if c.Kind == KindLinkToObject {
+			writeObjectLink(w, c, voltageColor[c.Voltage], code, mode)
+			continue
+		}
 		dataAttrs := ""
 		if hasCode {
 			dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
@@ -585,6 +591,63 @@ func writeNamedLine(w io.Writer, c Connector, color string, code string, mode Re
 	}
 	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"%s\" data-name=\"%s\" data-voltage=\"%s\"%s>\n<polyline points=\"%s\" style=\"fill:none;stroke:%s;%sstroke-width:%s\" />\n</g>\n",
 		c.ID, esc(code), esc(c.Name), esc(color), editorAttr, esc(sb.String()), esc(color), dash, fmtNum(namedLineStrokeWidth))
+}
+
+// objectLinkStrokeWidth is a KindLinkToObject connector's own fixed stroke
+// width — heavier than an ordinary wire's 1px, confirmed against a real
+// xsde2svg-exported instance exactly.
+const objectLinkStrokeWidth = 2
+
+// writeObjectLink draws a KindLinkToObject connector (shape 28,
+// "Связь с объектом"/"Object link" in the xsde2svg catalog) — the same
+// flat, un-wrapped <polyline> convention as KindBusWork (writePolyline),
+// just at objectLinkStrokeWidth instead of 1px, plus a triangular
+// arrowhead marking direction: a separate sibling <path>, carrying no
+// data-type/data-name/id of its own, positioned at the connector's own
+// final point and rotated to continue pointing in the direction its last
+// segment was already travelling. The arrowhead's own local geometry (base
+// corners at local (±7,0), apex at local (0,12), i.e. drawn "pointing
+// south" before rotation) is reverse-engineered from a real instance, but
+// — unlike that real instance's own single rotate(angle,cx,cy) around an
+// absolute-coordinate path — placed with the same translate-then-rotate
+// convention renderElement already uses for every symbol template
+// (transform="translate(x,y) rotate(angle)", local-origin path data): a
+// bare rotate() around an arbitrary point is *not* equivalent to that when
+// the path's own coordinates are local rather than pre-rotation-absolute
+// (confirmed the hard way — an earlier version of this function paired
+// local coordinates with a bare rotate(angle,cx,cy) and silently rendered
+// the arrowhead thousands of units away from its own connector). The
+// rotate() angle formula (atan2(-dx,dy), which reproduces a real
+// instance's own effective 180° for a straight-up final segment) was also
+// reverse-engineered from that same real instance.
+func writeObjectLink(w io.Writer, c Connector, color, code string, mode RenderMode) {
+	dataAttrs := ""
+	if code != "" {
+		dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
+	}
+	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, objectLinkStrokeWidth, dataAttrs, mode)
+
+	if len(c.Points) < 2 {
+		return
+	}
+	from := c.Points[len(c.Points)-2]
+	to := c.Points[len(c.Points)-1]
+	dy := to.Y - from.Y
+	if from.X == to.X && from.Y == to.Y {
+		return
+	}
+	// from.X-to.X, not -(to.X-from.X): IEEE754 gives a-a exactly +0 for any
+	// finite a, whereas negating a +0 difference yields -0, which flips
+	// atan2's own result by a full turn (180 here becomes -180) — cosmetic
+	// only (they're the same rotation), but real corpus instances always
+	// read "180", not "-180", for a straight-up final segment.
+	angle := math.Atan2(from.X-to.X, dy) * 180 / math.Pi
+	arrowColor := color
+	if arrowColor == "" {
+		arrowColor = "black"
+	}
+	fmt.Fprintf(w, "<path d=\"M 7 0 l -7 12 l -7 -12 z\" style=\"fill:none;stroke:%s;stroke-width:%s\" transform=\"translate(%s,%s) rotate(%s)\" />\n",
+		esc(arrowColor), fmtNum(objectLinkStrokeWidth), fmtNum(to.X), fmtNum(to.Y), fmtNum(angle))
 }
 
 func writeLabel(w io.Writer, l Label, mode RenderMode) {

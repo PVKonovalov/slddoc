@@ -215,6 +215,16 @@ const (
 	KindOverheadLine ConnectorKind = "OverheadLine"
 	KindCableLine    ConnectorKind = "CableLine"
 	KindBusWork      ConnectorKind = "BusWork"
+	// KindLinkToObject is shape 28 ("Связь с объектом"/"Object link" in the
+	// xsde2svg catalog) — visually a flat, un-wrapped polyline like
+	// KindBusWork, but at a heavier stroke and decorated with a directional
+	// arrowhead at its own "To" end (see writeObjectLink). Its own string
+	// value is deliberately not "ObjectLink" — that's kindObjectLinkLegacy's
+	// own already-taken value, rewritten to KindBusWork on Load, so reusing
+	// it here would make every freshly-created connector of this real kind
+	// immediately rewrite itself back to KindBusWork the next time the
+	// diagram loads.
+	KindLinkToObject ConnectorKind = "LinkToObject"
 )
 
 // ConnectorLineStyle is a KindCableLine connector's own dash pattern

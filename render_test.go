@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -446,6 +449,89 @@ func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
 	if !strings.Contains(out, `id="3988"`) {
 		t.Errorf("connector should carry its own bare integer id: %s", out)
 	}
+}
+
+// TestRender_ObjectLinkMatchesXsde2svgFormat uses the exact real xsde2svg
+// markup (a real instance's own polyline plus its own separate arrowhead
+// <path>) that this shape's own geometry/rotation-angle formula were
+// reverse-engineered from: <polyline points="1980,300 1980,252"
+// style="fill:none;stroke:#00A0F0;;stroke-width:2" data-type="28"
+// id="2120" data-voltage="#00A0F0" /> plus <path d="M 1987 252 l -7 12
+// l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2"
+// transform="rotate(180,1980,252)" />. The arrowhead's own real on-screen
+// position (the point that actually matters — its own d/transform strings
+// are otherwise free to differ from the real instance's, since this
+// package places it via the translate-then-rotate convention every symbol
+// template already uses rather than that real instance's own single
+// rotate(angle,cx,cy) around an absolute-coordinate path, and those two
+// aren't interchangeable for a local-origin path — see writeObjectLink's
+// own doc comment) is independently recomputed here from first principles
+// (a real 2D rotation) and checked against the real instance's own known
+// screen position, base corner (1973,252) and apex (1980,240), rather than
+// trusting the rendered transform string to be correct by construction.
+func TestRender_ObjectLinkMatchesXsde2svgFormat(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 2000, Height: 1200,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "110kV", Color: "#00A0F0"}},
+		Connectors: []Connector{{
+			ID: 2120, Kind: KindLinkToObject, Voltage: 1,
+			Points: []Point{{X: 1980, Y: 300}, {X: 1980, Y: 252}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`data-type="28"`,
+		`id="2120"`,
+		`points="1980,300 1980,252"`,
+		`stroke:#00A0F0;stroke-width:2`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered object link missing %q: %s", want, out)
+		}
+	}
+
+	var pathD string
+	var tx, ty, angle float64
+	m := regexp.MustCompile(`<path d="([^"]+)" style="[^"]*" transform="translate\(([\d.-]+),([\d.-]+)\) rotate\(([\d.-]+)\)" />`).
+		FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no arrowhead <path translate(...) rotate(...)> found: %s", out)
+	}
+	pathD, tx, ty, angle = m[1], mustParseFloat(t, m[2]), mustParseFloat(t, m[3]), mustParseFloat(t, m[4])
+	if pathD != "M 7 0 l -7 12 l -7 -12 z" {
+		t.Fatalf("arrowhead path d = %q, want the reverse-engineered local geometry", pathD)
+	}
+
+	rad := angle * math.Pi / 180
+	cos, sin := math.Cos(rad), math.Sin(rad)
+	onScreen := func(lx, ly float64) (float64, float64) {
+		return tx + lx*cos - ly*sin, ty + lx*sin + ly*cos
+	}
+	baseX, baseY := onScreen(7, 0)
+	apexX, apexY := onScreen(0, 12)
+	const eps = 0.01
+	if math.Abs(baseX-1973) > eps || math.Abs(baseY-252) > eps {
+		t.Errorf("arrowhead base corner on-screen = (%.4f,%.4f), want (1973,252)", baseX, baseY)
+	}
+	if math.Abs(apexX-1980) > eps || math.Abs(apexY-240) > eps {
+		t.Errorf("arrowhead apex on-screen = (%.4f,%.4f), want (1980,240)", apexX, apexY)
+	}
+}
+
+func mustParseFloat(t *testing.T, s string) float64 {
+	t.Helper()
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		t.Fatalf("parsing %q as float: %v", s, err)
+	}
+	return v
 }
 
 func TestRender_StaticModeOmitsInteractiveMarkup(t *testing.T) {

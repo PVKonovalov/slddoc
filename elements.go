@@ -639,7 +639,7 @@ var connectorKindByType = map[string]ConnectorKind{
 	"21": KindBusbarWire,
 	"22": KindOverheadLine,
 	"23": KindCableLine,
-	"28": KindBusWork,
+	"28": KindLinkToObject,
 }
 
 // parseConnector handles the generic wire shapes (21, 22, 23, 28): a plain
