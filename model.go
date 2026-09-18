@@ -131,6 +131,7 @@ const (
 	ClassCapacitor             Class = "Capacitor"
 	ClassCapacitorBank         Class = "CapacitorBank"
 	ClassHalfChassis           Class = "HalfChassis"
+	ClassChassis               Class = "Chassis"
 	ClassStarter               Class = "Starter"
 	ClassGenerator             Class = "Generator"
 	ClassBusBarSection         Class = "BusBarSection"
