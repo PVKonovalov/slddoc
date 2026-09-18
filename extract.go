@@ -32,7 +32,7 @@ var elementDataTypes = map[string]bool{
 	"49": true, "47": true, "31": true, "33": true, "34": true, "35": true,
 	"203": true, "388": true, "106": true, "320003": true, "37": true,
 	"397": true, "29": true, "76": true, "154": true, "168": true,
-	"172": true, "173": true, "14": true,
+	"172": true, "173": true, "14": true, "55": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -193,6 +193,14 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "172":
 			el, ports, voltage, err := parseOnePortDevice(n, ClassCapacitorBank, "172")
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "55":
+			el, ports, voltage, err := parseVoltageTransformer(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				continue

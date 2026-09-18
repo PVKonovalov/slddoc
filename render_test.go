@@ -448,22 +448,6 @@ func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
 	}
 }
 
-func TestRender_SymbolElementsHaveAWiderHitTarget(t *testing.T) {
-	lib := NewSymbolLibrary(map[string]string{"41": `<path d="M 0 0" style="stroke:{color}"/>`})
-	d := &Diagram{
-		Width: 100, Height: 100,
-		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 10, Y: 10}},
-	}
-
-	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Interactive, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(buf.String(), `fill="transparent"`) {
-		t.Errorf("a symbol's tiny template geometry should get a wider invisible hit target: %s", buf.String())
-	}
-}
-
 func TestRender_StaticModeOmitsInteractiveMarkup(t *testing.T) {
 	lib := NewSymbolLibrary(map[string]string{"41": `<path d="M 0 0" style="stroke:{color}"/>`})
 	d := &Diagram{

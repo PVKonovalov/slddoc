@@ -402,6 +402,53 @@ func parseOnePortDevice(n *rawNode, class Class, shape string) (Element, []Point
 	}, []Point{anchor}, voltage, nil
 }
 
+// parseVoltageTransformer handles shape 55 (voltage transformer) — the same
+// anchor-finding logic as parseOnePortDevice, but a real instance never
+// carries a data-voltage attribute anywhere on its own <g> or descendants
+// (confirmed against the full sld-svg/examples/sld corpus: all of its own
+// shape-55 instances lack one entirely) — its primary winding's own voltage
+// color is only ever embedded directly in that same first <path>'s own
+// style="stroke:...", the one whose first point is already this function's
+// own anchor.
+func parseVoltageTransformer(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: no <path> geometry", n.attr("id"))
+	}
+	subpaths, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(subpaths) == 0 || len(subpaths[0]) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: empty path", n.attr("id"))
+	}
+	rawAnchor := subpaths[0][0]
+
+	anchor := rawAnchor
+	var orient int
+	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		anchor = rotate(rawAnchor, center, float64(angle))
+		orient = angle
+	}
+
+	voltage := styleProp(paths[0].attr("style"), "stroke")
+	return Element{
+		ID:     id,
+		Class:  ClassVoltageTransformer,
+		Shape:  "55",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
+		Ports:  []Port{{Name: "1"}},
+	}, []Point{anchor}, voltage, nil
+}
+
 // parsePowerTransformer handles shape 47 (power transformer), 2-winding
 // case only: each winding's lead is a direct <path> child with exactly one
 // subpath of exactly two points, whose final point is the port.

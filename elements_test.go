@@ -270,6 +270,33 @@ func TestParseTwoPortDevice_Capacitor(t *testing.T) {
 	}
 }
 
+// TestParseVoltageTransformer uses the exact real xsde2svg markup
+// (sld-viewer's own PS_110kV_Example.svg, id="4473") that surfaced this
+// gap: a real shape-55 instance carries no data-voltage attribute
+// anywhere, unlike every other one-port device — its own voltage color
+// only lives in the primary winding's own style="stroke:...".
+func TestParseVoltageTransformer(t *testing.T) {
+	n := parseFirst(t, `<g id="4473" data-type="55" data-name="ТН-110 л.Лч-2 ф-А" transform="rotate(-90,2380,370)" >
+<path d="M 2380 354 v -5" style="fill:none;stroke:#00A0F0;stroke-width:1" />
+<circle cx="2380" cy="366" r="12" style="fill:none;stroke:#00A0F0;stroke-width:1" />
+<circle cx="2380" cy="383" r="12" style="fill:none;stroke:#D2D2D2;stroke-width:1" />
+</g>`)
+
+	el, ports, voltage, err := parseVoltageTransformer(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if voltage != "#00A0F0" {
+		t.Errorf("voltage = %q, want the primary winding's own stroke color #00A0F0", voltage)
+	}
+	if el.Class != ClassVoltageTransformer || el.Shape != "55" || el.Name != "ТН-110 л.Лч-2 ф-А" {
+		t.Errorf("element = %+v", el)
+	}
+	if len(ports) != 1 {
+		t.Fatalf("ports = %v, want 1", ports)
+	}
+}
+
 func TestParseGround_WithTransform(t *testing.T) {
 	n := parseFirst(t, `<path d="M 1805 1132 v -10 m -8 10 h 16 m -2 3 h -12 m 2 3 h 8" style="fill:none;stroke:#962896;stroke-width:1" id="3726" data-voltage="#962896" data-type="31" transform="rotate(-90,1805,1132)" />`)
 

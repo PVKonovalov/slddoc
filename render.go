@@ -27,9 +27,11 @@ const (
 	// xsde2svg document carries one too.
 	Static RenderMode = iota
 	// Interactive adds a data-editor-kind="element"|"connector" attribute
-	// and a wider invisible hit target around small symbol geometry, so
-	// the frontend's canvas can hit-test a click. Never written to disk —
-	// use this only for the live in-app preview (POST /render).
+	// so the frontend's canvas can hit-test a click against the real
+	// rendered markup (the frontend computes its own bounding box per
+	// element for a click-tolerance fallback, rather than this package
+	// adding any invisible hit-target geometry of its own). Never written
+	// to disk — use this only for the live in-app preview (POST /render).
 	Interactive
 )
 
@@ -188,6 +190,7 @@ var shapeName = map[string]string{
 	"31":     "Ground terminal",
 	"33":     "Choke coil",
 	"34":     "Current transformer",
+	"55":     "Voltage transformer",
 	"37":     "Reactor",
 	"397":    "Reactor (shunt)",
 	"35":     "Surge arrester",
@@ -372,21 +375,25 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		"{fpiColor}", fpiColors.fpiColor(e.State),
 		"{counterRotate}", fmtNum(float64(-e.Orient)),
 	).Replace(body)
-	// Most symbol templates are drawn quite small (a breaker's box is only
-	// 14 local units per side) — in Interactive mode, an invisible,
-	// generously sized circle gives the editor's click/tap selection a
-	// realistic hit target without changing anything about how the symbol
-	// itself renders, and a data-editor-kind attribute (this editor's own
-	// addition, not part of the xsde2svg format) is what it hit-tests
-	// against. data-voltage/data-type mirror a real xsde2svg element's
-	// outer <g> either way; id itself is just the element's own bare id.
-	editorAttr, hitTarget := "", ""
+	// data-editor-kind (this editor's own addition, not part of the
+	// xsde2svg format) is what the frontend hit-tests against — it no
+	// longer pairs with any invisible fixed-radius hit-target geometry
+	// here (a single generously-sized circle around every symbol's own
+	// anchor used to give small/thin templates a comfortable click area,
+	// but that same fixed size either undershot a large or
+	// anchor-offset-from-its-own-body shape like VoltageTransformer, or
+	// overshot a small one enough to swallow a neighbor's click); the
+	// frontend now computes each element's own real rendered bounding box
+	// instead and uses that for both its selection highlight and a
+	// click-tolerance fallback — see Canvas.tsx's own elementBoxes.
+	// data-voltage/data-type mirror a real xsde2svg element's outer <g>
+	// either way; id itself is just the element's own bare id.
+	editorAttr := ""
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
-		hitTarget = "<circle cx=\"0\" cy=\"0\" r=\"18\" fill=\"transparent\" />\n"
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)\">\n%s%s\n</g>\n",
-		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, hitTarget, body)
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)\">\n%s\n</g>\n",
+		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, body)
 }
 
 // Render writes d as a fresh SVG document, using lib to place each

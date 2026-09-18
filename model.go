@@ -122,6 +122,7 @@ const (
 	ClassGround                Class = "Ground"
 	ClassPowerTransformer      Class = "PowerTransformer"
 	ClassCurrentTransformer    Class = "CurrentTransformer"
+	ClassVoltageTransformer    Class = "VoltageTransformer"
 	ClassChokeCoil             Class = "ChokeCoil"
 	ClassReactor               Class = "Reactor"
 	ClassReactorShunt          Class = "ReactorShunt"
