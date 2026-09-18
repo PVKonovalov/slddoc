@@ -80,13 +80,16 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 // this model (see emptyPathWrapperLine's own doc comment) with nothing in
 // it, and confirms none of their empty wrapper elements survive into the
 // saved XML — not even collapsed to self-closing, entirely absent — while
-// a genuinely populated one (a BusBarSection's own Points) still round-trips.
+// a genuinely populated one (a BusBarSection's own Points, a
+// PowerTransformer's own Windings) still round-trips.
 func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 	d := &Diagram{
 		Width: 10, Height: 10,
 		Elements: []Element{
 			{ID: 1, Class: ClassBusBarSection, Points: []Point{{X: 0, Y: 0}, {X: 10, Y: 0}}},
 			{ID: 2, Class: ClassLamp, Shape: "106"},
+			{ID: 3, Class: ClassPowerTransformer, Shape: "47", Windings: []TransformerWinding{{Scheme: SchemeWye}, {Scheme: SchemeWye}}},
+			{ID: 4, Class: ClassBreaker, Shape: "41"},
 		},
 	}
 
@@ -105,6 +108,11 @@ func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 	// BusBarSection (real Points) must still carry a real one.
 	if bytes.Count(buf.Bytes(), []byte("<geometry")) != 1 {
 		t.Errorf("expected exactly one real <geometry> (the busbar's), got: %s", saved)
+	}
+	// The Breaker (no Windings) must not carry an empty <windings/>, but the
+	// PowerTransformer (real Windings) must still carry a real one.
+	if bytes.Count(buf.Bytes(), []byte("<windings")) != 1 {
+		t.Errorf("expected exactly one real <windings> (the transformer's), got: %s", saved)
 	}
 
 	got, err := Load(&buf)

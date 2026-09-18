@@ -192,6 +192,99 @@ type Element struct {
 	// Points holds a BusBarSection's own drawn geometry (its two or more
 	// vertices); unused by point-symbol classes.
 	Points []Point `xml:"geometry>point,omitempty" json:"points,omitempty"`
+
+	// Autotransformer/Windings/VectorGroupLabel are a PowerTransformer's
+	// (shape 47) own nameplate/winding configuration — see TransformerWinding
+	// for what each winding itself records. Unlike every other shape's fixed
+	// base.xml template, a PowerTransformer's real geometry (circle count,
+	// position, and per-winding connection glyph) is driven entirely by
+	// these fields via writePowerTransformer, not template substitution —
+	// renderElement special-cases ClassPowerTransformer the same way it
+	// already does ClassBusBarSection, bypassing the template lookup
+	// entirely. len(Windings) is the transformer's own winding count (2, 3,
+	// or 4); each entry gets one real electrical Port, in the same order.
+	Autotransformer bool                 `xml:"autotransformer,attr,omitempty" json:"autotransformer,omitempty"`
+	Windings        []TransformerWinding `xml:"windings>winding,omitempty" json:"windings,omitempty"`
+	// VectorGroupLabel is a freeform connection-diagram label (e.g.
+	// "Yn/Δ-11"), shown when non-empty ("Show connection diagram label" in
+	// Properties). Real xsde2svg markup never computes this string anywhere
+	// — the clock-hour number needs a phase-displacement input the format
+	// doesn't carry — so it's simply typed in and stored verbatim, not
+	// derived from the windings' own Scheme.
+	VectorGroupLabel string `xml:"vectorGroupLabel,attr,omitempty" json:"vectorGroupLabel,omitempty"`
+}
+
+// WindingScheme is a PowerTransformer winding's own connection scheme.
+// Matches three of real xsde2svg's own TransformerWinding.WindingType
+// values (wye/ЗВЕЗДА_С_НУЛЕМ/delta) — the ones with a real, distinct
+// connection glyph in element_47.go; the format's rarer values (zigzag,
+// open_delta, ТРИ_ЛИНИИ, ...) aren't offered here.
+type WindingScheme string
+
+const (
+	SchemeWye   WindingScheme = "wye"
+	SchemeWyeN  WindingScheme = "wyeN"
+	SchemeDelta WindingScheme = "delta"
+)
+
+// NeutralGrounding is only meaningful when a winding's own Scheme is
+// SchemeWyeN (a brought-out neutral to ground at all). Real xsde2svg only
+// draws a distinct glyph for GroundingSolid (its own "neutral_ground"
+// WindingType, extra ground-hatch marks on the wye-with-neutral glyph) —
+// GroundingIsolated/GroundingResistor get their own small invented tick
+// marks here (xsde2svg has no glyph for either).
+type NeutralGrounding string
+
+const (
+	GroundingSolid    NeutralGrounding = "solid"
+	GroundingIsolated NeutralGrounding = "isolated"
+	GroundingResistor NeutralGrounding = "resistor"
+)
+
+// TerminalDirection is which side of a winding's own circle its lead (and
+// real electrical Port) is drawn on, in the transformer's own local
+// (pre-rotation) frame — this editor's own replacement for real xsde2svg's
+// opaque Chassis 1-7 switch, which ties leg direction to winding
+// index/count/mirroring in ways that don't map onto a per-winding "pick a
+// side" control. Rotates along with the whole element via its own Orient,
+// same as every other local-coordinate shape in this codebase.
+type TerminalDirection string
+
+const (
+	TerminalTop    TerminalDirection = "top"
+	TerminalBottom TerminalDirection = "bottom"
+	TerminalLeft   TerminalDirection = "left"
+	TerminalRight  TerminalDirection = "right"
+)
+
+// TransformerWinding is one winding of a PowerTransformer element (see
+// Element.Windings) — HV/MV/LV1/LV2 in declaration order, each drawn as its
+// own circle.
+type TransformerWinding struct {
+	// Voltage references a VoltageClass.ID (0 means unassigned) — this
+	// winding's own rated voltage/color, matching real xsde2svg's own
+	// per-winding TransformerWinding.Voltage (each winding can carry a
+	// genuinely different voltage class, unlike every other shape's single
+	// Element.Voltage).
+	Voltage int `xml:"voltage,attr,omitempty" json:"voltage,omitempty"`
+	// Scheme is this winding's own connection scheme; empty draws no
+	// connection glyph at all (matching a real instance with no windingType
+	// attribute).
+	Scheme WindingScheme `xml:"scheme,attr,omitempty" json:"scheme,omitempty"`
+	// Grounding only applies when Scheme is SchemeWyeN.
+	Grounding NeutralGrounding `xml:"grounding,attr,omitempty" json:"grounding,omitempty"`
+	// TapChanger marks this as the regulated winding (OLTC/off-circuit tap
+	// changer) — draws the diagonal regulation arrow, centered on the
+	// transformer's own anchor point. Real xsde2svg only ever draws one
+	// such arrow per transformer regardless of how many windings request
+	// one (each winding-loop iteration overwrites the same shared path
+	// variable, so only the last one drawn survives) — writePowerTransformer
+	// matches that: the last winding with TapChanger set wins.
+	TapChanger bool `xml:"tapChanger,attr,omitempty" json:"tapChanger,omitempty"`
+	// Terminal is which side of this winding's own circle its lead is drawn
+	// on; empty falls back to this winding's own conventional default for
+	// the transformer's winding count (see defaultTerminal in render.go).
+	Terminal TerminalDirection `xml:"terminal,attr,omitempty" json:"terminal,omitempty"`
 }
 
 // shapeDisconnector is the Disconnector's own current Shape key.
@@ -360,27 +453,30 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // emptyPathWrapperLine matches a whole line consisting solely of one of
 // this model's nested "parent>child" xml tags — Diagram's own
 // Layers/VoltageClasses/Nodes/Elements/Connectors/Labels/DigitalDevices,
-// and Element's own Points ("geometry>point") — immediately closed with no
-// children, i.e. its slice happened to be empty. encoding/xml's own
-// omitempty is documented to apply to a slice, but is silently ignored
-// specifically for a tag with a chained "parent>child" path (a
-// long-standing stdlib limitation: golang/go#4256), so it still writes the
-// parent wrapper unconditionally regardless of omitempty — e.g. a
-// non-BusBarSection Element, which never populates Points, otherwise
-// always carried a meaningless empty <geometry/> (self-closing, after the
-// emptyElement collapse below). None of these 8 wrapper tags ever carries
-// its own attributes, so matching the immediately-closed (zero content)
-// case can't mistake a populated one (whose own child elements/whitespace
-// separate its open and close tags) for an empty one. Removed entirely,
-// not just collapsed, since a wrapper with no attributes and no children
-// carries no information Load could ever need — an entirely absent one
-// round-trips identically to an explicit empty one (a nil slice either
-// way). This must run before emptyElement's own collapse below: stripping
-// an Element's only child (e.g. a Lamp with no Ports and no Points) can
-// leave that Element's own tag newly empty, which emptyElement then
-// collapses to self-closing in the usual way.
+// and Element's own Points ("geometry>point") and Windings
+// ("windings>winding") — immediately closed with no children, i.e. its
+// slice happened to be empty. encoding/xml's own omitempty is documented
+// to apply to a slice, but is silently ignored specifically for a tag with
+// a chained "parent>child" path (a long-standing stdlib limitation:
+// golang/go#4256), so it still writes the parent wrapper unconditionally
+// regardless of omitempty — e.g. a non-BusBarSection Element, which never
+// populates Points, otherwise always carried a meaningless empty
+// <geometry/> (self-closing, after the emptyElement collapse below), and
+// (before this line added "windings") a non-PowerTransformer Element
+// carried an equally meaningless empty <windings/> the same way. None of
+// these 9 wrapper tags ever carries its own attributes, so matching the
+// immediately-closed (zero content) case can't mistake a populated one
+// (whose own child elements/whitespace separate its open and close tags)
+// for an empty one. Removed entirely, not just collapsed, since a wrapper
+// with no attributes and no children carries no information Load could
+// ever need — an entirely absent one round-trips identically to an
+// explicit empty one (a nil slice either way). This must run before
+// emptyElement's own collapse below: stripping an Element's only child
+// (e.g. a Lamp with no Ports and no Points) can leave that Element's own
+// tag newly empty, which emptyElement then collapses to self-closing in
+// the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices)></[A-Za-z][\w:.-]*>`,
 )
 
 // Save writes d as indented XML.

@@ -351,6 +351,14 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		writePolyline(w, e.ID, "element", e.Points, color, false, 4, dataAttrs, mode)
 		return
 	}
+	if e.Class == ClassPowerTransformer {
+		// A PowerTransformer's real geometry (circle count/position, each
+		// winding's own connection glyph) is driven entirely by its own
+		// Windings — not template substitution — so it bypasses the
+		// template lookup below the same way ClassBusBarSection does.
+		writePowerTransformer(w, e, voltageColor, color, mode)
+		return
+	}
 
 	tmpl, ok := lib.templates[e.Shape]
 	if !ok {
@@ -648,6 +656,416 @@ func writeObjectLink(w io.Writer, c Connector, color, code string, mode RenderMo
 	}
 	fmt.Fprintf(w, "<path d=\"M 7 0 l -7 12 l -7 -12 z\" style=\"fill:none;stroke:%s;stroke-width:%s\" transform=\"translate(%s,%s) rotate(%s)\" />\n",
 		esc(arrowColor), fmtNum(objectLinkStrokeWidth), fmtNum(to.X), fmtNum(to.Y), fmtNum(angle))
+}
+
+// Power transformer (shape 47) geometry constants, transcribed from real
+// xsde2svg's own element_47.go default (sde.Size==0) path — this editor
+// doesn't offer that source's own Size 11-24 magic lookup table (a set of
+// named presets overriding these same numbers for cosmetic leg-length
+// tuning, not exposed anywhere in this editor's own Properties), so every
+// PowerTransformer always uses the one true default set below.
+const (
+	transformerRadius     = 22                    // baseRadius
+	transformerXShift     = 18                    // int(baseRadius/1.2) — 2-winding and 3-winding side-circle offset
+	transformerTopShift   = 25                    // int(baseRadius*1.16) — 3-winding top-circle offset (real source: -25.52 truncated toward zero)
+	transformerSideShift  = 29                    // 4-winding left/right-circle offset
+	transformerVertShift  = 20                    // 4-winding top-circle offset (bottom reuses transformerXShift, matching real source exactly)
+	transformerGlyphShift = transformerRadius / 3 // wye/wyeN spoke length (int division, matching element_47.go exactly)
+	transformerArrowSize  = 20
+	transformerArrowShift = 5
+)
+
+// transformerLegLength returns winding index i's own leg length, for a
+// transformer with the given real winding count — chosen so that, for
+// that winding's own *default* TerminalDirection (defaultTerminal), the
+// lead tip's own distance from the anchor (transformerWindingOffset ±
+// transformerRadius ± this) is always an exact multiple of
+// diagramOps.ts's own default 10-unit grid, the same way every other
+// shape's own fixed-offset terminal already does — without this, a
+// freshly placed transformer's own anchor lands on-grid (the editor's own
+// generic click-to-place snap) but its own lead tip never did, forcing a
+// short non-orthogonal jog into an otherwise-orthogonal routed wire (see
+// this package's own RELEASE.md for the real screenshot that surfaced
+// this). Real xsde2svg itself varies its own leg length by
+// direction/WindingNo too (h=11, h+lenShift=13, hLegs=10, hLegsTop=13) —
+// unlike that convention, which exists for its own cosmetic reasons, this
+// one is driven purely by which of the fixed offset constants above
+// (transformerXShift/TopShift/SideShift/VertShift) that winding's own
+// circle uses, each paired with whichever length makes
+// offset+transformerRadius+length divisible by 10. A winding whose own
+// Terminal is overridden away from its own default direction can still
+// land off-grid on the axis perpendicular to its own chosen direction
+// (that axis inherits the winding's own raw, non-grid-multiple offset
+// instead) — a real but narrower residual gap than the one this fixes.
+func transformerLegLength(count, i int) float64 {
+	switch count {
+	case 2:
+		return 10 // transformerXShift(18)+radius(22)+10 = 50
+	case 3:
+		if i == 0 {
+			return 13 // transformerTopShift(25)+radius(22)+13 = 60
+		}
+		return 10 // transformerXShift(18)+radius(22)+10 = 50
+	case 4:
+		switch i {
+		case 0:
+			return 8 // transformerVertShift(20)+radius(22)+8 = 50
+		case 1:
+			return 10 // transformerXShift(18)+radius(22)+10 = 50 (winding 1 reuses transformerXShift — see transformerWindingOffset)
+		default:
+			return 9 // transformerSideShift(29)+radius(22)+9 = 60
+		}
+	}
+	return 10
+}
+
+// transformerWindingOffset returns real winding index i's own local
+// (pre-rotation) circle-center offset from the transformer's own anchor,
+// for a non-autotransformer with the given real winding count —
+// transcribed from element_47.go's own default (non-auto) case, confirmed
+// against real xsde2svg-exported corpus markup (both the default-scale
+// 3-winding case and a fractional-scale 4-winding one, whose proportions
+// matched this function's own constants exactly once the scale factor was
+// divided back out).
+func transformerWindingOffset(count, i int) (float64, float64) {
+	switch count {
+	case 2:
+		if i == 0 {
+			return transformerXShift, 0
+		}
+		return -transformerXShift, 0
+	case 3:
+		switch i {
+		case 0:
+			return 0, -transformerTopShift
+		case 1:
+			return transformerXShift, 0
+		default:
+			return -transformerXShift, 0
+		}
+	case 4:
+		switch i {
+		case 0:
+			return 0, -transformerVertShift
+		case 1:
+			return 0, transformerXShift
+		case 2:
+			return -transformerSideShift, 0
+		default:
+			return transformerSideShift, 0
+		}
+	}
+	return 0, 0
+}
+
+// defaultTerminal returns real winding index i's own conventional lead
+// direction for a transformer with the given real winding count, used
+// when that winding's own Terminal field is empty — matches
+// element_47.go's own default (Chassis-unset) leg direction for each
+// position exactly (a 2-winding transformer's default side-by-side
+// horizontal layout, a 3-winding one's top/right/left, ...).
+func defaultTerminal(count, i int) TerminalDirection {
+	switch count {
+	case 2:
+		if i == 0 {
+			return TerminalRight
+		}
+		return TerminalLeft
+	case 3:
+		switch i {
+		case 0:
+			return TerminalTop
+		case 1:
+			return TerminalRight
+		default:
+			return TerminalLeft
+		}
+	case 4:
+		switch i {
+		case 0:
+			return TerminalTop
+		case 1:
+			return TerminalBottom
+		case 2:
+			return TerminalLeft
+		default:
+			return TerminalRight
+		}
+	}
+	return TerminalRight
+}
+
+// transformerLegEndpoint returns a winding's own lead tip — its real
+// electrical terminal, matching parsePowerTransformer's own "final point
+// of a two-point lead path" extraction convention — given its own circle
+// center, lead direction, and own leg length (transformerLegLength).
+func transformerLegEndpoint(cx, cy float64, dir TerminalDirection, legLen float64) (float64, float64) {
+	switch dir {
+	case TerminalTop:
+		return cx, cy - transformerRadius - legLen
+	case TerminalBottom:
+		return cx, cy + transformerRadius + legLen
+	case TerminalLeft:
+		return cx - transformerRadius - legLen, cy
+	default: // TerminalRight
+		return cx + transformerRadius + legLen, cy
+	}
+}
+
+// writeTransformerLeg draws a winding's own straight lead from its
+// circle's own edge to its lead tip (transformerLegEndpoint).
+func writeTransformerLeg(w io.Writer, cx, cy float64, dir TerminalDirection, legLen float64, color string) {
+	ex, ey := transformerLegEndpoint(cx, cy, dir, legLen)
+	var sx, sy float64
+	switch dir {
+	case TerminalTop:
+		sx, sy = cx, cy-transformerRadius
+	case TerminalBottom:
+		sx, sy = cx, cy+transformerRadius
+	case TerminalLeft:
+		sx, sy = cx-transformerRadius, cy
+	default:
+		sx, sy = cx+transformerRadius, cy
+	}
+	fmt.Fprintf(w, "<path d=\"M %s %s L %s %s\" style=\"fill:none;stroke:%s;stroke-width:2\" data-voltage=\"%s\" />\n",
+		fmtNum(sx), fmtNum(sy), fmtNum(ex), fmtNum(ey), esc(color), esc(color))
+}
+
+// writeWindingGlyph draws a winding's own connection-scheme mark at its
+// own circle center — the small inner symbol distinguishing
+// wye/wye-with-neutral/delta, transcribed from element_47.go's own
+// per-WindingType path formulas (confirmed against real corpus markup for
+// all three: a plain "wye" 3-spoke mark, a "ЗВЕЗДА_С_НУЛЕМ" 4-line
+// wye-with-neutral mark, and a closed-triangle "delta" mark using its own
+// separate shift constant, baseRadius/2 rather than /3).
+func writeWindingGlyph(w io.Writer, cx, cy float64, scheme WindingScheme, color string) {
+	if scheme == "" {
+		return
+	}
+	style := fmt.Sprintf("fill:none;stroke:%s;stroke-width:1", esc(color))
+	shift := float64(transformerGlyphShift)
+	switch scheme {
+	case SchemeWye:
+		fmt.Fprintf(w, "<path d=\"M %s %s l %s %s M %s %s l %s %s M %s %s l %s %s\" style=\"%s\" />\n",
+			fmtNum(cx), fmtNum(cy), fmtNum(-shift), fmtNum(-shift),
+			fmtNum(cx), fmtNum(cy), fmtNum(shift), fmtNum(-shift),
+			fmtNum(cx), fmtNum(cy), fmtNum(0), fmtNum(shift),
+			style)
+	case SchemeWyeN:
+		fmt.Fprintf(w, "<path d=\"M %s %s l %s %s M %s %s l %s %s M %s %s l %s %s M %s %s l %s %s\" style=\"%s\" />\n",
+			fmtNum(cx), fmtNum(cy), fmtNum(-shift), fmtNum(-shift),
+			fmtNum(cx), fmtNum(cy), fmtNum(shift), fmtNum(-shift),
+			fmtNum(cx), fmtNum(cy), fmtNum(0), fmtNum(shift),
+			fmtNum(cx), fmtNum(cy), fmtNum(shift), fmtNum(0),
+			style)
+	case SchemeDelta:
+		deltaShift := float64(transformerRadius / 2)
+		half := float64(int(transformerRadius/2) / 2)
+		fmt.Fprintf(w, "<path d=\"M %s %s l %s %s l %s %s z\" style=\"%s\" />\n",
+			fmtNum(cx), fmtNum(cy-half),
+			fmtNum(half), fmtNum(deltaShift),
+			fmtNum(-deltaShift), fmtNum(0),
+			style)
+	}
+}
+
+// writeGroundingMark draws a small, distinguishing mark for a wye-with-
+// neutral winding's own NeutralGrounding, just past the wyeN glyph's own
+// 4th (neutral) spoke tip — real xsde2svg only ever draws a distinct glyph
+// for GroundingSolid (its own "neutral_ground" WindingType, extra
+// ground-hatch marks); GroundingIsolated/GroundingResistor get their own
+// small invented marks here (a ring, and a resistor zigzag), matching
+// neither real xsde2svg output, per this editor's own explicit design
+// choice to keep all three grounding states visually distinct instead.
+func writeGroundingMark(w io.Writer, cx, cy float64, grounding NeutralGrounding, color string) {
+	if grounding == "" {
+		return
+	}
+	style := fmt.Sprintf("fill:none;stroke:%s;stroke-width:1", esc(color))
+	nx := cx + transformerGlyphShift + 3 // just past the wyeN glyph's own horizontal spoke tip
+	switch grounding {
+	case GroundingSolid:
+		// A standard earth-ground pictogram: a short stem plus three
+		// horizontal bars of decreasing width.
+		fmt.Fprintf(w, "<path d=\"M %s %s v 4 M %s %s h 10 M %s %s h 6 M %s %s h 2\" style=\"%s\" />\n",
+			fmtNum(nx), fmtNum(cy),
+			fmtNum(nx-5), fmtNum(cy+4),
+			fmtNum(nx-3), fmtNum(cy+7),
+			fmtNum(nx-1), fmtNum(cy+10),
+			style)
+	case GroundingIsolated:
+		fmt.Fprintf(w, "<circle cx=\"%s\" cy=\"%s\" r=\"3\" style=\"%s\" />\n", fmtNum(nx+3), fmtNum(cy), style)
+	case GroundingResistor:
+		fmt.Fprintf(w, "<path d=\"M %s %s l 2 -3 l 2 3 l 2 -3 l 2 3 l 2 -3\" style=\"%s\" />\n", fmtNum(nx), fmtNum(cy), style)
+	}
+}
+
+// transformerTapOffset is the local (pre-rotation, anchor-relative)
+// position of an autotransformer's own extra "line" terminal — the tap
+// arc's own far tip, a real electrical connection in its own right,
+// distinct from every winding's own regular lead. Real xsde2svg source
+// models it as its own TransformerWinding entry with no circle of its own
+// (a 2-real-winding autotransformer's own source data carries 3 such
+// entries — the first, never drawn as a circle, only supplies the tap's
+// own color and this terminal's own position); this package draws it as
+// a decoration connected to Windings[0]'s own real circle instead (see
+// writeAutotransformerTap's own doc comment for why), but the terminal
+// itself is real: TransformerLocalTerminals (diagramOps.ts) exposes this
+// same point so a wire can actually connect there, matching a real
+// instance's own external HV lead. Always directly above the anchor
+// (local x=0), regardless of winding count or Windings[0]'s own dX, so it
+// lands on the 10-unit grid by construction the same way every other
+// fixed-offset terminal in this package does — unlike Windings[0]'s own
+// circle position, which the tap's real xsde2svg counterpart is *not*
+// anchored to (confirmed by reading element_47.go's own isAutoTrans i==0
+// branch: its own dX/dY default to 0, i.e. the transformer's own overall
+// anchor, not whatever dX a later real circle ends up at).
+const transformerTapOffsetY = -50
+
+// writeAutotransformerTap draws an autotransformer's own extra terminal
+// (transformerTapOffset) as a short stub, plus a curved arc sweeping down
+// to Windings[0]'s own real circle — connecting them visually, the same
+// way a real instance's own tap arc visually leads into its first real
+// winding. Drawn at the same stroke-width every regular winding lead
+// uses (writeTransformerLeg), not a thinner one — this is a real
+// electrical lead, not a decoration. Returns the terminal's own local
+// position for the caller to treat as a real port the same way every
+// winding's own lead already is.
+func writeAutotransformerTap(w io.Writer, cx, cy float64, color string) (float64, float64) {
+	tapX, tapY := 0.0, float64(transformerTapOffsetY)
+	stubEndY := tapY + 20 // a short stub, leaving room for the arc below it
+	style := fmt.Sprintf("fill:none;stroke:%s;stroke-width:2", esc(color))
+	fmt.Fprintf(w, "<path d=\"M %s %s L %s %s\" style=\"%s\" />\n", fmtNum(tapX), fmtNum(tapY), fmtNum(tapX), fmtNum(stubEndY), style)
+
+	// The arc's own landing point sits on the circle's own rim, offset
+	// toward whichever side the circle itself sits on (not straight up
+	// from its center) — a broad, generously-radiused sweep past the
+	// circle's own top rather than a tight loop directly into it, closer
+	// to how a real instance's own tap arc actually reads.
+	sign := 1.0
+	if cx < tapX {
+		sign = -1.0
+	}
+	const landingAngle = 50 * math.Pi / 180
+	targetX := math.Round(cx + sign*transformerRadius*math.Sin(landingAngle))
+	targetY := math.Round(cy - transformerRadius*math.Cos(landingAngle))
+	const arcRadius = 40
+	sweep := 1
+	if sign < 0 {
+		sweep = 0
+	}
+	fmt.Fprintf(w, "<path d=\"M %s %s A %d %d 0 0 %d %s %s\" style=\"%s\" />\n",
+		fmtNum(tapX), fmtNum(stubEndY), arcRadius, arcRadius, sweep, fmtNum(targetX), fmtNum(targetY), style)
+
+	return tapX, tapY
+}
+
+// writePowerTransformer draws a PowerTransformer element (shape 47): one
+// circle per winding (e.Windings, in order), each with its own lead,
+// connection-scheme glyph, and (wye-with-neutral only) grounding mark; one
+// diagonal regulation arrow, centered on the element's own anchor, for
+// whichever winding has TapChanger set (matching real xsde2svg's own
+// "last one wins" behavior when more than one winding requests it — see
+// TransformerWinding.TapChanger's own doc comment); and, when
+// VectorGroupLabel is set, that label as plain text below the symbol.
+// Unlike real xsde2svg's own bare rotate(angle,cx,cy) transform, the whole
+// symbol is drawn in local (pre-rotation) coordinates and wrapped in
+// translate(x,y) rotate(orient) — the same convention renderElement's own
+// template branch already uses for every other shape — which is also why
+// the regulation arrow rotates along with the rest of the symbol here,
+// unlike real xsde2svg output (there it's drawn with a literal no-op
+// translate(0,0), so it never actually rotates with its own transformer;
+// this editor's own version rotating together is more useful to a diagram
+// author and was a deliberate deviation, not an oversight).
+func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, fallbackColor string, mode RenderMode) {
+	count := len(e.Windings)
+	if count < 2 {
+		count = 2
+	}
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"47\"%s transform=\"translate(%s,%s) rotate(%d)\">\n",
+		e.ID, esc(e.Name), esc(fallbackColor), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient)
+
+	for i := 0; i < count; i++ {
+		var winding TransformerWinding
+		if i < len(e.Windings) {
+			winding = e.Windings[i]
+		}
+		color := voltageColor[winding.Voltage]
+		if color == "" {
+			color = fallbackColor
+		}
+		cx, cy := transformerWindingOffset(count, i)
+		dir := winding.Terminal
+		if dir == "" {
+			dir = defaultTerminal(count, i)
+		}
+
+		fmt.Fprintf(w, "<circle cx=\"%s\" cy=\"%s\" r=\"%d\" style=\"fill:none;stroke:%s;stroke-width:2\" data-voltage=\"%s\" />\n",
+			fmtNum(cx), fmtNum(cy), transformerRadius, esc(color), esc(color))
+		writeTransformerLeg(w, cx, cy, dir, transformerLegLength(count, i), color)
+		// The connection-scheme glyph (and its own grounding mark) is
+		// wrapped in a counter-rotating <g> — rotate(-Orient) around the
+		// winding's own circle center — so it stays upright on screen
+		// regardless of the transformer's own Orient, the same way
+		// {counterRotate} already keeps a FaultPassageIndicator's own "FPI"
+		// label upright inside its own base.xml template: rotating a point
+		// around (cx,cy) by -Orient first, then the outer <g>'s own
+		// translate(x,y) rotate(Orient) rotates it right back by +Orient,
+		// netting zero rotation for anything drawn at an offset from
+		// (cx,cy) — while (cx,cy) itself, being the pivot, is untouched by
+		// its own rotation and still moves with the winding exactly as
+		// before.
+		if e.Orient != 0 {
+			fmt.Fprintf(w, "<g transform=\"rotate(%d,%s,%s)\">\n", -e.Orient, fmtNum(cx), fmtNum(cy))
+		}
+		writeWindingGlyph(w, cx, cy, winding.Scheme, color)
+		if winding.Scheme == SchemeWyeN {
+			writeGroundingMark(w, cx, cy, winding.Grounding, color)
+		}
+		if e.Orient != 0 {
+			fmt.Fprint(w, "</g>\n")
+		}
+		if e.Autotransformer && i == 0 {
+			_, _ = writeAutotransformerTap(w, cx, cy, color)
+		}
+	}
+
+	regulatedColor := ""
+	for i := 0; i < count && i < len(e.Windings); i++ {
+		if e.Windings[i].TapChanger {
+			regulatedColor = voltageColor[e.Windings[i].Voltage]
+			if regulatedColor == "" {
+				regulatedColor = fallbackColor
+			}
+		}
+	}
+	if regulatedColor != "" {
+		style := fmt.Sprintf("fill:none;stroke:%s;stroke-width:1", esc(regulatedColor))
+		endStyle := fmt.Sprintf("fill:%s;stroke:%s;stroke-width:1", esc(regulatedColor), esc(regulatedColor))
+		x0, y0 := -transformerArrowSize-transformerArrowShift, transformerArrowSize+transformerArrowShift
+		x1, y1 := transformerArrowSize+transformerArrowShift, -(transformerArrowSize + transformerArrowShift)
+		fmt.Fprintf(w, "<path d=\"M %s %s L %s %s\" style=\"%s\" />\n", fmtNum(float64(x0)), fmtNum(float64(y0)), fmtNum(float64(x1)), fmtNum(float64(y1)), style)
+		fmt.Fprintf(w, "<path d=\"M %s %s l -5 -5 l 7 -2 z\" style=\"%s\" />\n", fmtNum(float64(x1)+3), fmtNum(float64(y1)+2), endStyle)
+	}
+
+	if e.VectorGroupLabel != "" {
+		// A fixed cosmetic offset below the symbol's own lowest possible
+		// extent (transformerRadius, plus the largest transformerLegLength
+		// value any winding count/position ever returns, plus a small
+		// margin) — this text's own position isn't part of the electrical
+		// geometry, so it doesn't need to be grid-aligned the way a lead
+		// tip does.
+		const vectorGroupLabelOffset = transformerRadius + 13 + 14
+		fmt.Fprintf(w, "<text x=\"0\" y=\"%d\" style=\"fill:%s;font-size:10px;font-family:Arial\" text-anchor=\"middle\">%s</text>\n",
+			vectorGroupLabelOffset, esc(fallbackColor), esc(e.VectorGroupLabel))
+	}
+
+	fmt.Fprint(w, "</g>\n")
 }
 
 func writeLabel(w io.Writer, l Label, mode RenderMode) {

@@ -131,7 +131,7 @@ func TestParsePowerTransformer(t *testing.T) {
 <path d="M 882 500 l -7 -7 M 882 500 l 7 -7 M 882 500 l 0 7" style="fill:none;stroke:#326400;stroke-width:1" />
 </g>`)
 
-	el, ports, err := parsePowerTransformer(n)
+	el, ports, colors, err := parsePowerTransformer(n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +139,62 @@ func TestParsePowerTransformer(t *testing.T) {
 		t.Errorf("anchor/orient = (%v,%v,%d), want (900,500,-270)", el.X, el.Y, el.Orient)
 	}
 	// Local leads are at (953,500) and (847,500); rotate(-270) about
-	// (900,500) turns +90° clockwise, so both ports land on x=900.
-	if len(ports) != 2 || ports[0] != (Point{900, 553}) || ports[1] != (Point{900, 447}) {
-		t.Errorf("ports = %v, want [{900 553} {900 447}]", ports)
+	// (900,500) turns +90° clockwise, so both ports land on x=900 at
+	// y=553/447 before grid-snapping to the nearest 10 (550/450).
+	if len(ports) != 2 || ports[0] != (Point{900, 550}) || ports[1] != (Point{900, 450}) {
+		t.Errorf("ports = %v, want [{900 550} {900 450}]", ports)
+	}
+	if len(colors) != 2 || colors[0] != "#962896" || colors[1] != "#326400" {
+		t.Errorf("colors = %v, want [#962896 #326400]", colors)
+	}
+	if len(el.Windings) != 2 || el.Windings[0].Scheme != SchemeWye || el.Windings[1].Scheme != SchemeWye {
+		t.Errorf("windings = %+v, want two plain wye windings", el.Windings)
+	}
+	if el.Autotransformer {
+		t.Errorf("el.Autotransformer = true, want false")
+	}
+}
+
+// TestParsePowerTransformer_SkipsTrailingDecoration checks a 3-winding
+// transformer whose markup carries a trailing decoration path after the
+// last winding's own circle+lead+glyph — the same document position a
+// regulation arrow or (writePowerTransformer's own invention) an
+// autotransformer tap stub would occupy — with the same
+// single-two-point-subpath shape a real lead has. parsePowerTransformer
+// must still find exactly 3 leads, not 4, because it only looks for a
+// winding's own lead in the <path> children between that winding's own
+// <circle> and the next one (see its own doc comment).
+func TestParsePowerTransformer_SkipsTrailingDecoration(t *testing.T) {
+	n := parseFirst(t, `
+<g id="5" data-name="AT-1" data-type="47" transform="rotate(0,200,200)" >
+<circle cx="218" cy="200" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />
+<path d="M 240 200 h 13" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />
+<path d="M 218 200 l -7 -7 M 218 200 l 7 -7 M 218 200 l 0 7" style="fill:none;stroke:teal;stroke-width:1" />
+<circle cx="200" cy="175" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<path d="M 200 153 v -13" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<circle cx="182" cy="200" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />
+<path d="M 160 200 h -13" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />
+<path d="M 175 175 L 225 125" style="fill:none;stroke:teal;stroke-width:1" />
+</g>`)
+
+	el, ports, colors, err := parsePowerTransformer(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 3 {
+		t.Errorf("ports = %v (len %d), want exactly 3 leads, not the trailing decoration counted as a 4th", ports, len(ports))
+	}
+	if len(el.Ports) != 3 {
+		t.Errorf("el.Ports = %v, want 3 entries", el.Ports)
+	}
+	if len(colors) != 3 || colors[0] != "teal" || colors[1] != "purple" || colors[2] != "olive" {
+		t.Errorf("colors = %v, want [teal purple olive]", colors)
+	}
+	// Only winding 0 has a real connection glyph in this fixture; the
+	// trailing decoration after winding 2's own lead must not be
+	// misidentified as its own delta/wye scheme.
+	if len(el.Windings) != 3 || el.Windings[0].Scheme != SchemeWye || el.Windings[1].Scheme != "" || el.Windings[2].Scheme != "" {
+		t.Errorf("windings = %+v, want [wye, none, none]", el.Windings)
 	}
 }
 

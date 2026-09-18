@@ -608,3 +608,221 @@ func TestRender_MissingStateOmitsDataState(t *testing.T) {
 		t.Errorf("an element with no recorded State should carry no data-state attribute at all: %s", out)
 	}
 }
+
+// TestRender_PowerTransformer2Winding checks a 2-winding transformer's own
+// circle positions/legs/glyphs against hand-computed values, independently
+// derived from the real element_47.go default-path constants (baseRadius
+// 22, xShift 18, glyph shift 22/3=7, delta shift 22/2=11/half 5) rather
+// than any single real corpus instance — the real corpus's own type-47
+// instances turned out to mostly use non-default Size presets (see
+// writePowerTransformer's own doc comment), so a literal byte-for-byte
+// comparison against one specific real file would just be pinning that
+// file's own Size choice, not this package's own default geometry.
+func TestRender_PowerTransformer2Winding(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "110kV", Color: "#962896"}, {ID: 2, Name: "35kV", Color: "#965000"}},
+		Elements: []Element{{
+			ID: 7, Class: ClassPowerTransformer, Shape: "47", Name: "T-1", X: 100, Y: 100,
+			Windings: []TransformerWinding{
+				{Voltage: 1, Scheme: SchemeDelta},
+				{Voltage: 2, Scheme: SchemeWyeN, Grounding: GroundingSolid},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`<!-- Power transformer:47 -->`,
+		`<g id="7" data-name="T-1" data-voltage="gray" data-type="47" transform="translate(100,100) rotate(0)">`,
+		// Winding 0 (delta, #962896): circle at local (+18,0), leg to
+		// (+50,0) (circle edge 18+22=40, plus a 10-unit lead — chosen so
+		// the tip lands on the 10-unit grid; see transformerLegLength's
+		// own doc comment), and the delta triangle M(cx,cy-5) l(5,11)
+		// l(-11,0) z.
+		`<circle cx="18" cy="0" r="22" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
+		`<path d="M 40 0 L 50 0" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
+		`<path d="M 18 -5 l 5 11 l -11 0 z" style="fill:none;stroke:#962896;stroke-width:1" />`,
+		// Winding 1 (wye-with-neutral + solid grounding, #965000): circle
+		// at local (-18,0), leg to (-50,0), the 4-spoke wyeN glyph, and a
+		// grounding mark just past the neutral spoke's own tip.
+		`<circle cx="-18" cy="0" r="22" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
+		`<path d="M -40 0 L -50 0" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
+		`<path d="M -18 0 l -7 -7 M -18 0 l 7 -7 M -18 0 l 0 7 M -18 0 l 7 0" style="fill:none;stroke:#965000;stroke-width:1" />`,
+		`<path d="M -8 0 v 4 M -13 4 h 10 M -11 7 h 6 M -9 10 h 2" style="fill:none;stroke:#965000;stroke-width:1" />`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("2-winding power transformer missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "a 18 18") {
+		t.Errorf("a non-autotransformer should draw no tap decoration: %s", out)
+	}
+	if strings.Contains(out, "stroke-width:1\" />\n<path d=\"M -25") {
+		t.Errorf("a transformer with no TapChanger winding should draw no regulation arrow: %s", out)
+	}
+}
+
+// TestRender_PowerTransformer2WindingAutotransformerTap checks the tap's
+// own real terminal (transformerTapOffset, local (0,-50) — grid-aligned
+// and independent of Windings[0]'s own circle position) and the arc
+// connecting it to Windings[0]'s own circle, for the case where that
+// circle sits off-center (dX=18, the 2-winding default) rather than
+// directly below the tap the way a 3/4-winding transformer's own
+// top-positioned winding 0 does — the case that surfaced a real
+// connectivity bug (see RELEASE.md): a real user reported the tap arc
+// needing to "end with a connector," since the original version of this
+// decoration was purely cosmetic, with no real terminal a wire could
+// bind to at all.
+func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "110kV", Color: "teal"}, {ID: 2, Name: "35kV", Color: "purple"}},
+		Elements: []Element{{
+			ID: 13, Class: ClassPowerTransformer, Shape: "47", X: 100, Y: 100, Autotransformer: true,
+			Windings: []TransformerWinding{{Voltage: 1, Scheme: SchemeWye}, {Voltage: 2, Scheme: SchemeWye}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		// Winding 0's own circle at local (+18,0) (the 2-winding default).
+		`<circle cx="18" cy="0" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// The tap's own real terminal: stub from (0,-50) down to (0,-30),
+		// still directly above the *anchor* (x=0), not winding 0's own
+		// circle (x=18) — this is what keeps it grid-aligned regardless
+		// of which winding position the tap ends up decorating. Drawn at
+		// stroke-width 2, matching every regular winding lead — this is a
+		// real electrical lead, not a thinner decorative line.
+		`<path d="M 0 -50 L 0 -30" style="fill:none;stroke:teal;stroke-width:2" />`,
+		// The connecting arc sweeps from (0,-30), radius 40, to a point on
+		// winding 0's own circle rim 50° up from its own top, offset
+		// toward whichever side the circle sits on (right, here, since
+		// winding 0 sits at +18) — a broad, smooth sweep past the
+		// circle's own top rather than a tight loop landing dead center.
+		`<path d="M 0 -30 A 40 40 0 0 1 35 -14" style="fill:none;stroke:teal;stroke-width:2" />`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("2-winding autotransformer tap missing %q: %s", want, out)
+		}
+	}
+}
+
+// TestRender_PowerTransformer3WindingAutotransformer checks an
+// autotransformer's own tap decoration (drawn on Windings[0]'s own real
+// circle rather than real xsde2svg's own separate phantom-winding
+// convention — see writeAutotransformerTap's own doc comment) and the
+// regulation arrow, drawn once for whichever winding has TapChanger set.
+func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "110kV", Color: "teal"}, {ID: 2, Name: "35kV", Color: "purple"}, {ID: 3, Name: "10kV", Color: "olive"}},
+		Elements: []Element{{
+			ID: 9, Class: ClassPowerTransformer, Shape: "47", X: 100, Y: 100, Autotransformer: true,
+			Windings: []TransformerWinding{
+				{Voltage: 1, Scheme: SchemeWye, TapChanger: true},
+				{Voltage: 2, Scheme: SchemeWye},
+				{Voltage: 3, Scheme: SchemeWyeN},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		// Winding 0 (top, default terminal for a 3-winding transformer):
+		// circle at local (0,-25), the tap stub+arc, and the regulation
+		// arrow (centered on the element's own anchor, teal — winding 0's
+		// own color, since it's the one with TapChanger set).
+		`<circle cx="0" cy="-25" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// Winding 0's own real lead (top, legLen 13 — chosen so
+		// topShift(25)+radius(22)+13=60 lands on the 10-unit grid), drawn
+		// in addition to (not instead of) its own tap decoration below.
+		`<path d="M 0 -47 L 0 -60" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// The autotransformer's own extra "line" terminal
+		// (transformerTapOffset): a real, connectable point at local
+		// (0,-50) — always directly above the anchor regardless of
+		// winding count, so it lands on the grid the same way a
+		// top-positioned winding's own lead does — with a short stub
+		// down to (0,-30) and a broad radius-40 arc sweeping to a point
+		// on winding 0's own circle rim 50° up from its own top (17,-39)
+		// — offset from dead-center-top even though winding 0 itself has
+		// no horizontal offset of its own (dX=0 for a 3-winding's own top
+		// winding), since the landing angle is independent of that.
+		`<path d="M 0 -50 L 0 -30" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M 0 -30 A 40 40 0 0 1 17 -39" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M -25 25 L 25 -25" style="fill:none;stroke:teal;stroke-width:1" />`,
+		`<path d="M 28 -23 l -5 -5 l 7 -2 z" style="fill:teal;stroke:teal;stroke-width:1" />`,
+		// Windings 1/2 (right/left, matching the non-auto 3-winding
+		// default) carry no tap decoration of their own, and their own
+		// legLen (10 — xShift(18)+radius(22)+10=50, also grid-aligned)
+		// differs from winding 0's own.
+		`<circle cx="18" cy="0" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
+		`<path d="M 40 0 L 50 0" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
+		`<circle cx="-18" cy="0" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
+		`<path d="M -40 0 L -50 0" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("autotransformer missing %q: %s", want, out)
+		}
+	}
+}
+
+// TestRender_PowerTransformer4Winding checks the 4-winding default circle
+// layout (top/bottom/left/right), independently verified against a real
+// (fractional-scale) 4-winding corpus instance whose proportions matched
+// these same constants once the scale factor was divided back out.
+func TestRender_PowerTransformer4Winding(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []VoltageClass{{ID: 1, Color: "teal"}, {ID: 2, Color: "purple"}, {ID: 3, Color: "olive"}, {ID: 4, Color: "purple"}},
+		Elements: []Element{{
+			ID: 11, Class: ClassPowerTransformer, Shape: "47", X: 100, Y: 100,
+			Windings: []TransformerWinding{{Voltage: 1}, {Voltage: 2}, {Voltage: 3}, {Voltage: 4}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`<circle cx="0" cy="-20" r="22"`, // top
+		`<circle cx="0" cy="18" r="22"`,  // bottom
+		`<circle cx="-29" cy="0" r="22"`, // left
+		`<circle cx="29" cy="0" r="22"`,  // right
+		// Each winding's own lead tip lands on the 10-unit grid despite
+		// each position using its own distinct legLen: top uses 8
+		// (vertShift(20)+radius(22)+8=50), bottom uses 10
+		// (xShift(18)+radius(22)+10=50 — winding 1 reuses xShift), and
+		// left/right use 9 (sideShift(29)+radius(22)+9=60).
+		`L 0 -50`, // top:    -20-22-8  = -50
+		`L 0 50`,  // bottom:  18+22+10 =  50
+		`L -60 0`, // left:   -29-22-9  = -60
+		`L 60 0`,  // right:   29+22+9  =  60
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("4-winding power transformer missing %q: %s", want, out)
+		}
+	}
+}

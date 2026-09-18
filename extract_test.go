@@ -95,3 +95,150 @@ func TestExtract_EndToEnd(t *testing.T) {
 		t.Errorf("expected the border polyline (data-type=1) to be skipped and counted, got %+v", report.Skipped)
 	}
 }
+
+// testAutotransformerSVG is real xsde2svg output (xsde2svg/examples/test/svg/
+// Test_47_AutoTransformer2-1.svg, its own id="1" instance) — a 2-real-winding
+// autotransformer whose own tap arc+stub is drawn before its first <circle>.
+const testAutotransformerSVG = `<?xml version="1.0"?>
+<svg width="600" height="600" style='stroke-width: 0px; background-color: #12161d;' xmlns="http://www.w3.org/2000/svg">
+<g id="1"  data-type="47"  >
+<path d="M 350 57 a 40 40 0 0 1 22 35" style="fill:none;stroke:teal;stroke-width:1" data-voltage="teal" />
+<path d="M 350 52 v 6" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />
+<circle cx="350" cy="92" r="22" style="fill:none;stroke:purple;stroke-width:1" data-voltage="purple" />
+<path d="M 328 90 h -11" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<circle cx="350" cy="128" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />
+<path d="M 372 130 h 11" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />
+</g>
+</svg>
+`
+
+// TestExtract_PowerTransformerAutotransformerAndVoltages is a regression
+// test for two bugs a real user hit together on a real corpus diagram:
+// every extracted transformer collapsing to 2 windings regardless of its
+// real winding count (parsePowerTransformer found the real lead count but
+// never populated Element.Windings, and writePowerTransformer derives its
+// own drawn circle count from len(Windings), not len(Ports)), and every
+// winding silently losing its own real color/voltage class (extraction
+// never resolved a winding's own data-voltage into a VoltageClass id at
+// all). Also checks Autotransformer is recovered from the real tap
+// arc+stub's own document position (before the first <circle>).
+func TestExtract_PowerTransformerAutotransformerAndVoltages(t *testing.T) {
+	d, _, err := Extract([]byte(testAutotransformerSVG), "test.svg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Elements) != 1 {
+		t.Fatalf("elements = %+v, want exactly 1 transformer", d.Elements)
+	}
+	tr := d.Elements[0]
+	if !tr.Autotransformer {
+		t.Errorf("Autotransformer = false, want true (real tap arc+stub precede the first <circle>)")
+	}
+	if len(tr.Windings) != 2 {
+		t.Fatalf("len(Windings) = %d, want 2 (matching the 2 real <circle>s, not collapsed to a hardcoded default)", len(tr.Windings))
+	}
+	if len(tr.Ports) != 2 {
+		t.Errorf("len(Ports) = %d, want 2", len(tr.Ports))
+	}
+
+	byColor := map[string]int{}
+	for _, vc := range d.VoltageClasses {
+		byColor[vc.Color] = vc.ID
+	}
+	purpleID, olive1 := byColor["purple"], byColor["olive"]
+	if purpleID == 0 || olive1 == 0 {
+		t.Fatalf("voltage classes = %+v, want both purple and olive present", d.VoltageClasses)
+	}
+	if tr.Windings[0].Voltage != purpleID {
+		t.Errorf("Windings[0].Voltage = %d, want %d (purple)", tr.Windings[0].Voltage, purpleID)
+	}
+	if tr.Windings[1].Voltage != olive1 {
+		t.Errorf("Windings[1].Voltage = %d, want %d (olive)", tr.Windings[1].Voltage, olive1)
+	}
+	if tr.Windings[0].Voltage == tr.Windings[1].Voltage {
+		t.Errorf("the two windings' own colors differ (purple vs olive) but resolved to the same voltage class: %+v", tr.Windings)
+	}
+}
+
+// testAutotransformer3WindingSVG is real xsde2svg output
+// (sld-svg/examples/sld/Test_47_AutoTransformer3Text.svg, its own id="1"
+// instance) — a 3-real-winding autotransformer (element_47.go's own
+// WindingNo==4 case). Its third real winding's own lead
+// ("M 340 112 v 11") is drawn *before* its own circle
+// ("<circle cx="340" cy="90" ...>"), unlike every other winding of every
+// other shape — a real quirk of element_47.go's own case-3 branch, found
+// by the user comparing this file's own real xsde2svg rendering against
+// this package's own extract-then-render round trip and seeing a visibly
+// different third winding.
+const testAutotransformer3WindingSVG = `<?xml version="1.0"?>
+<svg width="1930" height="1420" style='stroke-width: 0px; background-color: #f5ebeb;' xmlns="http://www.w3.org/2000/svg">
+<g id="1"  data-type="47"  >
+<path d="M 360 25 a 40 40 0 0 1 22 35" style="fill:none;stroke:seagreen;stroke-width:1" data-voltage="seagreen" />
+<path d="M 360 20 v 6" style="fill:none;stroke:seagreen;stroke-width:2" data-voltage="seagreen" />
+<circle cx="360" cy="60" r="22" style="fill:none;stroke:#ffc055;stroke-width:1" data-voltage="#ffc055" />
+<path d="M 338 60 h -11" style="fill:none;stroke:#ffc055;stroke-width:2" data-voltage="#ffc055" />
+<circle cx="380" cy="90" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<path d="M 402 90 h 11" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<path d="M 340 112 v 11" style="fill:none;stroke:red;stroke-width:2" data-voltage="red" />
+<circle cx="340" cy="90" r="22" style="fill:none;stroke:red;stroke-width:2" data-voltage="red" />
+</g>
+</svg>
+`
+
+// TestExtract_PowerTransformerLeadBeforeCircle is a regression test for a
+// real xsde2svg autotransformer quirk (see testAutotransformer3WindingSVG's
+// own doc comment): a strict "circle, then its own trailing lead" document-
+// order grouping under-counts this transformer's own third winding
+// entirely and misreads its actual lead as a (non-matching, silently
+// discarded) connection-scheme glyph for the second winding instead —
+// parsePowerTransformer's own lead-to-circle assignment is distance-based
+// specifically to get this right regardless of document order.
+func TestExtract_PowerTransformerLeadBeforeCircle(t *testing.T) {
+	d, _, err := Extract([]byte(testAutotransformer3WindingSVG), "test.svg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Elements) != 1 {
+		t.Fatalf("elements = %+v, want exactly 1 transformer", d.Elements)
+	}
+	tr := d.Elements[0]
+	if !tr.Autotransformer {
+		t.Errorf("Autotransformer = false, want true")
+	}
+	if len(tr.Windings) != 3 || len(tr.Ports) != 3 {
+		t.Fatalf("windings=%d ports=%d, want 3 real windings (#ffc055, purple, red), not 2", len(tr.Windings), len(tr.Ports))
+	}
+
+	byColor := map[string]int{}
+	for _, vc := range d.VoltageClasses {
+		byColor[vc.Color] = vc.ID
+	}
+	wantColors := []string{"#ffc055", "purple", "red"}
+	for i, want := range wantColors {
+		id := byColor[want]
+		if id == 0 {
+			t.Fatalf("voltage classes = %+v, want %q present", d.VoltageClasses, want)
+		}
+		if tr.Windings[i].Voltage != id {
+			t.Errorf("Windings[%d].Voltage = %d, want %d (%s)", i, tr.Windings[i].Voltage, id, want)
+		}
+	}
+
+	// M 340 112 v 11 ends at (340,123) — no rotate() on this <g>, so that's
+	// also its real global position, grid-snapped to (340,120). Confirm it
+	// landed on the *third* winding (red), not swallowed as a false glyph
+	// on the second (purple), or lost to the tap arc's own similarly-shaped
+	// endpoint.
+	if len(d.Nodes) < 3 {
+		t.Fatalf("nodes = %+v, want at least 3 (one per real lead)", d.Nodes)
+	}
+	var redPort Point
+	for _, node := range d.Nodes {
+		if node.ID == tr.Ports[2].Node {
+			redPort = Point{X: node.X, Y: node.Y}
+		}
+	}
+	if redPort != (Point{X: 340, Y: 120}) {
+		t.Errorf("third winding's own port = %v, want {340 120} (its real lead tip, grid-snapped — not a discarded glyph check)", redPort)
+	}
+}

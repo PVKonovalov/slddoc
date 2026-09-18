@@ -72,10 +72,17 @@ import (
 //     rotated, rather than just reusing the transform's center directly.
 //     parseOnePortDevice is their common parser, parameterized by
 //     Class/Shape since it's otherwise identical for all four shapes.
-//   - PowerTransformer (47): only the 2-winding case is supported. Each
-//     winding's lead is a direct <path> child with exactly one subpath of
-//     exactly two points ("M x y h/v ±len"); the port is that subpath's
-//     final point, rotated through the element's transform.
+//   - PowerTransformer (47): the 2/3/4-winding non-autotransformer case is
+//     supported (an autotransformer's own tap decoration isn't recognized
+//     as such — it's just read back as an ordinary extra path on whichever
+//     winding it's drawn on). Each winding's lead is a direct <path> child
+//     with exactly one subpath of exactly two points ("M x y h/v ±len");
+//     the port is that subpath's final point, rotated through the
+//     element's transform. A found lead's own connection-scheme glyph,
+//     grounding mark, and regulation arrow aren't reverse-engineered back
+//     into Scheme/Grounding/TapChanger — importing a real xsde2svg
+//     transformer gets its winding count and lead positions back, not its
+//     full nameplate configuration.
 //   - BusBarSection (24) and generic wires (21/22/23/28) are plain
 //     polylines; their points are kept as drawn.
 //   - JunctionPoint (7) is a circle marking an explicit graph node.
@@ -449,52 +456,266 @@ func parseVoltageTransformer(n *rawNode) (Element, []Point, string, error) {
 	}, []Point{anchor}, voltage, nil
 }
 
-// parsePowerTransformer handles shape 47 (power transformer), 2-winding
-// case only: each winding's lead is a direct <path> child with exactly one
-// subpath of exactly two points, whose final point is the port.
-func parsePowerTransformer(n *rawNode) (Element, []Point, error) {
+// parsePowerTransformer handles shape 47 (power transformer): each real
+// winding is a <circle> child with its own lead, a <path> child with
+// exactly one subpath of exactly two points ("M x y h/v ±len") — the port
+// being that subpath's final point — and, optionally, its own
+// connection-scheme glyph, a <path> child immediately after the lead if
+// its own shape matches one of the three this package recognizes (see
+// windingSchemeFromGlyph).
+//
+// A winding's own lead is *not* simply "the next <path> after its own
+// <circle>" — real xsde2svg's own autotransformer geometry
+// (element_47.go's own case-3 branch, the last real winding of a
+// WindingNo==4 autotransformer) draws that one winding's own leg *before*
+// its own circle, unlike every other winding of every other shape, which
+// a strict document-order "circle, then its own trailing children"
+// grouping would misparse — under-counting that winding's own lead
+// entirely and misreading the next winding's own lead as a stray
+// connection-scheme glyph instead. So instead, every lead-shaped
+// candidate <path> in the whole element is collected first, then matched
+// to whichever <circle> its own start point is closest to (a lead always
+// starts right at its own circle's edge, one radius away at most) —
+// correct regardless of document order, not just for this one known
+// quirk. A decoration that isn't a winding's own lead or glyph at all
+// (this package's own writePowerTransformer draws its regulation arrow
+// only after every winding; real xsde2svg draws an autotransformer's own
+// tap arc+stub before its first <circle> — see below) is never mistaken
+// for one: a candidate too far from every circle to plausibly be its own
+// lead is simply not assigned, and glyph detection only ever inspects the
+// single <path> immediately following a winding's own now-correctly-
+// identified lead (skipping it entirely if that next path was itself
+// claimed as some other winding's own lead), which is also what keeps a
+// regulation arrow's own closed-triangle arrowhead (the same "one
+// subpath, four points, closed" shape a delta glyph has) from being
+// misread as some winding's own delta scheme.
+//
+// Known gaps, not yet recovered from rendered geometry at all: which
+// winding (if any) has TapChanger set (the regulation arrow's own
+// presence/color don't reliably tie back to one specific winding), a
+// winding's own NeutralGrounding (real xsde2svg's "neutral_ground"
+// WindingType — a distinct, more complex glyph than plain wye-with-neutral
+// — isn't pattern-matched here, so a grounded winding is read back as
+// plain SchemeWyeN with Grounding left unset), and any of the rarer real
+// WindingType values (zigzag, open_delta, ...) this package doesn't offer
+// in Properties anyway. Recovering these reliably is exactly what adding
+// dedicated data-* attributes to xsde2svg's own SVG output would fix,
+// rather than pattern-matching geometry that was never meant to be parsed
+// back.
+func parsePowerTransformer(n *rawNode) (Element, []Point, []string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
-		return Element{}, nil, err
+		return Element{}, nil, nil, err
 	}
-	angle, center, ok := parseRotate(n.attr("transform"))
-	if !ok {
-		return Element{}, nil, fmt.Errorf("slddoc: transformer %s: no rotate() transform", n.attr("id"))
-	}
+	// A real xsde2svg instance at angle 0 omits transform="rotate(...)"
+	// entirely (same convention every other shape's own extraction
+	// already handles — see parseTwoPortDevice/parseOnePortDevice's own
+	// fallback for a missing rotate()) — unlike those, a transformer's own
+	// untransformed anchor isn't simply its first path's own raw point or
+	// two ports' own midpoint, so it's recovered below, once the winding
+	// count is known, by reversing transformerWindingOffset against the
+	// first circle's own absolute center.
+	angle, center, hasRotate := parseRotate(n.attr("transform"))
 
-	var localPorts []Point
-	for _, p := range n.childrenTagged("path") {
-		subpaths, err := parseSubpaths(p.attr("d"))
-		if err != nil {
+	type circleInfo struct {
+		childIdx int
+		color    string
+		center   Point
+		radius   float64
+	}
+	var circles []circleInfo
+	autotransformer := false
+	sawCircle := false
+	firstCircleChildIdx := -1
+	for i, c := range n.Children {
+		if c.Tag == "circle" {
+			sawCircle = true
+			if firstCircleChildIdx == -1 {
+				firstCircleChildIdx = i
+			}
+			cx, _ := strconv.ParseFloat(c.attr("cx"), 64)
+			cy, _ := strconv.ParseFloat(c.attr("cy"), 64)
+			r, _ := strconv.ParseFloat(c.attr("r"), 64)
+			if r == 0 {
+				r = transformerRadius // this package's own default, for a malformed/missing r
+			}
+			circles = append(circles, circleInfo{childIdx: i, color: c.attr("data-voltage"), center: Point{X: cx, Y: cy}, radius: r})
 			continue
 		}
-		if len(subpaths) == 1 && len(subpaths[0]) == 2 {
-			localPorts = append(localPorts, subpaths[0][1])
+		if c.Tag == "path" && !sawCircle {
+			// A real xsde2svg autotransformer draws its own tap arc+stub
+			// for the (uncircled) first winding entry before any <circle>
+			// at all — the one reliable, order-based signal this format
+			// gives for "this is an autotransformer" without a dedicated
+			// attribute.
+			autotransformer = true
 		}
 	}
-	if len(localPorts) != 2 {
-		return Element{}, nil, fmt.Errorf("slddoc: transformer %s: found %d lead(s), only the 2-winding case is supported in v1", n.attr("id"), len(localPorts))
+	if len(circles) < 2 || len(circles) > 4 {
+		return Element{}, nil, nil, fmt.Errorf("slddoc: transformer %s: found %d winding(s), only 2/3/4-winding transformers are supported", n.attr("id"), len(circles))
 	}
 
-	globalPorts := make([]Point, 2)
+	type leadInfo struct {
+		childIdx int
+		end      Point
+	}
+	leadFor := make(map[int]leadInfo) // circle index -> its own lead
+	claimedPath := map[int]bool{}     // child index -> claimed as some circle's own lead
+	for i, c := range n.Children {
+		if c.Tag != "path" || i < firstCircleChildIdx {
+			// A candidate before the transformer's very first <circle> is
+			// always an autotransformer's own tap arc+stub (see above),
+			// never any winding's own lead — excluding it here matters
+			// even though it's usually far from every circle, since a
+			// tap's own arc endpoint can land close enough to a nearby
+			// circle to win the distance race against that circle's own
+			// real lead otherwise (an autotransformer's tap arc curves
+			// back toward its own first real winding by construction).
+			continue
+		}
+		subpaths, err := parseSubpaths(c.attr("d"))
+		if err != nil || len(subpaths) != 1 || len(subpaths[0]) != 2 {
+			continue
+		}
+		start, end := subpaths[0][0], subpaths[0][1]
+		best, bestDist := -1, math.Inf(1)
+		for ci, circ := range circles {
+			if _, taken := leadFor[ci]; taken {
+				continue
+			}
+			if d := distance(start, circ.center); d < bestDist {
+				best, bestDist = ci, d
+			}
+		}
+		// A real lead always starts within one radius of its own circle's
+		// own real edge — generously double that circle's own real radius
+		// (not this package's own default transformerRadius, since a real
+		// instance's own Size preset can scale it well past the default;
+		// one real corpus instance uses r="62") to allow room for its own
+		// leg length too, while still safely excluding a regulation
+		// arrow's own diagonal line (always centered on the element's own
+		// anchor, tens of units further out).
+		if best == -1 || bestDist > 2*circles[best].radius {
+			continue
+		}
+		leadFor[best] = leadInfo{childIdx: i, end: end}
+		claimedPath[i] = true
+	}
+	if len(leadFor) != len(circles) {
+		return Element{}, nil, nil, fmt.Errorf("slddoc: transformer %s: found %d winding(s) but only %d own lead(s)", n.attr("id"), len(circles), len(leadFor))
+	}
+
+	localPorts := make([]Point, len(circles))
+	colors := make([]string, len(circles))
+	windings := make([]TransformerWinding, len(circles))
+	for ci, circ := range circles {
+		lead := leadFor[ci]
+		localPorts[ci] = lead.end
+		colors[ci] = circ.color
+		for j := lead.childIdx + 1; j < len(n.Children); j++ {
+			next := n.Children[j]
+			if next.Tag == "circle" || claimedPath[j] {
+				break
+			}
+			if next.Tag != "path" {
+				continue
+			}
+			if subpaths, err := parseSubpaths(next.attr("d")); err == nil {
+				windings[ci].Scheme = windingSchemeFromGlyph(subpaths)
+			}
+			break
+		}
+	}
+	if !hasRotate {
+		off0X, off0Y := transformerWindingOffset(len(circles), 0)
+		center = Point{X: circles[0].center.X - off0X, Y: circles[0].center.Y - off0Y}
+	}
+	// A transformer's own anchor and each winding's own lead tip are
+	// snapped to this editor's own 10-unit default grid (EditorSettings'
+	// own GridSpacing default — see config.yaml) — real xsde2svg source
+	// diagrams place an element's own anchor on a grid this fine already
+	// almost universally, but a lead tip's own position is derived from
+	// that anchor by fixed, non-grid-multiple offsets (transformerRadius
+	// 22, the leg-length/shift constants, ...), so it essentially never
+	// lands on the grid on its own even when the anchor does. The
+	// resulting up-to-5-unit shift is well within snapTolerance's own
+	// existing connectivity tolerance (topology.go — its own doc comment
+	// already specifically cites "observed on a PowerTransformer's leads"
+	// as the reason that tolerance exists at all), so this doesn't risk
+	// a wire failing to bind to its own newly-snapped port.
+	center = snapPointToGrid(center)
+	globalPorts := make([]Point, len(localPorts))
 	for i, lp := range localPorts {
-		globalPorts[i] = rotate(lp, center, float64(angle))
+		globalPorts[i] = snapPointToGrid(rotate(lp, center, float64(angle)))
+	}
+
+	ports := make([]Port, len(localPorts))
+	for i := range ports {
+		ports[i] = Port{Name: fmt.Sprintf("%d", i+1)}
 	}
 
 	return Element{
-		ID:     id,
-		Class:  ClassPowerTransformer,
-		Shape:  "47",
-		Name:   n.attr("data-name"),
-		Layer:  resolveLayer(n.attr("data-layer")),
-		X:      center.X,
-		Y:      center.Y,
-		Orient: angle,
-		Ports: []Port{
-			{Name: "1"},
-			{Name: "2"},
-		},
-	}, globalPorts, nil
+		ID:              id,
+		Class:           ClassPowerTransformer,
+		Shape:           "47",
+		Name:            n.attr("data-name"),
+		Layer:           resolveLayer(n.attr("data-layer")),
+		X:               center.X,
+		Y:               center.Y,
+		Orient:          angle,
+		Ports:           ports,
+		Autotransformer: autotransformer,
+		Windings:        windings,
+	}, globalPorts, colors, nil
+}
+
+// extractGridSpacing is the fixed grid snapPointToGrid rounds a
+// PowerTransformer's own extracted anchor/lead positions to — this
+// package's own default (EditorSettings.GridSpacing's own default; see
+// config.yaml), not something Extract's own signature threads a
+// caller-chosen value through, since it exists only to compensate for
+// this one shape's own non-grid-multiple internal offsets, not as a
+// general "snap everything on import" feature.
+const extractGridSpacing = 10.0
+
+func snapPointToGrid(p Point) Point {
+	return Point{
+		X: math.Round(p.X/extractGridSpacing) * extractGridSpacing,
+		Y: math.Round(p.Y/extractGridSpacing) * extractGridSpacing,
+	}
+}
+
+// windingSchemeFromGlyph identifies a winding's own connection-scheme
+// glyph from its already-parsed subpaths, matching writeWindingGlyph's own
+// three shapes exactly (structurally — by subpath/point count, not exact
+// coordinates, since a real instance's own shift constant can vary with
+// its Size preset): plain wye is three 2-point subpaths (three spokes from
+// one shared center, each its own M); wye-with-neutral (Yn) is the same
+// but four; delta is a single 4-point subpath closed back on itself (the
+// triangle's own "z"). Anything else — including this package's own
+// autotransformer tap stub/arc, or a real xsde2svg regulation arrow's own
+// closed-triangle arrowhead, which a naive point-count check alone could
+// mistake for a delta glyph if it weren't for the caller only ever
+// checking the one path slot immediately after a winding's own lead —
+// returns "".
+func windingSchemeFromGlyph(subpaths [][]Point) WindingScheme {
+	allTwoPoints := func() bool {
+		for _, sp := range subpaths {
+			if len(sp) != 2 {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case len(subpaths) == 3 && allTwoPoints():
+		return SchemeWye
+	case len(subpaths) == 4 && allTwoPoints():
+		return SchemeWyeN
+	case len(subpaths) == 1 && len(subpaths[0]) == 4 && subpaths[0][0] == subpaths[0][3]:
+		return SchemeDelta
+	}
+	return ""
 }
 
 // parseBusBar handles shape 24 (busbar): a plain styled polyline that other

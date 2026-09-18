@@ -83,6 +83,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	var connectorVoltage []string
 	var bindings []portBinding
 	var labelNodes []*rawNode
+	// windingColors keys a PowerTransformer's own index in d.Elements to
+	// its own per-winding raw colors (parsePowerTransformer's own extra
+	// return value), index-aligned with that same element's own Windings —
+	// resolved into each TransformerWinding.Voltage in the same pass that
+	// resolves elementVoltage/connectorVoltage below, once colorToID
+	// exists. A PowerTransformer has no single representative color of its
+	// own (addElement is still called with "" for it, same as before), so
+	// this needs its own side-channel rather than reusing elementVoltage.
+	windingColors := map[int][]string{}
 
 	addElement := func(el Element, ports []Point, voltage string) {
 		colors = append(colors, voltage)
@@ -241,12 +250,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			addElement(el, ports, voltage)
 
 		case "47":
-			el, ports, err := parsePowerTransformer(n)
+			el, ports, wColors, err := parsePowerTransformer(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				continue
 			}
+			idx := len(d.Elements)
 			addElement(el, ports, "")
+			windingColors[idx] = wColors
+			colors = append(colors, wColors...)
 		}
 	}
 
@@ -261,6 +273,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	}
 	for i := range d.Connectors {
 		d.Connectors[i].Voltage = colorToID[normalizeColor(connectorVoltage[i])]
+	}
+	for idx, wColors := range windingColors {
+		for i, c := range wColors {
+			if i < len(d.Elements[idx].Windings) {
+				d.Elements[idx].Windings[i].Voltage = colorToID[normalizeColor(c)]
+			}
+		}
 	}
 
 	buildTopology(d, bindings)
