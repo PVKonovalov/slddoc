@@ -208,6 +208,7 @@ var shapeName = map[string]string{
 	"154":    "Fuse (withdrawable)",
 	"162":    "Disconnector",
 	"172":    "Capacitor bank",
+	"52":     "Half-chassis",
 	"173":    "Generator",
 	"203":    "Fuse",
 	"388":    "Capacitor",

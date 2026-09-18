@@ -130,6 +130,7 @@ const (
 	ClassFuse                  Class = "Fuse"
 	ClassCapacitor             Class = "Capacitor"
 	ClassCapacitorBank         Class = "CapacitorBank"
+	ClassHalfChassis           Class = "HalfChassis"
 	ClassStarter               Class = "Starter"
 	ClassGenerator             Class = "Generator"
 	ClassBusBarSection         Class = "BusBarSection"
