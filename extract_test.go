@@ -17,9 +17,10 @@ const testDiagramSVG = `<?xml version="1.0"?>
 <path d="M 900 280 v 3 M 900 300 v -3" style="stroke:#326400;stroke-width:1" />
 </g>
 </g>
-<g data-type="5" data-name="Breaker 1" data-event="dc" id="lbl1">
+<g data-type="5" data-name="Breaker 1" data-event="dc" id="2674">
 <text x="910" y="293" style="fill:white;text-anchor:start;font-size:13px;font-family:Arial;white-space: pre;" >Breaker 1</text>
 </g>
+<text x="1876" y="759" style="fill:darkturquoise;text-anchor:end;dominant-baseline:middle;font-size:16px;font-family:Arial ;font-weight: bold" data-type="134" id="148704875" data-name="R T-1 10" data-unit="МВт" >0.00 <tspan style="fill:darkturquoise;text-anchor:end;dominant-baseline:middle;font-size:16px;font-family:Arial ;font-weight: bold" >MW</tspan></text>
 <polyline points="0,0 5,0" style="fill:none;stroke:black;stroke-width:1" data-type="1" id="border" />
 </svg>
 `
@@ -64,6 +65,27 @@ func TestExtract_EndToEnd(t *testing.T) {
 
 	if len(d.Labels) != 1 || d.Labels[0].For != breaker.ID {
 		t.Errorf("label should match the breaker by name: %+v", d.Labels)
+	}
+	if d.Labels[0].ID != 2674 {
+		t.Errorf("label should keep its own real source id, got %+v", d.Labels[0])
+	}
+	if d.Labels[0].Color != "white" || d.Labels[0].Font != "Arial" || d.Labels[0].VAlign != "" {
+		t.Errorf("label should keep its own real fill/font/baseline, got %+v", d.Labels[0])
+	}
+
+	if report.DigitalDevices != 1 || len(d.DigitalDevices) != 1 {
+		t.Errorf("report.DigitalDevices = %d, len(d.DigitalDevices) = %d, want 1 each", report.DigitalDevices, len(d.DigitalDevices))
+	} else {
+		dd := d.DigitalDevices[0]
+		if dd.ID != 148704875 || dd.Name != "R T-1 10" || dd.Value != "0.00" || dd.Unit != "МВт" || dd.Anchor != "end" || !dd.Bold {
+			t.Errorf("digital device = %+v", dd)
+		}
+		// A real digital device's own per-instance color/baseline matter a
+		// lot (status indication) — dropping these silently defaulted every
+		// extracted one to white/bottom, which is what surfaced this bug.
+		if dd.Color != "darkturquoise" || dd.Font != "Arial" || dd.VAlign != "middle" {
+			t.Errorf("digital device should keep its own real fill/font/baseline, got %+v", dd)
+		}
 	}
 
 	// The decorative border (data-type="1", a plain line) is a recognized

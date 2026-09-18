@@ -9,10 +9,11 @@ import (
 // visibility rather than silent data loss, what the source SVG contained
 // that v1 doesn't understand yet.
 type Report struct {
-	Elements   int
-	Connectors int
-	Labels     int
-	Nodes      int
+	Elements       int
+	Connectors     int
+	Labels         int
+	DigitalDevices int
+	Nodes          int
 	// Skipped counts top-level nodes with a data-type code Extract does not
 	// (yet) support, keyed by that code (e.g. "310" for a decorative container).
 	Skipped map[string]int
@@ -108,6 +109,14 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 		}
 		if dt == "5" {
 			labelNodes = append(labelNodes, n)
+			continue
+		}
+		if dt == "134" {
+			if dd, ok := parseDigitalDevice(n); ok {
+				d.DigitalDevices = append(d.DigitalDevices, dd)
+			} else {
+				report.Failed = append(report.Failed, n.attr("id"))
+			}
 			continue
 		}
 		if !elementDataTypes[dt] {
@@ -243,6 +252,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	report.Elements = len(d.Elements)
 	report.Connectors = len(d.Connectors)
 	report.Labels = len(d.Labels)
+	report.DigitalDevices = len(d.DigitalDevices)
 	report.Nodes = len(d.Nodes)
 	return d, report, nil
 }

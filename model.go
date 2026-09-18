@@ -39,12 +39,13 @@ type Diagram struct {
 	// callers fall back to the server's configured defaults in that case.
 	Editor *EditorSettings `xml:"editor,omitempty" json:"editor,omitempty"`
 
-	Layers         []Layer        `xml:"layers>layer" json:"layers"`
-	VoltageClasses []VoltageClass `xml:"voltageClasses>class" json:"voltageClasses"`
-	Nodes          []Node         `xml:"nodes>node" json:"nodes"`
-	Elements       []Element      `xml:"elements>element" json:"elements"`
-	Connectors     []Connector    `xml:"connectors>connector" json:"connectors"`
-	Labels         []Label        `xml:"labels>label" json:"labels"`
+	Layers         []Layer         `xml:"layers>layer" json:"layers"`
+	VoltageClasses []VoltageClass  `xml:"voltageClasses>class" json:"voltageClasses"`
+	Nodes          []Node          `xml:"nodes>node" json:"nodes"`
+	Elements       []Element       `xml:"elements>element" json:"elements"`
+	Connectors     []Connector     `xml:"connectors>connector" json:"connectors"`
+	Labels         []Label         `xml:"labels>label" json:"labels"`
+	DigitalDevices []DigitalDevice `xml:"digitalDevices>digitalDevice" json:"digitalDevices"`
 }
 
 // EditorSettings is a diagram's own saved editing preferences. It has no
@@ -299,10 +300,75 @@ type Label struct {
 	Text string `xml:",chardata" json:"text"`
 }
 
+// DigitalDevice is a live SCADA-style analog readout — shape 134 in the
+// xsde2svg catalog ("Прибор цифровой", digital instrument). It shares
+// Label's own text-styling fields (Anchor/Bold/Color/VAlign/Font/Size), but
+// unlike Label its content isn't free text: Value is a placeholder/default
+// display value (e.g. "0.00", since this editor never binds to a live data
+// source, only lays out where and how one would render), Name is the SCADA
+// tag/point name (written as data-name, not shown in the text itself), and
+// Unit is an optional unit-of-measure suffix (e.g. "MW") rendered as its own
+// inline <tspan> right after Value on the same line — unlike Label's own
+// tspans, which each start a new stacked line instead.
+type DigitalDevice struct {
+	ID     int     `xml:"id,attr" json:"id"`
+	Layer  int     `xml:"layer,attr" json:"layer"`
+	X      float64 `xml:"x,attr" json:"x"`
+	Y      float64 `xml:"y,attr" json:"y"`
+	Size   float64 `xml:"size,attr" json:"size"`
+	Anchor string  `xml:"anchor,attr,omitempty" json:"anchor,omitempty"`
+	Bold   bool    `xml:"bold,attr,omitempty" json:"bold,omitempty"`
+	// Color is the readout's own text fill; empty means the same default
+	// white writeDigitalDevice/writeLabel have always used.
+	Color string `xml:"color,attr,omitempty" json:"color,omitempty"`
+	// VAlign follows Label.VAlign's own convention exactly ("top"/"middle",
+	// empty for the original baseline-at-Y behavior).
+	VAlign string `xml:"valign,attr,omitempty" json:"valign,omitempty"`
+	// Font is the readout's own font-family; empty means the default Arial
+	// writeDigitalDevice/writeLabel have always used.
+	Font string `xml:"font,attr,omitempty" json:"font,omitempty"`
+	// Name is the SCADA tag/point name this readout represents, written as
+	// data-name — purely informational to this editor, the same way
+	// Connector.Name is; it plays no part in what's actually displayed.
+	Name string `xml:"name,attr,omitempty" json:"name,omitempty"`
+	// Value is the placeholder/default text shown in place of a live
+	// reading (e.g. "0.00").
+	Value string `xml:"value,attr" json:"value"`
+	// Unit is an optional unit-of-measure suffix (e.g. "MW", "kV"); empty
+	// omits both the data-unit attribute and the unit <tspan> entirely.
+	Unit string `xml:"unit,attr,omitempty" json:"unit,omitempty"`
+}
+
 // emptyElement matches a start tag immediately followed by its own end tag
 // (encoding/xml never emits self-closing tags, even for elements with no
 // content), so Save can collapse them into the shorter self-closing form.
 var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.-]*="[^"]*")*)></([A-Za-z][\w:.-]*)>`)
+
+// emptyPathWrapperLine matches a whole line consisting solely of one of
+// this model's nested "parent>child" xml tags — Diagram's own
+// Layers/VoltageClasses/Nodes/Elements/Connectors/Labels/DigitalDevices,
+// and Element's own Points ("geometry>point") — immediately closed with no
+// children, i.e. its slice happened to be empty. encoding/xml's own
+// omitempty is documented to apply to a slice, but is silently ignored
+// specifically for a tag with a chained "parent>child" path (a
+// long-standing stdlib limitation: golang/go#4256), so it still writes the
+// parent wrapper unconditionally regardless of omitempty — e.g. a
+// non-BusBarSection Element, which never populates Points, otherwise
+// always carried a meaningless empty <geometry/> (self-closing, after the
+// emptyElement collapse below). None of these 8 wrapper tags ever carries
+// its own attributes, so matching the immediately-closed (zero content)
+// case can't mistake a populated one (whose own child elements/whitespace
+// separate its open and close tags) for an empty one. Removed entirely,
+// not just collapsed, since a wrapper with no attributes and no children
+// carries no information Load could ever need — an entirely absent one
+// round-trips identically to an explicit empty one (a nil slice either
+// way). This must run before emptyElement's own collapse below: stripping
+// an Element's only child (e.g. a Lamp with no Ports and no Points) can
+// leave that Element's own tag newly empty, which emptyElement then
+// collapses to self-closing in the usual way.
+var emptyPathWrapperLine = regexp.MustCompile(
+	`\n[ \t]*<(?:geometry|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices)></[A-Za-z][\w:.-]*>`,
+)
 
 // Save writes d as indented XML.
 func (d *Diagram) Save(w io.Writer) error {
@@ -315,7 +381,8 @@ func (d *Diagram) Save(w io.Writer) error {
 	if err := enc.Encode(d); err != nil {
 		return fmt.Errorf("slddoc: encoding diagram: %w", err)
 	}
-	out := emptyElement.ReplaceAll(buf.Bytes(), []byte("<$1$2/>"))
+	stripped := emptyPathWrapperLine.ReplaceAll(buf.Bytes(), nil)
+	out := emptyElement.ReplaceAll(stripped, []byte("<$1$2/>"))
 	if _, err := w.Write(out); err != nil {
 		return err
 	}

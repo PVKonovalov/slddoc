@@ -5,6 +5,39 @@ import (
 	"strings"
 )
 
+// parseOptionalID parses a real SVG node's own id="..." attribute the same
+// way parseElementID does, but leniently: missing or non-numeric returns 0
+// (this model's own "unset" sentinel — see Diagram.LastID's doc comment)
+// rather than failing the whole parse the way parseElementID's hard error
+// does — a Label/DigitalDevice's own id, unlike an Element/Connector/
+// Node's, is never referenced by anything else, so there's nothing to
+// break by leaving it unset. Real xsde2svg-exported instances do carry a
+// real numeric id here (confirmed against sld-svg's own example corpus and
+// sld-viewer's), the same as an Element's; 0 only happens for a
+// synthetically-constructed source lacking one.
+func parseOptionalID(n *rawNode) int {
+	id, err := strconv.Atoi(n.attr("id"))
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// parseVAlign reverses writeLabel/writeDigitalDevice's own
+// dominant-baseline mapping back into Label.VAlign/DigitalDevice.VAlign's
+// convention: "hanging" -> "top", "middle" -> "middle", anything else
+// (including absent, the real xsde2svg default) -> "" (bottom/baseline).
+func parseVAlign(style string) string {
+	switch styleProp(style, "dominant-baseline") {
+	case "hanging":
+		return "top"
+	case "middle":
+		return "middle"
+	default:
+		return ""
+	}
+}
+
 // parseLabel reads a data-type="5" group's <text>/<tspan> content into a
 // Label. It does not yet know which Element it belongs to — matchLabels
 // resolves that afterward by data-name, since a label's own id has no
@@ -39,14 +72,64 @@ func parseLabel(n *rawNode) (Label, string, bool) {
 	}
 
 	return Label{
+		ID:     parseOptionalID(n),
 		Layer:  resolveLayer(n.attr("data-layer")),
 		X:      x,
 		Y:      y,
 		Size:   size,
 		Anchor: styleProp(style, "text-anchor"),
 		Bold:   strings.Contains(style, "font-weight: bold") || strings.Contains(style, "font-weight:bold"),
+		Color:  styleProp(style, "fill"),
+		VAlign: parseVAlign(style),
+		Font:   styleProp(style, "font-family"),
 		Text:   strings.Join(lines, "\n"),
 	}, n.attr("data-name"), true
+}
+
+// parseDigitalDevice reads a data-type="134" node into a DigitalDevice.
+// Unlike data-type="5" (parseLabel), a real xsde2svg-exported digital
+// device carries data-type directly on the <text> node itself, not on a
+// wrapping <g> — see writeDigitalDevice's own doc comment — so n is
+// normally the text node already; the childrenTagged/descendants fallback
+// is kept anyway in case some exporter does wrap it, the same defensive
+// order parseLabel already uses.
+func parseDigitalDevice(n *rawNode) (DigitalDevice, bool) {
+	t := n
+	if n.Tag != "text" {
+		texts := n.childrenTagged("text")
+		if len(texts) == 0 {
+			texts = n.descendants("text")
+		}
+		if len(texts) == 0 {
+			return DigitalDevice{}, false
+		}
+		t = texts[0]
+	}
+
+	x, _ := strconv.ParseFloat(t.attr("x"), 64)
+	y, _ := strconv.ParseFloat(t.attr("y"), 64)
+	style := t.attr("style")
+
+	size := 0.0
+	if fs := styleProp(style, "font-size"); fs != "" {
+		size, _ = strconv.ParseFloat(strings.TrimSuffix(fs, "px"), 64)
+	}
+
+	return DigitalDevice{
+		ID:     parseOptionalID(n),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      x,
+		Y:      y,
+		Size:   size,
+		Anchor: styleProp(style, "text-anchor"),
+		Bold:   strings.Contains(style, "font-weight: bold") || strings.Contains(style, "font-weight:bold"),
+		Color:  styleProp(style, "fill"),
+		VAlign: parseVAlign(style),
+		Font:   styleProp(style, "font-family"),
+		Name:   n.attr("data-name"),
+		Value:  strings.TrimSpace(t.Text),
+		Unit:   n.attr("data-unit"),
+	}, true
 }
 
 // matchLabels resolves each label's owning Element by exact data-name

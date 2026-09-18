@@ -482,6 +482,10 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, fpiSta
 		writeLabel(w, l, mode)
 	}
 
+	for _, dd := range d.DigitalDevices {
+		writeDigitalDevice(w, dd, mode)
+	}
+
 	fmt.Fprint(w, "</svg>\n")
 
 	if len(missing) > 0 {
@@ -615,6 +619,57 @@ func writeLabel(w io.Writer, l Label, mode RenderMode) {
 	for _, ln := range lines[1:] {
 		fmt.Fprintf(w, "<tspan x=\"%s\" dy=\"%s\" style=\"%s\">%s</tspan>",
 			fmtNum(l.X), fmtNum(l.Size*1.4), esc(style), esc(ln))
+	}
+	fmt.Fprint(w, "</text>\n")
+}
+
+// digitalDeviceTypeCode is shape 134's own xsde2svg catalog code, written as
+// data-type the same way an Element/Connector's own shape/kind code is.
+const digitalDeviceTypeCode = "134"
+
+// writeDigitalDevice draws a shape-134 SCADA readout as a bare <text> node —
+// no wrapping <g>/transform, matching a real xsde2svg-exported one exactly
+// (see DigitalDevice's own doc comment). Unlike writeLabel's tspans (each a
+// new stacked line via dy), Unit's own tspan shares Value's line: same style,
+// no dy, immediately after Value with a single separating space.
+func writeDigitalDevice(w io.Writer, dd DigitalDevice, mode RenderMode) {
+	anchor := dd.Anchor
+	if anchor == "" {
+		anchor = "start"
+	}
+	weight := ""
+	if dd.Bold {
+		weight = "font-weight: bold;"
+	}
+	color := dd.Color
+	if color == "" {
+		color = "white"
+	}
+	font := dd.Font
+	if font == "" {
+		font = "Arial"
+	}
+	baseline := ""
+	switch dd.VAlign {
+	case "top":
+		baseline = "dominant-baseline:hanging;"
+	case "middle":
+		baseline = "dominant-baseline:middle;"
+	}
+	style := fmt.Sprintf("fill:%s;text-anchor:%s;%sfont-size:%spx;font-family:%s;%s",
+		color, anchor, baseline, fmtNum(dd.Size), font, weight)
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"digitaldevice\""
+	}
+	unitAttr := ""
+	if dd.Unit != "" {
+		unitAttr = fmt.Sprintf(" data-unit=\"%s\"", esc(dd.Unit))
+	}
+	fmt.Fprintf(w, "<text data-type=\"%s\" x=\"%s\" y=\"%s\" id=\"%d\" data-name=\"%s\"%s style=\"%s\"%s>%s",
+		digitalDeviceTypeCode, fmtNum(dd.X), fmtNum(dd.Y), dd.ID, esc(dd.Name), unitAttr, esc(style), editorAttr, esc(dd.Value))
+	if dd.Unit != "" {
+		fmt.Fprintf(w, " <tspan style=\"%s\">%s</tspan>", esc(style), esc(dd.Unit))
 	}
 	fmt.Fprint(w, "</text>\n")
 }

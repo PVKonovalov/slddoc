@@ -86,6 +86,74 @@ func TestRender_ProducesWellFormedSVG(t *testing.T) {
 	}
 }
 
+func TestRender_DigitalDeviceMatchesXsde2svgFormat(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		DigitalDevices: []DigitalDevice{
+			{
+				ID:     1,
+				X:      1876,
+				Y:      759,
+				Size:   16,
+				Anchor: "end",
+				Bold:   true,
+				Color:  "darkturquoise",
+				VAlign: "middle",
+				Name:   "R T-1 10",
+				Value:  "0.00",
+				Unit:   "MW",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`data-type="134"`,
+		`x="1876"`,
+		`y="759"`,
+		`id="1"`,
+		`data-name="R T-1 10"`,
+		`data-unit="MW"`,
+		`data-editor-kind="digitaldevice"`,
+		`fill:darkturquoise`,
+		`text-anchor:end`,
+		`dominant-baseline:middle`,
+		`font-weight: bold`,
+		`>0.00 <tspan`,
+		`</tspan></text>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered digital device missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "<g") {
+		t.Errorf("a digital device should be a bare <text>, not wrapped in a <g>: %s", out)
+	}
+}
+
+func TestRender_DigitalDeviceOmitsUnitWhenEmpty(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		DigitalDevices: []DigitalDevice{{ID: 1, X: 5, Y: 5, Size: 10, Value: "0.00"}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "data-unit") || strings.Contains(out, "<tspan") {
+		t.Errorf("an empty unit should omit both data-unit and the unit tspan entirely: %s", out)
+	}
+}
+
 func TestRender_UsesEditorBackground(t *testing.T) {
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{Width: 10, Height: 10, Editor: &EditorSettings{Background: "#ffffff"}}
