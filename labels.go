@@ -38,20 +38,27 @@ func parseVAlign(style string) string {
 	}
 }
 
-// parseLabel reads a data-type="5" group's <text>/<tspan> content into a
-// Label. It does not yet know which Element it belongs to — matchLabels
-// resolves that afterward by data-name, since a label's own id has no
-// relation to the id of the equipment it names.
-func parseLabel(n *rawNode) (Label, string, bool) {
+// firstTextChild returns n's own first <text> child, or its first <text>
+// descendant if it has none directly (a real xsde2svg export's own nesting
+// depth for this varies by data-type/version) — nil if there's no <text>
+// anywhere in n's subtree.
+func firstTextChild(n *rawNode) *rawNode {
 	texts := n.childrenTagged("text")
 	if len(texts) == 0 {
 		texts = n.descendants("text")
 	}
 	if len(texts) == 0 {
-		return Label{}, "", false
+		return nil
 	}
-	t := texts[0]
+	return texts[0]
+}
 
+// textToLabel reads one <text>/<tspan> node's own styling/content into a
+// Label — everything except ID/Layer/For, which differ by caller (parseLabel
+// resolves ID from its own container node and leaves For for matchLabels to
+// fill in by name; parseAttachedLabel instead already knows the owning
+// Element's id directly and leaves this Label's own ID at 0).
+func textToLabel(t *rawNode) Label {
 	x, _ := strconv.ParseFloat(t.attr("x"), 64)
 	y, _ := strconv.ParseFloat(t.attr("y"), 64)
 	style := t.attr("style")
@@ -72,8 +79,6 @@ func parseLabel(n *rawNode) (Label, string, bool) {
 	}
 
 	return Label{
-		ID:     parseOptionalID(n),
-		Layer:  resolveLayer(n.attr("data-layer")),
 		X:      x,
 		Y:      y,
 		Size:   size,
@@ -83,7 +88,46 @@ func parseLabel(n *rawNode) (Label, string, bool) {
 		VAlign: parseVAlign(style),
 		Font:   styleProp(style, "font-family"),
 		Text:   strings.Join(lines, "\n"),
-	}, n.attr("data-name"), true
+	}
+}
+
+// parseLabel reads a data-type="5" group's <text>/<tspan> content into a
+// Label. It does not yet know which Element it belongs to — matchLabels
+// resolves that afterward by data-name, since a label's own id has no
+// relation to the id of the equipment it names.
+func parseLabel(n *rawNode) (Label, string, bool) {
+	t := firstTextChild(n)
+	if t == nil {
+		return Label{}, "", false
+	}
+	lbl := textToLabel(t)
+	lbl.ID = parseOptionalID(n)
+	lbl.Layer = resolveLayer(n.attr("data-layer"))
+	return lbl, n.attr("data-name"), true
+}
+
+// parseAttachedLabel reads a real xsde2svg element's own embedded <text>
+// sibling — drawn via the ParamText/SubscriptName mechanism directly inside
+// the same <g> Extract matched the owning element on, rather than as its
+// own separately-typed data-type="5" node matchLabels resolves by
+// data-name (see JunctionPoint's own parseJunctionPoint, the first user of
+// this) — into a standalone Label already linked via For to that element's
+// own id. forID is the owning Element's own already-parsed ID, not n's own
+// id attribute: the synthesized Label deliberately leaves its own ID at 0
+// (unset) rather than reusing n's, which would collide with the owning
+// Element's own ID since both live on the very same <g> — relying on the
+// same ensureLastId frontend backfill that already disambiguates any Label
+// left at 0 (see diagramOps.ts's own doc comment) to give it a real one the
+// first time this diagram is opened.
+func parseAttachedLabel(n *rawNode, forID int) (Label, bool) {
+	t := firstTextChild(n)
+	if t == nil {
+		return Label{}, false
+	}
+	lbl := textToLabel(t)
+	lbl.Layer = resolveLayer(n.attr("data-layer"))
+	lbl.For = forID
+	return lbl, true
 }
 
 // parseDigitalDevice reads a data-type="134" node into a DigitalDevice.

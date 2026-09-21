@@ -348,6 +348,26 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 			color = "gray"
 		}
 	}
+	// junctionRadius/junctionFill back {junctionRadius}/{junctionFill} in
+	// JunctionPoint's own base.xml template only — separate placeholders
+	// from the generic {radius} (Lamp/FaultPassageIndicator's own, which
+	// deliberately stays raw/unfallback-ed, 0 rendering invisible, since
+	// those two rely on the frontend always seeding a real default on
+	// placement instead) because JunctionPoint needs a *non-zero* fallback
+	// to keep an already-placed/-saved instance with neither field set
+	// looking exactly as it always has (radius 3, unfilled) — even though
+	// real xsde2svg draws a filled dot at a genuinely varying radius far
+	// more often (see Element.Radius/Fill's own doc comments); a real
+	// extracted instance always sets both explicitly instead of relying on
+	// either fallback.
+	junctionRadius := e.Radius
+	if junctionRadius == 0 {
+		junctionRadius = 3
+	}
+	junctionFill := e.Fill
+	if junctionFill == "" {
+		junctionFill = "none"
+	}
 	if e.Class == ClassBusBarSection {
 		// A busbar's own data-name/data-voltage/data-type mirror what a
 		// real xsde2svg-exported busbar polyline carries (data-voltage is
@@ -439,6 +459,8 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		"{positionOffset}", positionOffset(e.Position),
 		"{fpiColor}", fpiColors.fpiColor(e.State),
 		"{counterRotate}", fmtNum(float64(-e.Orient)),
+		"{junctionRadius}", fmtNum(junctionRadius),
+		"{junctionFill}", esc(junctionFill),
 	).Replace(body)
 	// data-editor-kind (this editor's own addition, not part of the
 	// xsde2svg format) is what the frontend hit-tests against — it no

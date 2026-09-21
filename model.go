@@ -269,7 +269,15 @@ type Element struct {
 	FillOn  string `xml:"fillOn,attr,omitempty" json:"fillOn,omitempty"`
 	// Radius is a Lamp's (shape 106) or FaultPassageIndicator's (shape
 	// 320003) drawn circle radius; unlike other shapes' fixed template
-	// geometry, these are meaningfully different per instance.
+	// geometry, these are meaningfully different per instance. Also used by
+	// JunctionPoint (shape 7) for its own drawn dot — real corpus shows a
+	// genuinely varying radius there too (2/3/4/5/8/11 all seen), unlike
+	// this schema's own previous hardcoded 3. 0/unset falls back to that
+	// same 3 (Render's own default, preserved so an already-placed/-saved
+	// junction point's look doesn't change), not literally invisible the
+	// way an unset Lamp radius would be — Extract always sets this
+	// explicitly from a real instance's own r attribute instead of relying
+	// on that fallback.
 	Radius float64 `xml:"radius,attr,omitempty" json:"radius,omitempty"`
 	// Fill is a Rectangle's (shape 3) or Circle's (shape 4) own interior
 	// color — free-text like Lamp's own FillOff/FillOn, not a VoltageClass
@@ -282,7 +290,14 @@ type Element struct {
 	// Voltage of its own (its own outer outline's color), so Fill here is
 	// specifically the real source's own Abonent flag, generalized from an
 	// on/off toggle locked to {color} into this schema's ordinary
-	// free-choice color field.
+	// free-choice color field. Also used by JunctionPoint (shape 7) the
+	// same "none" way Rectangle/Circle already use it (their own default,
+	// preserved so an already-placed/-saved junction point's look doesn't
+	// change), even though real corpus shows most real instances (~65%)
+	// filled with their own voltage color instead — Extract sets this
+	// explicitly to whatever real instance's own fill color actually is,
+	// same as it does for a Rectangle, rather than leaving that majority
+	// case unset just because it happens to match {color}.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
 	// Stroke is a Rectangle's/Circle's own border color, or an Arrow's own
 	// line color — same free-text convention as Fill. Empty falls back to a
@@ -300,12 +315,13 @@ type Element struct {
 	DoubleHeaded bool `xml:"doubleHeaded,attr,omitempty" json:"doubleHeaded,omitempty"`
 	// NType selects between PackageSubstation's (shape 385) own two real
 	// appearance variants, matching the real source's own Tech.NType field
-	// exactly (confirmed via a new data-ntype export attribute added to
-	// xsde2svg's own element_385.go specifically so Extract could recover
-	// it, since neither variant's own drawn geometry otherwise gives it
-	// away on its own): 0 (unset, the common case) draws a box-in-box
-	// pictogram with a short lead stub; 1 draws a plain downward-pointing
-	// triangle instead. Unused by every other class.
+	// exactly (recovered via xsde2svg's own element_385.go, whose data
+	// export attribute has gone through two names — see
+	// elements.go's own substationDataProperty and parsePackageSubstation
+	// doc comments — since neither variant's own drawn geometry otherwise
+	// gives it away on its own): 0 (unset, the common case) draws a
+	// box-in-box pictogram with a short lead stub; 1 draws a plain
+	// downward-pointing triangle instead. Unused by every other class.
 	NType int `xml:"nType,attr,omitempty" json:"nType,omitempty"`
 	// PropertyText is a short overlay label (e.g. a transformer's own power
 	// rating, "160") drawn centered on PackageSubstation's (385) or

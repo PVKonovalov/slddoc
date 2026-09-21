@@ -335,6 +335,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 				continue
 			}
 			addElement(el, []Point{{X: el.X, Y: el.Y}}, voltage)
+			// A fixed xsde2svg version wraps a junction point's own
+			// optional ParamText/SubscriptName <text> in the same <g> as
+			// its circle (see parseJunctionPoint's own doc comment) — read
+			// separately here since it needs el.ID, already resolved above.
+			if lbl, ok := parseAttachedLabel(n, el.ID); ok {
+				d.Labels = append(d.Labels, lbl)
+			}
 
 		case "106":
 			el, err := parseLamp(n)
@@ -344,6 +351,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 				continue
 			}
 			addElement(el, nil, "")
+			// A fixed xsde2svg version wraps a Lamp's own optional
+			// ParamText/SubscriptName <text> in the same <g> as its
+			// circle (see parseLamp's own doc comment) — read separately
+			// here since it needs el.ID, already resolved above.
+			if lbl, ok := parseAttachedLabel(n, el.ID); ok {
+				d.Labels = append(d.Labels, lbl)
+			}
 
 		case "320003":
 			el, err := parseFaultPassageIndicator(n)

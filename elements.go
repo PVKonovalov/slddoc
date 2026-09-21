@@ -445,6 +445,42 @@ func substationAnchorFromGeometry(n *rawNode) (Point, error) {
 	return subpaths[0][0], nil
 }
 
+// substationDataProperty reads one key out of PackageSubstation's/
+// EnclosedSubstation's own data-property export attribute — a generic
+// "key:value;key:value" format (the same lightweight one style.go's own
+// styleProp already parses a style="..." attribute with, reused here
+// verbatim since the grammar is identical), added to xsde2svg's own
+// element_385.go/element_id386.go at the user's own request specifically
+// to recover characteristics real corpus rendering leaves no other trace
+// of: 385's own NType (key "ntype") and both shapes' own Tech.Closed
+// dashed-outline state (key "closed", 0 dashed/1 solid — matches
+// Element.State's own convention for these two shapes directly, no
+// translation needed). Superseded 385's own earlier, single-purpose
+// data-ntype attribute (still read as a fallback by parsePackageSubstation
+// specifically — see its own doc comment). "" when the key, or the whole
+// attribute, is absent.
+func substationDataProperty(n *rawNode, key string) string {
+	return styleProp(n.attr("data-property"), key)
+}
+
+// substationState parses PackageSubstation's/EnclosedSubstation's own
+// data-property "closed" key (see substationDataProperty) into a State
+// pointer — nil when absent (an older real export predating data-property
+// entirely, the same known-gap state this had before), matching
+// applyStateLine's own "nil defaults to the first/solid option" convention
+// every other State-driven shape already relies on.
+func substationState(n *rawNode) *int {
+	closedStr := substationDataProperty(n, "closed")
+	if closedStr == "" {
+		return nil
+	}
+	closed, err := strconv.Atoi(closedStr)
+	if err != nil {
+		return nil
+	}
+	return &closed
+}
+
 // parsePackageSubstation handles shape 385 (Package transformer
 // substation): its own anchor always comes from
 // substationAnchorFromGeometry (rotate-invariant — see that function's own
@@ -455,16 +491,22 @@ func substationAnchorFromGeometry(n *rawNode) (Point, error) {
 // than just n's own attribute — a real, currently-deployed xsde2svg version
 // nests it one level inside the outer <g id data-type ...> Extract actually
 // matches on, so checking only n's own attribute silently lost Orient for
-// every real rotated instance found this way. NType is read straight off
-// the real source's own data-ntype export attribute (added to xsde2svg's
-// own element_385.go specifically so this could be recovered at all, since
-// neither of the shape's two real appearance variants otherwise leaves any
-// other trace of which one was drawn). PropertyText is the first
-// descendant <text>'s own content — see Element.PropertyText's own doc
-// comment; "" when the real instance carries none, the common case. Fill
-// (the real source's own Abonent flag) and State (its own Tech.Closed
-// dashing) are not recovered — a known gap, same spirit as Arrow's own
-// DoubleHeaded not being recoverable from geometry alone.
+// every real rotated instance found this way. NType comes from the real
+// source's own data-property "ntype" key (see substationDataProperty),
+// falling back to the older single-purpose data-ntype attribute when
+// data-property itself is absent — a real, already-deployed xsde2svg
+// v1.4.12 corpus export was independently found to carry that older
+// attribute before data-property replaced it, so it's still read rather
+// than silently dropped. PropertyText is the first descendant <text>'s
+// own content — see Element.PropertyText's own doc comment; "" when the
+// real instance carries none, the common case. Fill (the real source's
+// own Abonent flag) is read back from the inner rect's/triangle path's
+// own fill (see substationFill) — a real corpus instance directly
+// reported as missing this (element id 148788827, its own Abonent-filled
+// inner rectangle silently dropped) confirmed the gap. State (the real
+// source's own Tech.Closed dashing) comes from data-property's own
+// "closed" key (see substationState) — nil for an older export predating
+// it, same as before.
 func parsePackageSubstation(n *rawNode) (Element, []Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -475,7 +517,11 @@ func parsePackageSubstation(n *rawNode) (Element, []Point, string, error) {
 		return Element{}, nil, "", fmt.Errorf("slddoc: package substation %s: %w", n.attr("id"), err)
 	}
 	angle, _, _ := parseRotate(n.firstAttrDescendant("transform"))
-	ntype, _ := strconv.Atoi(n.attr("data-ntype"))
+	ntypeStr := substationDataProperty(n, "ntype")
+	if ntypeStr == "" {
+		ntypeStr = n.attr("data-ntype")
+	}
+	ntype, _ := strconv.Atoi(ntypeStr)
 	return Element{
 		ID:           id,
 		Class:        ClassPackageSubstation,
@@ -486,15 +532,44 @@ func parsePackageSubstation(n *rawNode) (Element, []Point, string, error) {
 		Y:            anchor.Y,
 		Orient:       angle,
 		NType:        ntype,
+		State:        substationState(n),
+		Fill:         substationFill(n),
 		PropertyText: substationPropertyText(n),
 		Ports:        []Port{{Name: "1"}},
 	}, []Point{anchor}, n.attr("data-voltage"), nil
 }
 
+// substationFill recovers PackageSubstation's/EnclosedSubstation's own
+// Abonent-driven Fill from whichever of its own drawn shapes is the one
+// that actually varies with it: the inner (second) <rect> for 385's own
+// NType 0 box variant, or the single triangle <path> otherwise (385's own
+// NType 1, and the whole of 386 — see writePackageSubstation/
+// writeEnclosedSubstation) — "" (unset) when that shape's own fill is
+// literally "none" (Abonent 0, the common case), matching how those two
+// render functions already treat an unset Fill.
+func substationFill(n *rawNode) string {
+	var filled *rawNode
+	if rects := n.descendants("rect"); len(rects) >= 2 {
+		filled = rects[1]
+	} else if paths := elementPaths(n); len(paths) > 0 {
+		filled = paths[0]
+	}
+	if filled == nil {
+		return ""
+	}
+	fill := styleProp(filled.attr("style"), "fill")
+	if fill == "none" {
+		return ""
+	}
+	return fill
+}
+
 // parseEnclosedSubstation handles shape 386 (Enclosed transformer
-// substation, ZTP): same anchor/Orient/PropertyText recovery as
+// substation, ZTP): same anchor/Orient/State/Fill/PropertyText recovery as
 // parsePackageSubstation (see its own doc comment) — this shape just has
-// no NType to recover.
+// no NType to recover, and its own data-property never carries an
+// "ntype" key at all (no older single-purpose attribute to fall back to
+// either, since 386 never had one).
 func parseEnclosedSubstation(n *rawNode) (Element, []Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -514,6 +589,8 @@ func parseEnclosedSubstation(n *rawNode) (Element, []Point, string, error) {
 		X:            anchor.X,
 		Y:            anchor.Y,
 		Orient:       angle,
+		State:        substationState(n),
+		Fill:         substationFill(n),
 		PropertyText: substationPropertyText(n),
 		Ports:        []Port{{Name: "1"}},
 	}, []Point{anchor}, n.attr("data-voltage"), nil
@@ -1175,32 +1252,72 @@ func parseArrow(n *rawNode) (Element, error) {
 	}, nil
 }
 
-// parseJunctionPoint handles shape 7 (junction point): a small circle marking an
-// explicit graph junction. Its own data-voltage attribute records the
-// circle's fill (usually the page background), not its electrical color, so
-// the voltage is read from the stroke style instead.
+// firstCircleChild returns n itself when it's already a <circle> (the
+// older, bare-element real xsde2svg export style several shapes still use —
+// Lamp, Junction point, ...), or its first <circle> child/descendant when
+// it isn't (a fixed xsde2svg version instead wraps that same circle, plus
+// its own optional ParamText/SubscriptName <text> label, in a shared <g id
+// data-type="...">, the same restructuring already made for
+// PackageSubstation/EnclosedSubstation, Junction point, and Lamp) — nil if
+// there's no <circle> anywhere in n's subtree either way.
+func firstCircleChild(n *rawNode) *rawNode {
+	if n.Tag == "circle" {
+		return n
+	}
+	circles := n.childrenTagged("circle")
+	if len(circles) == 0 {
+		circles = n.descendants("circle")
+	}
+	if len(circles) == 0 {
+		return nil
+	}
+	return circles[0]
+}
+
+// parseJunctionPoint handles shape 7 (junction point): a small circle
+// marking an explicit graph junction. Its own data-voltage attribute
+// records the circle's fill (usually the page background for a
+// "bussed_link" instance — see Element.Fill's own doc comment), not its
+// electrical color, so the voltage is read from the stroke style instead.
+// Radius/Fill are read straight from the circle's own r/fill — real corpus
+// shows both varying meaningfully per instance (see their own doc comments
+// in model.go). Both the older bare <circle data-type="7"> real exports
+// still use and a fixed version's own wrapped <g id data-type="7"> form
+// (see firstCircleChild) are supported. See parseAttachedLabel (labels.go)
+// for how a wrapped instance's own <text> sibling becomes a standalone
+// Label, called separately by Extract's own dispatch (not here) since it
+// needs this function's already-parsed Element.ID.
 func parseJunctionPoint(n *rawNode) (Element, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return Element{}, "", err
 	}
-	cx, err := strconv.ParseFloat(n.attr("cx"), 64)
+	circle := firstCircleChild(n)
+	if circle == nil {
+		return Element{}, "", fmt.Errorf("slddoc: junction point %s: no <circle> geometry", n.attr("id"))
+	}
+	cx, err := strconv.ParseFloat(circle.attr("cx"), 64)
 	if err != nil {
 		return Element{}, "", fmt.Errorf("slddoc: point %s: %w", n.attr("id"), err)
 	}
-	cy, err := strconv.ParseFloat(n.attr("cy"), 64)
+	cy, err := strconv.ParseFloat(circle.attr("cy"), 64)
 	if err != nil {
 		return Element{}, "", fmt.Errorf("slddoc: point %s: %w", n.attr("id"), err)
 	}
+	radius, _ := strconv.ParseFloat(circle.attr("r"), 64)
+	style := circle.attr("style")
 	return Element{
-		ID:    id,
-		Class: ClassJunctionPoint,
-		Shape: "7",
-		Layer: resolveLayer(n.attr("data-layer")),
-		X:     cx,
-		Y:     cy,
-		Ports: []Port{{Name: "1"}},
-	}, styleProp(n.attr("style"), "stroke"), nil
+		ID:     id,
+		Class:  ClassJunctionPoint,
+		Shape:  "7",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      cx,
+		Y:      cy,
+		Radius: radius,
+		Fill:   styleProp(style, "fill"),
+		Ports:  []Port{{Name: "1"}},
+	}, styleProp(style, "stroke"), nil
 }
 
 // parseLamp handles shape 106 (лампа/lamp): a standalone status-indicator
@@ -1213,21 +1330,37 @@ func parseJunctionPoint(n *rawNode) (Element, string, error) {
 // state indicator uses). Its radius (r) is likewise recorded rather than
 // assumed constant: real instances draw meaningfully different sizes for
 // different roles, e.g. r=11 standalone "Индикатор" panel lights vs. r=5
-// lamps clustered in triplets next to a breaker (see Examples.svg).
+// lamps clustered in triplets next to a breaker (see Examples.svg). Every
+// real xsde2svg export found so far draws this as a bare <circle
+// data-type="106">, but a fixed version instead wraps it (plus its own
+// optional ParamText/SubscriptName <text> label) in a shared <g id
+// data-type="106">, the same restructuring already made for Junction point
+// (7) — both forms are supported here (see firstCircleChild); data-state/
+// data-fill/data-name/data-voltage all still resolve correctly either way,
+// since parseState/parseDataFill and this function's own n.attr calls for
+// those already check n itself, which the dispatch loop matches on
+// data-type regardless of which form put it there. See parseAttachedLabel
+// (labels.go) for how a wrapped instance's own <text> sibling becomes a
+// standalone Label, called separately by Extract's own dispatch (not
+// here) since it needs this function's already-parsed Element.ID.
 func parseLamp(n *rawNode) (Element, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return Element{}, err
 	}
-	cx, err := strconv.ParseFloat(n.attr("cx"), 64)
+	circle := firstCircleChild(n)
+	if circle == nil {
+		return Element{}, fmt.Errorf("slddoc: lamp %s: no <circle> geometry", n.attr("id"))
+	}
+	cx, err := strconv.ParseFloat(circle.attr("cx"), 64)
 	if err != nil {
 		return Element{}, fmt.Errorf("slddoc: lamp %s: %w", n.attr("id"), err)
 	}
-	cy, err := strconv.ParseFloat(n.attr("cy"), 64)
+	cy, err := strconv.ParseFloat(circle.attr("cy"), 64)
 	if err != nil {
 		return Element{}, fmt.Errorf("slddoc: lamp %s: %w", n.attr("id"), err)
 	}
-	radius, err := strconv.ParseFloat(n.attr("r"), 64)
+	radius, err := strconv.ParseFloat(circle.attr("r"), 64)
 	if err != nil {
 		return Element{}, fmt.Errorf("slddoc: lamp %s: %w", n.attr("id"), err)
 	}
