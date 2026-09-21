@@ -33,7 +33,7 @@ var elementDataTypes = map[string]bool{
 	"203": true, "388": true, "106": true, "320003": true, "37": true,
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
-	"164": true, "3": true, "2": true, "4": true,
+	"164": true, "3": true, "2": true, "4": true, "56": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -53,6 +53,7 @@ var twoPortShapes = map[string]Class{
 	"76":  ClassStarter,
 	"14":  ClassNonIntersection,
 	"51":  ClassChassis,
+	"56":  ClassCableConnector,
 }
 
 // unrecognizedShapeName gives a human-readable name for an xsde2svg
@@ -76,7 +77,6 @@ var unrecognizedShapeName = map[string]string{
 	"39":   "Synchronous motor",
 	"44":   "Knife switch",
 	"50":   "Withdrawable sectionalizer",
-	"56":   "Cable connector",
 	"60":   "Zone division",
 	"71":   "RZD connection/disconnector",
 	"83":   "Connector arrow",
@@ -356,7 +356,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51":
+		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))

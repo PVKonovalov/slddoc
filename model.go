@@ -115,29 +115,37 @@ type Port struct {
 type Class string
 
 const (
-	ClassBreaker               Class = "Breaker"
-	ClassDisconnector          Class = "Disconnector"
-	ClassSectionalizer         Class = "Sectionalizer"
-	ClassLoadBreakSwitch       Class = "LoadBreakSwitch"
-	ClassGroundSwitch          Class = "GroundSwitch"
-	ClassGround                Class = "Ground"
-	ClassPowerTransformer      Class = "PowerTransformer"
-	ClassCurrentTransformer    Class = "CurrentTransformer"
-	ClassVoltageTransformer    Class = "VoltageTransformer"
-	ClassChokeCoil             Class = "ChokeCoil"
-	ClassReactor               Class = "Reactor"
-	ClassReactorShunt          Class = "ReactorShunt"
-	ClassSurgeArrester         Class = "SurgeArrester"
-	ClassFuse                  Class = "Fuse"
-	ClassCapacitor             Class = "Capacitor"
-	ClassCapacitorBank         Class = "CapacitorBank"
-	ClassHalfChassis           Class = "HalfChassis"
-	ClassChassis               Class = "Chassis"
-	ClassStarter               Class = "Starter"
-	ClassGenerator             Class = "Generator"
-	ClassBusBarSection         Class = "BusBarSection"
-	ClassJunctionPoint         Class = "JunctionPoint"
-	ClassNonIntersection       Class = "NonIntersection"
+	ClassBreaker            Class = "Breaker"
+	ClassDisconnector       Class = "Disconnector"
+	ClassSectionalizer      Class = "Sectionalizer"
+	ClassLoadBreakSwitch    Class = "LoadBreakSwitch"
+	ClassGroundSwitch       Class = "GroundSwitch"
+	ClassGround             Class = "Ground"
+	ClassPowerTransformer   Class = "PowerTransformer"
+	ClassCurrentTransformer Class = "CurrentTransformer"
+	ClassVoltageTransformer Class = "VoltageTransformer"
+	ClassChokeCoil          Class = "ChokeCoil"
+	ClassReactor            Class = "Reactor"
+	ClassReactorShunt       Class = "ReactorShunt"
+	ClassSurgeArrester      Class = "SurgeArrester"
+	ClassFuse               Class = "Fuse"
+	ClassCapacitor          Class = "Capacitor"
+	ClassCapacitorBank      Class = "CapacitorBank"
+	ClassHalfChassis        Class = "HalfChassis"
+	ClassChassis            Class = "Chassis"
+	ClassStarter            Class = "Starter"
+	ClassGenerator          Class = "Generator"
+	ClassBusBarSection      Class = "BusBarSection"
+	ClassJunctionPoint      Class = "JunctionPoint"
+	ClassNonIntersection    Class = "NonIntersection"
+	// ClassCableConnector (shape 56) is a real two-terminal electrical
+	// device — a cable termination/splice symbol, not a decorative
+	// annotation — drawn from a plain fixed local-coordinate template
+	// (an open chevron flare at each end of its own stem) the same way
+	// ClassJunctionPoint/ClassNonIntersection are, with real terminals at
+	// (0,-10)/(0,10) rotated by its own Orient, and no State of its own
+	// (real xsde2svg's own element56 never emits data-state).
+	ClassCableConnector        Class = "CableConnector"
 	ClassLamp                  Class = "Lamp"
 	ClassFaultPassageIndicator Class = "FaultPassageIndicator"
 	// ClassRectangle (shape 3) is a purely decorative annotation box — not

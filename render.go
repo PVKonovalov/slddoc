@@ -189,6 +189,7 @@ var shapeName = map[string]string{
 	"4":      "Circle",
 	"7":      "Junction point",
 	"14":     "Non-intersection",
+	"56":     "Cable connector",
 	"24":     "Busbar",
 	"31":     "Ground terminal",
 	"33":     "Choke coil",
