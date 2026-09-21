@@ -34,6 +34,7 @@ var elementDataTypes = map[string]bool{
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
 	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
+	"385": true, "386": true, "32": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -54,6 +55,7 @@ var twoPortShapes = map[string]Class{
 	"14":  ClassNonIntersection,
 	"51":  ClassChassis,
 	"56":  ClassCableConnector,
+	"32":  ClassCableJoint,
 }
 
 // unrecognizedShapeName gives a human-readable name for an xsde2svg
@@ -72,7 +74,6 @@ var unrecognizedShapeName = map[string]string{
 	"16":   "Polygon",
 	"19":   "Metal anchor/angle pole",
 	"26":   "Fork/branch point",
-	"32":   "Cable joint/coupling",
 	"38":   "Thermal power plant",
 	"39":   "Synchronous motor",
 	"44":   "Knife switch",
@@ -100,8 +101,6 @@ var unrecognizedShapeName = map[string]string{
 	"320":  "Custom element",
 	"335":  "Road",
 	"360":  "Substation",
-	"385":  "Package transformer substation (KTP)",
-	"386":  "Enclosed transformer substation (ZTP)",
 	"389":  "Blocking filter",
 	"391":  "RTF text",
 	"399":  "Power circuit breaker",
@@ -355,7 +354,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56":
+		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
@@ -438,6 +437,24 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "398":
 			el, ports, voltage, err := parseShortCircuiter(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "385":
+			el, ports, voltage, err := parsePackageSubstation(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "386":
+			el, ports, voltage, err := parseEnclosedSubstation(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

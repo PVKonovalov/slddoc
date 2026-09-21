@@ -403,6 +403,135 @@ func parseShortCircuiter(n *rawNode) (Element, []Point, string, error) {
 	}, []Point{center}, n.attr("data-voltage"), nil
 }
 
+// substationAnchorFromGeometry recovers PackageSubstation's (385) or
+// EnclosedSubstation's (386) own real anchor straight from its drawn
+// geometry rather than from any rotate() transform — real xsde2svg's own
+// rotate(angle,x,y) never changes the geometry's own stored coordinates,
+// only how it's displayed, so this works regardless of whether a rotate()
+// is present at all (real xsde2svg only emits one when angle != 0 — a
+// real corpus export confirmed unrotated instances of both shapes exist)
+// or how deep it's nested (a newer real xsde2svg version nests it one
+// level inside the outer <g> Extract actually matches on — see
+// parsePackageSubstation's own doc comment). For the box/square variant (a
+// <g> whose first child is the outer 36-unit <rect> — true for 385's own
+// NType 0 and for the whole of 386, which has no other variant), the
+// anchor is that rect's own center; for 385's own NType 1 triangle (a
+// <path>, no <rect> at all), the anchor is the path's own literal starting
+// point — the real source's own path formula begins exactly "M x y" at
+// the unmodified anchor, before any relative moves.
+func substationAnchorFromGeometry(n *rawNode) (Point, error) {
+	if rects := n.descendants("rect"); len(rects) > 0 {
+		r := rects[0]
+		x, errX := strconv.ParseFloat(r.attr("x"), 64)
+		y, errY := strconv.ParseFloat(r.attr("y"), 64)
+		w, errW := strconv.ParseFloat(r.attr("width"), 64)
+		h, errH := strconv.ParseFloat(r.attr("height"), 64)
+		if errX != nil || errY != nil || errW != nil || errH != nil {
+			return Point{}, fmt.Errorf("invalid outer rect geometry")
+		}
+		return Point{X: x + w/2, Y: y + h/2}, nil
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Point{}, fmt.Errorf("no <rect> or <path> geometry")
+	}
+	subpaths, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil {
+		return Point{}, err
+	}
+	if len(subpaths) == 0 || len(subpaths[0]) == 0 {
+		return Point{}, fmt.Errorf("empty path")
+	}
+	return subpaths[0][0], nil
+}
+
+// parsePackageSubstation handles shape 385 (Package transformer
+// substation): its own anchor always comes from
+// substationAnchorFromGeometry (rotate-invariant — see that function's own
+// doc comment), and Orient from a rotate() transform found anywhere among
+// n's descendants (n.firstAttrDescendant("transform"), the same pattern
+// parseTwoPortDevice already uses for shapes whose rotate() can land on an
+// inner wrapping <g> instead of the element's own top-level tag) rather
+// than just n's own attribute — a real, currently-deployed xsde2svg version
+// nests it one level inside the outer <g id data-type ...> Extract actually
+// matches on, so checking only n's own attribute silently lost Orient for
+// every real rotated instance found this way. NType is read straight off
+// the real source's own data-ntype export attribute (added to xsde2svg's
+// own element_385.go specifically so this could be recovered at all, since
+// neither of the shape's two real appearance variants otherwise leaves any
+// other trace of which one was drawn). PropertyText is the first
+// descendant <text>'s own content — see Element.PropertyText's own doc
+// comment; "" when the real instance carries none, the common case. Fill
+// (the real source's own Abonent flag) and State (its own Tech.Closed
+// dashing) are not recovered — a known gap, same spirit as Arrow's own
+// DoubleHeaded not being recoverable from geometry alone.
+func parsePackageSubstation(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	anchor, err := substationAnchorFromGeometry(n)
+	if err != nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: package substation %s: %w", n.attr("id"), err)
+	}
+	angle, _, _ := parseRotate(n.firstAttrDescendant("transform"))
+	ntype, _ := strconv.Atoi(n.attr("data-ntype"))
+	return Element{
+		ID:           id,
+		Class:        ClassPackageSubstation,
+		Shape:        "385",
+		Name:         n.attr("data-name"),
+		Layer:        resolveLayer(n.attr("data-layer")),
+		X:            anchor.X,
+		Y:            anchor.Y,
+		Orient:       angle,
+		NType:        ntype,
+		PropertyText: substationPropertyText(n),
+		Ports:        []Port{{Name: "1"}},
+	}, []Point{anchor}, n.attr("data-voltage"), nil
+}
+
+// parseEnclosedSubstation handles shape 386 (Enclosed transformer
+// substation, ZTP): same anchor/Orient/PropertyText recovery as
+// parsePackageSubstation (see its own doc comment) — this shape just has
+// no NType to recover.
+func parseEnclosedSubstation(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	anchor, err := substationAnchorFromGeometry(n)
+	if err != nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: enclosed substation %s: %w", n.attr("id"), err)
+	}
+	angle, _, _ := parseRotate(n.firstAttrDescendant("transform"))
+	return Element{
+		ID:           id,
+		Class:        ClassEnclosedSubstation,
+		Shape:        "386",
+		Name:         n.attr("data-name"),
+		Layer:        resolveLayer(n.attr("data-layer")),
+		X:            anchor.X,
+		Y:            anchor.Y,
+		Orient:       angle,
+		PropertyText: substationPropertyText(n),
+		Ports:        []Port{{Name: "1"}},
+	}, []Point{anchor}, n.attr("data-voltage"), nil
+}
+
+// substationPropertyText reads PackageSubstation's/EnclosedSubstation's own
+// optional overlay label back from the first <text> descendant, matching
+// how writeSubstationPropertyText (render.go) draws it — see
+// Element.PropertyText's own doc comment. "" when the real instance
+// carries none, the common case.
+func substationPropertyText(n *rawNode) string {
+	texts := n.descendants("text")
+	if len(texts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(texts[0].Text)
+}
+
 // sectionalizerAnchorFromTick derives a Sectionalizer's own local anchor
 // point from its "top tick" — a short, exactly-10-unit horizontal segment
 // that, unlike anything else this shape draws, appears identically in both

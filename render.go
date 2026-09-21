@@ -220,6 +220,8 @@ var shapeName = map[string]string{
 	"203":    "Fuse",
 	"388":    "Capacitor",
 	"320003": "Fault passage indicator",
+	"385":    "Package substation",
+	"386":    "Enclosed substation",
 }
 
 // connectorKindName gives the name Render annotates a run of same-Kind
@@ -363,6 +365,26 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// Windings — not template substitution — so it bypasses the
 		// template lookup below the same way ClassBusBarSection does.
 		writePowerTransformer(w, e, voltageColor, color, mode)
+		return
+	}
+	if e.Class == ClassPackageSubstation {
+		// Real electrical equipment (unlike ClassRectangle/ClassArrow/
+		// ClassCircle below) with a genuine voltage-driven color, but its
+		// own two real appearance variants (NType) are structurally
+		// different XML shapes (a single <path> vs a <g> of two <rect>s
+		// plus a lead <line>) rather than a geometry tweak a static
+		// template's own {state:...} substitution could express — same
+		// "bypass the template lookup" reasoning as PowerTransformer's own
+		// Windings-driven geometry.
+		writePackageSubstation(w, e, color, mode)
+		return
+	}
+	if e.Class == ClassEnclosedSubstation {
+		// Same reasoning as ClassPackageSubstation just above — real
+		// equipment with a genuine voltage-driven color, but its own
+		// fixed square-plus-triangle geometry is a <g> of two children,
+		// not a single static template.
+		writeEnclosedSubstation(w, e, color, mode)
 		return
 	}
 	if e.Class == ClassRectangle {
@@ -691,6 +713,155 @@ func writeCircle(w io.Writer, e Element, mode RenderMode) {
 	}
 	fmt.Fprintf(w, "<ellipse id=\"%d\" cx=\"%s\" cy=\"%s\" rx=\"%s\" ry=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"4\"%s />\n",
 		e.ID, fmtNum(cx), fmtNum(cy), fmtNum(rx), fmtNum(ry), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
+}
+
+// writePackageSubstation draws a PackageSubstation (shape 385) — a
+// facility-level pictogram, not switchgear with real terminals in the
+// usual sense, but the real xsde2svg source does give it exactly one real
+// electrical connection point (see base.xml's own Terminals entry for
+// this shape), so unlike ClassRectangle/ClassArrow/ClassCircle it still
+// resolves a genuine voltage-driven {color} (the color argument, computed
+// by the caller the same way every ordinary equipment class's own does)
+// and uses the standard translate(X,Y) rotate(Orient) mirrorScale(Mirror)
+// transform every anchor-based symbol uses, rather than an absolute-Points
+// one. Two independent, per-instance visual traits, confirmed against the
+// real source (internal/modus/element_385.go, element385) and directly
+// against a real xsde2svg v1.4.12 corpus export
+// (sld-svg/examples/sld/Shema_sety_VRES.svg): NType selects between this
+// shape's own two real appearance variants — 0/unset (the common case)
+// draws a 36-unit outer square, an 18-unit-wide rectangle centered inside
+// it, and a short lead stub above the top edge (the real terminal's own
+// local position, (0,-22)); 1 draws a plain flat-topped downward-pointing
+// triangle instead, its own apex at local (0,18) — not at the anchor
+// itself, matching the box variant's own center-of-bounding-box anchor
+// semantics exactly, confirmed against that same real corpus file (no
+// separate lead stub drawn for this variant, but the same terminal
+// position still applies either way — both variants' own top edge sits
+// at the identical local y=-18, so nothing needs to shift to keep the
+// terminal meaningful across both). NType is only recoverable on Extract
+// via a data-ntype export attribute that real v1.4.12 corpus file already
+// carries (confirming this schema's own choice of attribute name matches
+// a real, already-deployed convention) but this repo's own local
+// xsde2svg checkout — an older version — didn't yet have; added there
+// too (element_385.go) so an Extract round-trip through *this* repo's own
+// tooling has something to read. The real source's own Abonent flag
+// (fills the inner rectangle solid instead of outline-only) is folded
+// into this schema's ordinary Fill field instead of a dedicated boolean —
+// the same free-choice-color convention ClassRectangle/ClassCircle
+// already use — rather than being locked to {color} the way the real
+// source's own on/off flag is. The real source's own Tech.Closed (a
+// dashed outline when "0") reuses this schema's ordinary State field:
+// unset/1 (nil defaults to the first option, matching applyStateLine's
+// own convention elsewhere) draws a solid outline, 0 dashes it — this
+// shape has no third state, so it isn't otherwise a real switching
+// device and carries no state-color legend of its own. Both NType variants
+// are drawn inside the same single <g id data-type data-ntype ... transform>
+// wrapper (real corpus once had NType 1 as a bare, unwrapped <path> in an
+// older xsde2svg version, but every currently-deployed real instance found
+// wraps it exactly like NType 0 now) — see writeSubstationPropertyText for
+// PropertyText's own optional overlay label, drawn as a sibling inside that
+// same <g>.
+func writePackageSubstation(w io.Writer, e Element, color string, mode RenderMode) {
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	dash := ""
+	if e.State != nil && *e.State == 0 {
+		dash = "stroke-dasharray:6,5;"
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	transform := fmt.Sprintf("translate(%s,%s) rotate(%d)%s", fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
+	ntypeAttr := fmt.Sprintf(" data-ntype=\"%d\"", e.NType)
+
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"385\"%s%s transform=\"%s\">\n",
+		e.ID, esc(e.Name), esc(color), ntypeAttr, editorAttr, transform)
+	if e.NType == 1 {
+		fmt.Fprintf(w, "<path d=\"M -18 -18 L 18 -18 L 0 18 Z\" style=\"fill:%s;stroke:%s;%sstroke-width:1\" />\n", esc(fill), esc(color), dash)
+	} else {
+		fmt.Fprintf(w, "<rect x=\"-18\" y=\"-18\" width=\"36\" height=\"36\" style=\"fill:none;stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
+		fmt.Fprintf(w, "<rect x=\"-9\" y=\"-18\" width=\"18\" height=\"36\" style=\"fill:%s;stroke:%s;%sstroke-width:1\" />\n", esc(fill), esc(color), dash)
+		fmt.Fprintf(w, "<line x1=\"0\" y1=\"-18\" x2=\"0\" y2=\"-22\" style=\"stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
+	}
+	writeSubstationPropertyText(w, e)
+	fmt.Fprint(w, "</g>\n")
+}
+
+// writeSubstationPropertyText draws PackageSubstation's/EnclosedSubstation's
+// own optional overlay label (Element.PropertyText) as a sibling of their
+// drawn geometry, inside the same single combined-transform <g> both
+// writePackageSubstation/writeEnclosedSubstation wrap everything in. The
+// real source keeps this text out of its own separate rotate() group
+// entirely so it stays upright and centered on the shape regardless of
+// Orient/Mirror — confirmed against real corpus instances carrying both a
+// non-zero rotation and a label at once (e.g. a 385 rotated -90° with its
+// own text still drawn unrotated at the same anchor). This schema instead
+// gives the <text> its own local counter-transform (undoing the parent
+// <g>'s Orient rotation and Mirror flip) to the same visual effect, rather
+// than splitting the parent into nested rotate/non-rotate groups the way
+// the real source does — every other symbol element already relies on its
+// own single combined transform for Canvas.tsx's own getBBox()-based
+// click-tolerance box and drag-in-DOM logic, and restructuring that here
+// would break both for just these two shapes.
+func writeSubstationPropertyText(w io.Writer, e Element) {
+	if e.PropertyText == "" {
+		return
+	}
+	var parts []string
+	if e.Mirror {
+		parts = append(parts, "scale(-1,1)")
+	}
+	if e.Orient != 0 {
+		parts = append(parts, fmt.Sprintf("rotate(%d)", -e.Orient))
+	}
+	textTransform := ""
+	if len(parts) > 0 {
+		textTransform = fmt.Sprintf(" transform=\"%s\"", strings.Join(parts, " "))
+	}
+	fmt.Fprintf(w, "<text x=\"0\" y=\"0\"%s style=\"fill:white;text-anchor:middle;alignment-baseline:middle;font-size:17px;font-family:Arial\">%s</text>\n",
+		textTransform, esc(e.PropertyText))
+}
+
+// writeEnclosedSubstation draws an EnclosedSubstation (shape 386) — the
+// same kind of facility-level pictogram as PackageSubstation, and drawn
+// with the exact same free-choice Fill (the real source's own Abonent
+// flag) and dashed-when-0 State (the real source's own Tech.Closed) this
+// package's writePackageSubstation already uses, but with a single fixed
+// appearance instead of two real variants: a 36-unit square outline
+// always drawn together with a downward-pointing triangle inside it (its
+// own apex at local (0,18), the exact same real formula
+// writePackageSubstation's own NType==1 triangle uses — confirmed against
+// the same real xsde2svg v1.4.12 corpus export that shape's own doc
+// comment cites; this repo's own local xsde2svg checkout again predates
+// this — its own element_id386.go has a stale apex-at-the-anchor
+// formula). Unlike PackageSubstation, the real source draws no separate
+// lead stub for this shape's own single real electrical terminal — its
+// local position, (0,-20), was confirmed directly by the user rather
+// than from any drawn geometry.
+func writeEnclosedSubstation(w io.Writer, e Element, color string, mode RenderMode) {
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	dash := ""
+	if e.State != nil && *e.State == 0 {
+		dash = "stroke-dasharray:6,5;"
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	transform := fmt.Sprintf("translate(%s,%s) rotate(%d)%s", fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
+
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"386\"%s transform=\"%s\">\n",
+		e.ID, esc(e.Name), esc(color), editorAttr, transform)
+	fmt.Fprintf(w, "<rect x=\"-18\" y=\"-18\" width=\"36\" height=\"36\" style=\"fill:none;stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
+	fmt.Fprintf(w, "<path d=\"M -18 -18 L 18 -18 L 0 18 Z\" style=\"fill:%s;stroke:%s;%sstroke-width:1\" />\n", esc(fill), esc(color), dash)
+	writeSubstationPropertyText(w, e)
+	fmt.Fprint(w, "</g>\n")
 }
 
 // arrowChevron is the open two-stroke chevron writeArrow draws at either

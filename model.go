@@ -155,7 +155,26 @@ const (
 	// ClassJunctionPoint/ClassNonIntersection are, with real terminals at
 	// (0,-10)/(0,10) rotated by its own Orient, and no State of its own
 	// (real xsde2svg's own element56 never emits data-state).
-	ClassCableConnector        Class = "CableConnector"
+	ClassCableConnector Class = "CableConnector"
+	// ClassCableJoint (shape 32) is a real two-terminal electrical device —
+	// a cable joint/coupling marking where two cable segments are spliced —
+	// drawn from a plain fixed local-coordinate template (a vertical stem
+	// split by a gap, with an unfilled triangle mark in the gap) the same
+	// way ClassCableConnector is, with real terminals at (0,-12)/(0,14) —
+	// asymmetric around the anchor by design, matching the real source's
+	// own geometry exactly (element_32.go's own default branch draws its
+	// triangle one unit below the element's true anchor, confirmed against
+	// every real corpus instance found — 500+ across 17 files, all using
+	// this same plain look). The real source also has an alternate
+	// CustomView appearance, selected by a distinct non-English string
+	// value on that field (a single line plus a differently-shaped
+	// triangle), and an optional phase-color fill (yellow/green/red, or a
+	// configured color) on the triangle — neither has any real corpus
+	// instance to confirm against, so neither is modeled here; a real
+	// instance using either would extract with this class's own plain look
+	// instead. No State of its own (real xsde2svg's own element32 never
+	// emits data-state for this shape).
+	ClassCableJoint            Class = "CableJoint"
 	ClassLamp                  Class = "Lamp"
 	ClassFaultPassageIndicator Class = "FaultPassageIndicator"
 	// ClassRectangle (shape 3) is a purely decorative annotation box — not
@@ -180,6 +199,21 @@ const (
 	// convention as ClassRectangle (order-independent, unlike
 	// ClassArrow's), just rendered as an <ellipse> instead of a <rect>.
 	ClassCircle Class = "Circle"
+	// ClassPackageSubstation (shape 385) is a facility-level pictogram
+	// (Package transformer substation, KTP) — not switchgear in the usual
+	// sense, but the real source still gives it a genuine voltage-driven
+	// color and exactly one real electrical terminal (see Element.NType's
+	// own doc comment for its two real appearance variants, and
+	// writePackageSubstation for the full geometry).
+	ClassPackageSubstation Class = "PackageSubstation"
+	// ClassEnclosedSubstation (shape 386) is the same kind of
+	// facility-level pictogram as ClassPackageSubstation (Enclosed
+	// transformer substation, ZTP) — a genuine voltage-driven color and
+	// one real electrical terminal, but a single fixed appearance rather
+	// than two real variants: a 36-unit square outline with a
+	// downward-pointing triangle always drawn inside it (see
+	// writeEnclosedSubstation for the full geometry).
+	ClassEnclosedSubstation Class = "EnclosedSubstation"
 )
 
 // Element is one placed piece of equipment.
@@ -242,7 +276,13 @@ type Element struct {
 	// reference, since a decorative annotation shape has no electrical
 	// voltage of its own to resolve one from. Empty means "none"
 	// (transparent), matching the real xsde2svg source's own default.
-	// Unused by an Arrow (shape 2, stroke-only, no interior to fill).
+	// Unused by an Arrow (shape 2, stroke-only, no interior to fill). Also
+	// used by PackageSubstation (shape 385) for its own inner rectangle's
+	// interior — unlike Rectangle/Circle, this shape *does* have a real
+	// Voltage of its own (its own outer outline's color), so Fill here is
+	// specifically the real source's own Abonent flag, generalized from an
+	// on/off toggle locked to {color} into this schema's ordinary
+	// free-choice color field.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
 	// Stroke is a Rectangle's/Circle's own border color, or an Arrow's own
 	// line color — same free-text convention as Fill. Empty falls back to a
@@ -258,6 +298,26 @@ type Element struct {
 	// at both Points, not just the second one — matching the real
 	// xsde2svg source's own FDouble flag. Unused by every other class.
 	DoubleHeaded bool `xml:"doubleHeaded,attr,omitempty" json:"doubleHeaded,omitempty"`
+	// NType selects between PackageSubstation's (shape 385) own two real
+	// appearance variants, matching the real source's own Tech.NType field
+	// exactly (confirmed via a new data-ntype export attribute added to
+	// xsde2svg's own element_385.go specifically so Extract could recover
+	// it, since neither variant's own drawn geometry otherwise gives it
+	// away on its own): 0 (unset, the common case) draws a box-in-box
+	// pictogram with a short lead stub; 1 draws a plain downward-pointing
+	// triangle instead. Unused by every other class.
+	NType int `xml:"nType,attr,omitempty" json:"nType,omitempty"`
+	// PropertyText is a short overlay label (e.g. a transformer's own power
+	// rating, "160") drawn centered on PackageSubstation's (385) or
+	// EnclosedSubstation's (386) own pictogram, staying upright regardless
+	// of Orient/Mirror — matches the real source's own generic ParamText/
+	// SubscriptName mechanism, which drives a per-element text label (with
+	// its own position/alignment/font/color options) across dozens of
+	// xsde2svg shapes; this schema narrows that down to the one fixed
+	// centered/white/17px-Arial style every real 385/386 corpus instance
+	// actually uses, rather than modeling the mechanism generically. Empty
+	// means no label, matching real instances that carry none.
+	PropertyText string `xml:"propertyText,attr,omitempty" json:"propertyText,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
 	// Points holds a BusBarSection's (shape 24) own drawn geometry (its two
