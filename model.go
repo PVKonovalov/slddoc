@@ -149,6 +149,14 @@ const (
 	// corners), the same convention ClassBusBarSection already uses, not
 	// a fixed local-coordinate template.
 	ClassRectangle Class = "Rectangle"
+	// ClassArrow (shape 2) is a decorative annotation line with an open
+	// chevron arrowhead at one or both ends — same non-electrical status
+	// as ClassRectangle (no Ports/Voltage/State, never a connectElements/
+	// routing endpoint). Its geometry is its own drawn Points (start,
+	// then end — order matters here, unlike a Rectangle's, since the
+	// arrowhead is always drawn at the second point, or both when
+	// DoubleHeaded).
+	ClassArrow Class = "Arrow"
 )
 
 // Element is one placed piece of equipment.
@@ -206,28 +214,36 @@ type Element struct {
 	// 320003) drawn circle radius; unlike other shapes' fixed template
 	// geometry, these are meaningfully different per instance.
 	Radius float64 `xml:"radius,attr,omitempty" json:"radius,omitempty"`
-	// Fill/Stroke are a Rectangle's (shape 3) own two literal CSS colors
-	// (its interior and its own border) — free-text like Lamp's own
-	// FillOff/FillOn, not a VoltageClass reference, since a decorative
-	// annotation box has no electrical voltage of its own to resolve one
-	// from. Empty Fill means "none" (transparent), matching the real
-	// xsde2svg source's own default; empty Stroke falls back to a plain
-	// visible color the same way an unset Lamp color does.
-	Fill   string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
+	// Fill is a Rectangle's (shape 3) own interior color — free-text like
+	// Lamp's own FillOff/FillOn, not a VoltageClass reference, since a
+	// decorative annotation box has no electrical voltage of its own to
+	// resolve one from. Empty means "none" (transparent), matching the
+	// real xsde2svg source's own default. Unused by an Arrow (shape 2,
+	// stroke-only, no interior to fill).
+	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
+	// Stroke is a Rectangle's own border color, or an Arrow's own line
+	// color — same free-text convention as Fill. Empty falls back to a
+	// plain visible color the same way an unset Lamp color does.
 	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
-	// StrokeWidth is a Rectangle's (shape 3) own border thickness, in the
-	// same local/diagram units every other shape's fixed stroke-width:1 is
-	// — unlike those, meaningfully different per instance the way Radius
-	// is. 0 (unset) means the real xsde2svg default of 1, not literally
-	// invisible.
+	// StrokeWidth is a Rectangle's own border thickness, or an Arrow's own
+	// line thickness, in the same local/diagram units every other shape's
+	// fixed stroke-width:1 is — unlike those, meaningfully different per
+	// instance the way Radius is. 0 (unset) means the real xsde2svg
+	// default of 1, not literally invisible.
 	StrokeWidth float64 `xml:"strokeWidth,attr,omitempty" json:"strokeWidth,omitempty"`
+	// DoubleHeaded draws an Arrow's (shape 2) own open chevron arrowhead
+	// at both Points, not just the second one — matching the real
+	// xsde2svg source's own FDouble flag. Unused by every other class.
+	DoubleHeaded bool `xml:"doubleHeaded,attr,omitempty" json:"doubleHeaded,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
 	// Points holds a BusBarSection's (shape 24) own drawn geometry (its two
-	// or more vertices) or a Rectangle's (shape 3) own two opposite
-	// corners (order-independent — Render normalizes them into a proper
-	// top-left/width/height the same way the real xsde2svg source does);
-	// unused by every other, template-drawn class.
+	// or more vertices), a Rectangle's (shape 3) own two opposite corners
+	// (order-independent — Render normalizes them into a proper top-left/
+	// width/height the same way the real xsde2svg source does), or an
+	// Arrow's (shape 2) own start and end (order *does* matter here — the
+	// arrowhead is drawn at Points[1], the second one); unused by every
+	// other, template-drawn class.
 	Points []Point `xml:"geometry>point,omitempty" json:"points,omitempty"`
 
 	// Autotransformer/Windings/VectorGroupLabel are a PowerTransformer's

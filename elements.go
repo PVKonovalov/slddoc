@@ -884,6 +884,81 @@ func parseRectangle(n *rawNode) (Element, error) {
 	}, nil
 }
 
+// parseArrow handles shape 2 (Arrow): a purely decorative annotation line
+// with an open chevron arrowhead (see ClassArrow's own doc comment) — no
+// Ports are ever created for one. Real instances are a bare <path d
+// style>, no wrapping <g> (matching writeArrow's own convention), whose
+// own "d" mixes the line itself with its arrowhead's zigzag strokes as one
+// path (see writeArrow/arrowChevron's own doc comments for that shape).
+// Rather than replicate the real xsde2svg source's own five separate
+// draw-formula branches (four axis-aligned special cases plus one
+// generic/rotated one) to recover the true two endpoints, this exploits a
+// simpler invariant true of all of them: the path's very first point (the
+// initial M) is always the arrow's own true start, and its true end is
+// always the point *farthest* from that start — every arrowhead wing
+// point sits only a few units (l3/l7, see arrowChevron) away from the
+// tip, far closer than any real arrow's own length in practice. A
+// transform="rotate(...)" on the node, when present, is applied to both
+// derived points to get their real diagram-space positions; when absent
+// (the axis-aligned case, which never gets one), the path's own
+// coordinates are already absolute. DoubleHeaded is deliberately never
+// set true here — telling a real instance's own doubled starting chevron
+// apart from an ordinary single-headed one from raw geometry alone isn't
+// reliable enough to be worth attempting, so an extracted double-headed
+// arrow round-trips as a plausible-looking single-headed one instead of
+// risking a false positive on an ordinary one.
+func parseArrow(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	subpaths, err := parseSubpaths(n.attr("d"))
+	if err != nil {
+		return Element{}, err
+	}
+	var pts []Point
+	for _, sp := range subpaths {
+		pts = append(pts, sp...)
+	}
+	if len(pts) < 2 {
+		return Element{}, fmt.Errorf("slddoc: arrow %s: fewer than 2 points in path", n.attr("id"))
+	}
+	p0, p1 := pts[0], pts[0]
+	bestDist := 0.0
+	for _, p := range pts[1:] {
+		dist := math.Hypot(p.X-p0.X, p.Y-p0.Y)
+		if dist > bestDist {
+			bestDist = dist
+			p1 = p
+		}
+	}
+	if angle, center, ok := parseRotate(n.attr("transform")); ok {
+		p0 = rotate(p0, center, float64(angle))
+		p1 = rotate(p1, center, float64(angle))
+	}
+
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		ID:    id,
+		Class: ClassArrow,
+		Shape: "2",
+		Name:  n.attr("data-name"),
+		Layer: resolveLayer(n.attr("data-layer")),
+		// X/Y is the midpoint of p0/p1, not p0 itself — matching the
+		// frontend's own diagramOps.placeArrow convention (and Rectangle/
+		// BusBarSection's own), even though writeArrow's real rendering
+		// reads Points[0]/[1] directly and never looks at X/Y at all for
+		// an Arrow; kept consistent anyway so a freshly extracted arrow
+		// and a freshly drawn one carry the same kind of anchor.
+		X:           (p0.X + p1.X) / 2,
+		Y:           (p0.Y + p1.Y) / 2,
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      []Point{p0, p1},
+	}, nil
+}
+
 // parseJunctionPoint handles shape 7 (junction point): a small circle marking an
 // explicit graph junction. Its own data-voltage attribute records the
 // circle's fill (usually the page background), not its electrical color, so

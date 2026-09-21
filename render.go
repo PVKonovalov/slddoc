@@ -184,6 +184,7 @@ func lampColor(e Element) string {
 // breaker and a withdrawable one, e.g., are both ClassBreaker but draw and
 // are labeled differently.
 var shapeName = map[string]string{
+	"2":      "Arrow",
 	"3":      "Rectangle",
 	"7":      "Junction point",
 	"14":     "Non-intersection",
@@ -369,6 +370,14 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// ClassBusBarSection/ClassPowerTransformer do, using its own
 		// Fill/Stroke instead of the color computed above.
 		writeRectangle(w, e, mode)
+		return
+	}
+	if e.Class == ClassArrow {
+		// Same reasoning as ClassRectangle just above — a decorative
+		// annotation whose own geometry varies per instance and isn't
+		// part of the electrical network, using its own Stroke instead of
+		// the color computed above.
+		writeArrow(w, e, mode)
 		return
 	}
 
@@ -632,6 +641,83 @@ func writeRectangle(w io.Writer, e Element, mode RenderMode) {
 	}
 	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"3\"%s />\n",
 		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
+}
+
+// arrowChevron is the open two-stroke chevron writeArrow draws at either
+// end of its own line — the real xsde2svg source's own arrowhead shape
+// (internal/modus/element_2.go), reproduced here as a single local-frame
+// formula rather than that source's own four axis-aligned special cases
+// plus one generic/rotated one: a horizontal chevron rotated 0°/180° by
+// writeArrow's own wrapping transform is pixel-identical to what those
+// special cases compute directly, so this package doesn't bother
+// special-casing them. tipAtOrigin true draws the chevron with its own
+// tip at local (0,0) pointing toward +x (used at the line's end, local
+// x=length, where the line arrives *from* -x); false draws it pointing
+// toward -x instead (used at the line's start, local x=0, pointing away
+// from where the line leaves *toward* +x) — the real source's own
+// end/doubEnd formulas, respectively. l3/l7 are fixed at the real
+// source's own default values (3, 7) rather than scaled by StrokeWidth —
+// real xsde2svg does technically scale them, but via reusing its own
+// Scale(scaleChosed, n) helper with StrokeWidth-1 passed in the position
+// that helper elsewhere expects a small fixed output-resolution preset
+// index (0/1/2), not a real multiplier — not a relationship worth
+// reproducing for this schema's own free-form StrokeWidth.
+func arrowChevron(tipAtOrigin bool) string {
+	const l3, l7 = 3.0, 7.0
+	firstX := -l7
+	if !tipAtOrigin {
+		firstX = l7
+	}
+	return fmt.Sprintf(" l %s -%s m 0 %s l %s -%s", fmtNum(firstX), fmtNum(l3), fmtNum(l3*2), fmtNum(-firstX), fmtNum(l3))
+}
+
+// writeArrow draws an Arrow (shape 2) as a single flat <path>, the same
+// "no wrapping <g>" convention writeRectangle/writePolyline use — a line
+// from local (0,0) to (length,0), with arrowChevron's own open chevron at
+// the end (and, when DoubleHeaded, a mirrored one at the start too),
+// wrapped in transform="translate(x0,y0) rotate(angle)" so the whole thing
+// points the right way — matching every ordinary template-drawn shape's
+// own transform convention (Render's own translate(x,y) rotate(orient)),
+// unlike writeRectangle/writePolyline which draw directly in absolute
+// diagram coordinates since neither of those has a meaningful "local
+// frame" distinct from the diagram's own. Stroke/StrokeWidth fall back the
+// same way writeRectangle's own do; there's no Fill (an Arrow has no
+// interior, always fill:none). An Arrow with fewer than 2 Points, or
+// whose two Points coincide (zero length — nothing to point), draws
+// nothing.
+func writeArrow(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	dx, dy := p1.X-p0.X, p1.Y-p0.Y
+	length := math.Hypot(dx, dy)
+	if length == 0 {
+		return
+	}
+	angle := math.Atan2(dy, dx) * 180 / math.Pi
+
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+
+	d := "M 0 0"
+	if e.DoubleHeaded {
+		d += arrowChevron(false)
+	}
+	d += fmt.Sprintf(" h %s", fmtNum(length)) + arrowChevron(true)
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<path id=\"%d\" d=\"%s\" style=\"fill:none;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"2\" transform=\"translate(%s,%s) rotate(%s)\"%s />\n",
+		e.ID, d, esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), fmtNum(p0.X), fmtNum(p0.Y), fmtNum(angle), editorAttr)
 }
 
 // writeNamedLine draws a KindOverheadLine/KindCableLine connector as a

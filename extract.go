@@ -33,7 +33,7 @@ var elementDataTypes = map[string]bool{
 	"203": true, "388": true, "106": true, "320003": true, "37": true,
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
-	"164": true, "3": true,
+	"164": true, "3": true, "2": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -63,7 +63,7 @@ var twoPortShapes = map[string]Class{
 // from the xsde2svg catalog's own object-type list, not derived from
 // anything in this package.
 var unrecognizedShapeName = map[string]string{
-	"1": "Line", "2": "Arrow", "4": "Circle",
+	"1": "Line", "4": "Circle",
 	"6":    "Booster/voltage regulator (single-winding power transformer)",
 	"9":    "Arc",
 	"10":   "Connector",
@@ -291,6 +291,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "3":
 			el, err := parseRectangle(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "2":
+			el, err := parseArrow(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
