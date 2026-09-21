@@ -206,6 +206,7 @@ var shapeName = map[string]string{
 	"47":     "Power transformer",
 	"49":     "Disconnector (withdrawable)",
 	"54":     "Ground switch",
+	"398":    "Short-circuiter",
 	"71":     "Disconnector",
 	"76":     "Starter",
 	"106":    "Lamp",

@@ -33,7 +33,7 @@ var elementDataTypes = map[string]bool{
 	"203": true, "388": true, "106": true, "320003": true, "37": true,
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
-	"164": true, "3": true, "2": true, "4": true, "56": true,
+	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -104,7 +104,6 @@ var unrecognizedShapeName = map[string]string{
 	"386":  "Enclosed transformer substation (ZTP)",
 	"389":  "Blocking filter",
 	"391":  "RTF text",
-	"398":  "Short-circuiter",
 	"399":  "Power circuit breaker",
 	"3206": "RZD connection/disconnector (arc-extinguishing contacts)",
 }
@@ -430,6 +429,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "54":
 			el, ports, voltage, err := parseGroundSwitch(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "398":
+			el, ports, voltage, err := parseShortCircuiter(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

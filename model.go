@@ -115,11 +115,21 @@ type Port struct {
 type Class string
 
 const (
-	ClassBreaker            Class = "Breaker"
-	ClassDisconnector       Class = "Disconnector"
-	ClassSectionalizer      Class = "Sectionalizer"
-	ClassLoadBreakSwitch    Class = "LoadBreakSwitch"
-	ClassGroundSwitch       Class = "GroundSwitch"
+	ClassBreaker         Class = "Breaker"
+	ClassDisconnector    Class = "Disconnector"
+	ClassSectionalizer   Class = "Sectionalizer"
+	ClassLoadBreakSwitch Class = "LoadBreakSwitch"
+	ClassGroundSwitch    Class = "GroundSwitch"
+	// ClassShortCircuiter (shape 398) is a single-terminal grounding-type
+	// switching device, structurally close to ClassGroundSwitch: a fixed
+	// tapered earth symbol at the top, a single real electrical terminal
+	// at the bottom, and a State-driven pivot rod (plus a small filled
+	// arrowhead) bridging the gap between them — Closed bridges the
+	// terminal straight to the earth symbol (an intentional short to
+	// ground), Open pivots the rod away at the top, same pivot-circle
+	// convention as ClassSectionalizer. Only two real states exist (no
+	// Intermediate), same as ClassSectionalizer.
+	ClassShortCircuiter     Class = "ShortCircuiter"
 	ClassGround             Class = "Ground"
 	ClassPowerTransformer   Class = "PowerTransformer"
 	ClassCurrentTransformer Class = "CurrentTransformer"

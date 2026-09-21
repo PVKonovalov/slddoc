@@ -353,6 +353,56 @@ func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 	}, []Point{center}, n.attr("data-voltage"), nil
 }
 
+// parseShortCircuiter handles shape 398 (short-circuiter): a single
+// electrical port at the element's own rotation anchor, the same structure
+// parseGroundSwitch uses above — unrotated instances are not yet supported
+// for the same reason.
+func parseShortCircuiter(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+
+	// Unlike most switching devices, this shape's own State isn't a plain
+	// data-state attribute on a path — the real source wraps its two
+	// alternate geometries in their own sibling
+	// <g data-state="0|1" visibility="visible|hidden"> groups, the same
+	// convention parseSectionalizer already handles (see that function's
+	// own doc comment); only the visible group's own data-state is real.
+	var state *int
+	found := false
+	for _, g := range n.childrenTagged("g") {
+		if g.attr("visibility") != "visible" {
+			continue
+		}
+		found = true
+		if v, err := strconv.Atoi(g.attr("data-state")); err == nil {
+			state = &v
+		}
+		break
+	}
+	if !found {
+		return Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: no visible data-state group", n.attr("id"))
+	}
+
+	angle, center, ok := parseRotate(n.attr("transform"))
+	if !ok {
+		return Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: no rotate() transform (unrotated short-circuiters are not yet supported)", n.attr("id"))
+	}
+	return Element{
+		ID:     id,
+		Class:  ClassShortCircuiter,
+		Shape:  "398",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      center.X,
+		Y:      center.Y,
+		Orient: angle,
+		State:  state,
+		Ports:  []Port{{Name: "1"}},
+	}, []Point{center}, n.attr("data-voltage"), nil
+}
+
 // sectionalizerAnchorFromTick derives a Sectionalizer's own local anchor
 // point from its "top tick" — a short, exactly-10-unit horizontal segment
 // that, unlike anything else this shape draws, appears identically in both
