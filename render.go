@@ -184,6 +184,7 @@ func lampColor(e Element) string {
 // breaker and a withdrawable one, e.g., are both ClassBreaker but draw and
 // are labeled differently.
 var shapeName = map[string]string{
+	"3":      "Rectangle",
 	"7":      "Junction point",
 	"14":     "Non-intersection",
 	"24":     "Busbar",
@@ -358,6 +359,16 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// Windings — not template substitution — so it bypasses the
 		// template lookup below the same way ClassBusBarSection does.
 		writePowerTransformer(w, e, voltageColor, color, mode)
+		return
+	}
+	if e.Class == ClassRectangle {
+		// A Rectangle's own size varies per instance (unlike every
+		// template-drawn shape's fixed local geometry) and isn't part of
+		// the electrical network at all (no Voltage to resolve color
+		// from) — bypasses the template lookup below the same way
+		// ClassBusBarSection/ClassPowerTransformer do, using its own
+		// Fill/Stroke instead of the color computed above.
+		writeRectangle(w, e, mode)
 		return
 	}
 
@@ -573,6 +584,54 @@ func writePolyline(w io.Writer, id int, kind string, pts []Point, color string, 
 	}
 	fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;%sstroke-width:%s\"%s%s />\n",
 		points, esc(color), dash, width, dataAttrs, idAttrs)
+}
+
+// writeRectangle draws a Rectangle (shape 3) as a single flat <rect>, the
+// same "no wrapping <g>" convention writePolyline uses for a busbar —
+// matching the real xsde2svg source (internal/modus/element_3.go), which
+// likewise emits a bare <rect> rather than a <g>-wrapped symbol. Its own
+// two Points (any order — Render doesn't require a particular corner
+// first) are normalized into a proper top-left x/y plus a positive
+// width/height the same way that source's own rectX/rectY/w/h computation
+// does. Fill/Stroke fall back to "none"/"white" when unset, matching a
+// Lamp's own unset-color convention (see swatchColor, frontend
+// PropertiesPanel.tsx) rather than resolving a VoltageClass color the way
+// every real equipment shape's own {color} does — a decorative annotation
+// box has no electrical voltage to resolve one from. StrokeWidth <= 0
+// (unset) falls back to 1, the fixed value every other shape's own
+// template hardcodes. data-voltage mirrors
+// the resolved Stroke, the same "not a VoltageClass id, just the color
+// actually drawn" convention a busbar's own data-voltage already uses. A
+// Rectangle with fewer than 2 Points (never emitted by this editor itself,
+// but a hand-edited or corrupt file could carry one) draws nothing rather
+// than guessing a size.
+func writeRectangle(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	x, y := math.Min(p0.X, p1.X), math.Min(p0.Y, p1.Y)
+	width, height := math.Abs(p1.X-p0.X), math.Abs(p1.Y-p0.Y)
+
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"3\"%s />\n",
+		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
 }
 
 // writeNamedLine draws a KindOverheadLine/KindCableLine connector as a

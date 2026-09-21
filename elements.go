@@ -842,6 +842,48 @@ func parseBusBar(n *rawNode) (Element, string, error) {
 	}, n.attr("data-voltage"), nil
 }
 
+// parseRectangle handles shape 3 (Rectangle): a purely decorative
+// annotation box, not real electrical equipment (see ClassRectangle's own
+// doc comment) — no Ports are ever created for one. Real instances are a
+// bare <rect x y width height style>, matching a busbar's own bare
+// <polyline> (no wrapping <g>). Its own two Points are its top-left and
+// bottom-right corners as drawn, (x,y) and (x+width,y+height) — Render
+// doesn't require a Rectangle's two Points in any particular order, so
+// this is just the simplest pair to derive directly from a real <rect>'s
+// own attributes, not a meaningful convention of its own.
+func parseRectangle(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	x, errX := strconv.ParseFloat(n.attr("x"), 64)
+	y, errY := strconv.ParseFloat(n.attr("y"), 64)
+	w, errW := strconv.ParseFloat(n.attr("width"), 64)
+	h, errH := strconv.ParseFloat(n.attr("height"), 64)
+	if errX != nil || errY != nil || errW != nil || errH != nil {
+		return Element{}, fmt.Errorf("slddoc: rectangle %s: invalid x/y/width/height", n.attr("id"))
+	}
+	style := n.attr("style")
+	// StrokeWidth left at 0 (unset) when absent or unparseable — Render's
+	// own fallback already treats that as 1, the real source's own
+	// minimum (mathext.Max(uint(1), ...) in element_3.go), so there's no
+	// need to hardcode that default a second time here.
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		ID:          id,
+		Class:       ClassRectangle,
+		Shape:       "3",
+		Name:        n.attr("data-name"),
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           x + w/2,
+		Y:           y + h/2,
+		Fill:        styleProp(style, "fill"),
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      []Point{{X: x, Y: y}, {X: x + w, Y: y + h}},
+	}, nil
+}
+
 // parseJunctionPoint handles shape 7 (junction point): a small circle marking an
 // explicit graph junction. Its own data-voltage attribute records the
 // circle's fill (usually the page background), not its electrical color, so

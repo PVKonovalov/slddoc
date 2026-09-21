@@ -140,6 +140,15 @@ const (
 	ClassNonIntersection       Class = "NonIntersection"
 	ClassLamp                  Class = "Lamp"
 	ClassFaultPassageIndicator Class = "FaultPassageIndicator"
+	// ClassRectangle (shape 3) is a purely decorative annotation box — not
+	// real electrical equipment, so unlike every class above it never has
+	// Ports/a Voltage/a State of its own and never takes part in the
+	// electrical topology (Extract never gives it a Port, and this
+	// editor's own connectElements/routing refuse to treat one as a valid
+	// endpoint). Its geometry is its own drawn Points (two opposite
+	// corners), the same convention ClassBusBarSection already uses, not
+	// a fixed local-coordinate template.
+	ClassRectangle Class = "Rectangle"
 )
 
 // Element is one placed piece of equipment.
@@ -197,10 +206,28 @@ type Element struct {
 	// 320003) drawn circle radius; unlike other shapes' fixed template
 	// geometry, these are meaningfully different per instance.
 	Radius float64 `xml:"radius,attr,omitempty" json:"radius,omitempty"`
+	// Fill/Stroke are a Rectangle's (shape 3) own two literal CSS colors
+	// (its interior and its own border) — free-text like Lamp's own
+	// FillOff/FillOn, not a VoltageClass reference, since a decorative
+	// annotation box has no electrical voltage of its own to resolve one
+	// from. Empty Fill means "none" (transparent), matching the real
+	// xsde2svg source's own default; empty Stroke falls back to a plain
+	// visible color the same way an unset Lamp color does.
+	Fill   string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
+	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
+	// StrokeWidth is a Rectangle's (shape 3) own border thickness, in the
+	// same local/diagram units every other shape's fixed stroke-width:1 is
+	// — unlike those, meaningfully different per instance the way Radius
+	// is. 0 (unset) means the real xsde2svg default of 1, not literally
+	// invisible.
+	StrokeWidth float64 `xml:"strokeWidth,attr,omitempty" json:"strokeWidth,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
-	// Points holds a BusBarSection's own drawn geometry (its two or more
-	// vertices); unused by point-symbol classes.
+	// Points holds a BusBarSection's (shape 24) own drawn geometry (its two
+	// or more vertices) or a Rectangle's (shape 3) own two opposite
+	// corners (order-independent — Render normalizes them into a proper
+	// top-left/width/height the same way the real xsde2svg source does);
+	// unused by every other, template-drawn class.
 	Points []Point `xml:"geometry>point,omitempty" json:"points,omitempty"`
 
 	// Autotransformer/Windings/VectorGroupLabel are a PowerTransformer's
