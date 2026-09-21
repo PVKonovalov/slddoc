@@ -63,7 +63,7 @@ func TestRender_ProducesWellFormedSVG(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil, stateColors...); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil, stateColors...); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +111,7 @@ func TestRender_DigitalDeviceMatchesXsde2svgFormat(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Interactive, nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -148,7 +148,7 @@ func TestRender_DigitalDeviceOmitsUnitWhenEmpty(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -162,7 +162,7 @@ func TestRender_UsesEditorBackground(t *testing.T) {
 	d := &Diagram{Width: 10, Height: 10, Editor: &EditorSettings{Background: "#ffffff"}}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "background-color: #ffffff") {
@@ -215,7 +215,7 @@ func TestRender_AnnotatesTypeGroups(t *testing.T) {
 	lib.templates["106"] = `<circle r="{radius}" style="fill:{color}" />`
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -251,7 +251,7 @@ func TestRender_CableLineIsDashedByDefaultOverheadLineIsNot(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -312,7 +312,7 @@ func TestRender_ElevatedClassesDrawnAfterConnectors(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -345,7 +345,7 @@ func TestRender_ReportsMissingShape(t *testing.T) {
 		Elements: []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 1, Y: 1}},
 	}
 	var buf bytes.Buffer
-	err = Render(d, lib, &buf, Static, nil)
+	err = Render(d, lib, &buf, Static, "", nil)
 	if err == nil {
 		t.Fatal("expected an error for a missing shape")
 	}
@@ -372,7 +372,7 @@ func TestRender_BusbarsAndConnectorsAreSelectable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Interactive, nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -401,7 +401,7 @@ func TestRender_BusbarMatchesXsde2svgConventions(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -438,7 +438,7 @@ func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -481,7 +481,7 @@ func TestRender_ObjectLinkMatchesXsde2svgFormat(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -542,7 +542,7 @@ func TestRender_StaticModeOmitsInteractiveMarkup(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -574,7 +574,7 @@ func TestRender_SwitchingDeviceCarriesDataFillAndDataState(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil, stateColors...); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil, stateColors...); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -600,7 +600,7 @@ func TestRender_MissingStateOmitsDataState(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil, StateColor{State: 0, Label: "Open", Color: "red"}); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil, StateColor{State: 0, Label: "Open", Color: "red"}); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -633,7 +633,7 @@ func TestRender_PowerTransformer2Winding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -692,7 +692,7 @@ func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -741,7 +741,7 @@ func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -801,7 +801,7 @@ func TestRender_PowerTransformer4Winding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -860,7 +860,7 @@ func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, nil); err != nil {
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()

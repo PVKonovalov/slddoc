@@ -332,7 +332,14 @@ type Element struct {
 	// xsde2svg shapes; this schema narrows that down to the one fixed
 	// centered/white/17px-Arial style every real 385/386 corpus instance
 	// actually uses, rather than modeling the mechanism generically. Empty
-	// means no label, matching real instances that carry none.
+	// means no label, matching real instances that carry none. Also used
+	// by FaultPassageIndicator (320003) for its own centered overlay text
+	// — unlike 385/386, this one has no real source counterpart at all
+	// (element_320.go's own custom-element case for this shape draws no
+	// text of any kind; the label is purely this schema's own
+	// long-standing convention), so empty here means the admin-configured
+	// default (Render's own defaultFPIText param, "FPI" out of the box —
+	// see config.Config.Indicators.DefaultFPIText), not "no label".
 	PropertyText string `xml:"propertyText,attr,omitempty" json:"propertyText,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`

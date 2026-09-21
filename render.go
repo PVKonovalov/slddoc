@@ -324,7 +324,7 @@ var elementZOrder = map[Class]int{
 // drawn polyline), recording its Shape in missing/seenMissing when lib has
 // no template for it. lastShape tracks the running type-comment header, the
 // same way across whichever pass of Render calls it.
-func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, e Element, missing *[]string, seenMissing map[string]bool, lastShape *string, mode RenderMode) {
+func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, lastShape *string, mode RenderMode) {
 	typeComment(w, shapeName, e.Shape, e.Shape, lastShape)
 
 	var color string
@@ -367,6 +367,22 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 	junctionFill := e.Fill
 	if junctionFill == "" {
 		junctionFill = "none"
+	}
+	// fpiText backs {fpiText} in FaultPassageIndicator's own base.xml
+	// template only — its own long-standing fixed "FPI" label, now editable
+	// via Element.PropertyText (see that field's own doc comment for why
+	// this shape's default isn't "no label" the way 385/386's own empty
+	// PropertyText is: there's no real source counterpart to match empty
+	// against, since element_320.go's own custom-element case for this
+	// shape draws no text at all). Falls back to Render's own
+	// defaultFPIText (admin-configured — see its own doc comment) when
+	// both are empty.
+	fpiText := e.PropertyText
+	if fpiText == "" {
+		fpiText = defaultFPIText
+	}
+	if fpiText == "" {
+		fpiText = "FPI"
 	}
 	if e.Class == ClassBusBarSection {
 		// A busbar's own data-name/data-voltage/data-type mirror what a
@@ -461,6 +477,7 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		"{counterRotate}", fmtNum(float64(-e.Orient)),
 		"{junctionRadius}", fmtNum(junctionRadius),
 		"{junctionFill}", esc(junctionFill),
+		"{fpiText}", esc(fpiText),
 	).Replace(body)
 	// data-editor-kind (this editor's own addition, not part of the
 	// xsde2svg format) is what the frontend hit-tests against — it no
@@ -515,6 +532,16 @@ func mirrorScale(mirror bool) string {
 // (data-editor-kind, wider hit targets) is added on top of the otherwise
 // xsde2svg-faithful output — see RenderMode's doc comment.
 //
+// defaultFPIText is the label a FaultPassageIndicator (320003) draws
+// centered on itself when its own Element.PropertyText is unset — this
+// shape's own real source draws no text at all (see PropertyText's own
+// doc comment in model.go), so there's nothing to derive a default from;
+// it's admin-configurable per install (config.Config.Indicators.
+// DefaultFPIText) rather than hardcoded, the same reasoning
+// fpiStateColorLegend/stateColorLegend already get their own config
+// section for. "" falls back to the literal "FPI" this project has always
+// shown, for a caller that hasn't wired one up.
+//
 // fpiStateColorLegend is the install-wide Open/Close/Intermediate legend a
 // FaultPassageIndicator's own ring/text color is drawn from (see
 // config.Config.FPIStateColors) — a separate legend from stateColorLegend
@@ -529,7 +556,7 @@ func mirrorScale(mirror bool) string {
 // config.Config.StateColors) — omit it to render every such device with an
 // unresolved ("none") fill and no data-fill attribute, e.g. from a caller
 // that hasn't wired up a legend.
-func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, fpiStateColorLegend []StateColor, stateColorLegend ...StateColor) error {
+func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaultFPIText string, fpiStateColorLegend []StateColor, stateColorLegend ...StateColor) error {
 	voltageColor := map[int]string{}
 	for _, vc := range d.VoltageClasses {
 		voltageColor[vc.ID] = vc.Color
@@ -556,7 +583,7 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, fpiSta
 			elevated[z] = append(elevated[z], e)
 			continue
 		}
-		renderElement(w, lib, voltageColor, stateColors, fpiColors, e, &missing, seenMissing, &lastShape, mode)
+		renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, &lastShape, mode)
 	}
 
 	var lastConnKind string
@@ -586,7 +613,7 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, fpiSta
 	for _, z := range tiers {
 		var lastTierShape string
 		for _, e := range elevated[z] {
-			renderElement(w, lib, voltageColor, stateColors, fpiColors, e, &missing, seenMissing, &lastTierShape, mode)
+			renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, &lastTierShape, mode)
 		}
 	}
 
