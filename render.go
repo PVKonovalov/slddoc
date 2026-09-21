@@ -207,6 +207,7 @@ var shapeName = map[string]string{
 	"106":    "Lamp",
 	"154":    "Fuse (withdrawable)",
 	"162":    "Disconnector",
+	"164":    "Sectionalizer",
 	"172":    "Capacitor bank",
 	"52":     "Half-chassis",
 	"51":     "Chassis",
@@ -404,8 +405,22 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)\">\n%s\n</g>\n",
-		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, body)
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n%s\n</g>\n",
+		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror), body)
+}
+
+// mirrorScale is a Mirror'd element's own extra transform component — a
+// horizontal flip in the symbol's local frame, applied (via SVG transform
+// composition order) before Orient's own rotation, matching the real
+// xsde2svg source's own xMirror convention (see element_164.go's own
+// mirroring branches, for one real example of what this flips between).
+// Empty when unset, so an ordinary unmirrored element's own transform
+// looks exactly as it always has.
+func mirrorScale(mirror bool) string {
+	if !mirror {
+		return ""
+	}
+	return " scale(-1,1)"
 }
 
 // Render writes d as a fresh SVG document, using lib to place each
@@ -987,8 +1002,8 @@ func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, 
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"47\"%s transform=\"translate(%s,%s) rotate(%d)\">\n",
-		e.ID, esc(e.Name), esc(fallbackColor), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient)
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"47\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n",
+		e.ID, esc(e.Name), esc(fallbackColor), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
 
 	for i := 0; i < count; i++ {
 		var winding TransformerWinding

@@ -117,6 +117,7 @@ type Class string
 const (
 	ClassBreaker               Class = "Breaker"
 	ClassDisconnector          Class = "Disconnector"
+	ClassSectionalizer         Class = "Sectionalizer"
 	ClassLoadBreakSwitch       Class = "LoadBreakSwitch"
 	ClassGroundSwitch          Class = "GroundSwitch"
 	ClassGround                Class = "Ground"
@@ -166,6 +167,15 @@ type Element struct {
 	// Orient is the rotation applied to the symbol template around (X,Y),
 	// in degrees (0, 90, 180, -90).
 	Orient int `xml:"orient,attr,omitempty" json:"orient,omitempty"`
+	// Mirror flips the symbol template horizontally (in its own local,
+	// unrotated frame — applied before Orient's own rotation, matching the
+	// real xsde2svg source's own xMirror convention) around (X,Y). Unlike
+	// xsde2svg, which resolves it per equipment type or per placed instance
+	// from the source .xsde data, this schema has no such upstream concept
+	// to read it from — Extract never sets it, every already-extracted
+	// element defaults to false/unmirrored — it exists purely as an
+	// editor-side property a user can toggle after placement.
+	Mirror bool `xml:"mirror,attr,omitempty" json:"mirror,omitempty"`
 	// State carries an element's status (e.g. breaker open/closed), when
 	// one applies to this class.
 	State *int `xml:"state,attr,omitempty" json:"state,omitempty"`

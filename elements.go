@@ -353,6 +353,107 @@ func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 	}, []Point{center}, n.attr("data-voltage"), nil
 }
 
+// sectionalizerAnchorFromTick derives a Sectionalizer's own local anchor
+// point from its "top tick" — a short, exactly-10-unit horizontal segment
+// that, unlike anything else this shape draws, appears identically in both
+// its Closed and Open geometry (see element_164.go's own path1/path2) and
+// is always the topmost point in whichever one is active, at local
+// (0,-10) relative to the anchor. Used only when the real source omits
+// its own rotate() transform (Orient 0 — element_164.go only emits one
+// when angle != 0), since a plain dominant-axis extremes search (what
+// parseTwoPortDevice's own callers use) would instead find this shape's
+// own open-contact circle, which reaches further from center (local y up
+// to 13) than either real terminal (local y ±10).
+func sectionalizerAnchorFromTick(stateGroup *rawNode) (Point, error) {
+	var tick []Point
+	for _, p := range elementPaths(stateGroup) {
+		subpaths, err := parseSubpaths(p.attr("d"))
+		if err != nil {
+			return Point{}, err
+		}
+		for _, sp := range subpaths {
+			if len(sp) != 2 || sp[0].Y != sp[1].Y || math.Abs(sp[1].X-sp[0].X) != 10 {
+				continue
+			}
+			if tick == nil || sp[0].Y < tick[0].Y {
+				tick = sp
+			}
+		}
+	}
+	if tick == nil {
+		return Point{}, fmt.Errorf("no top tick found")
+	}
+	return Point{X: (tick[0].X + tick[1].X) / 2, Y: tick[0].Y + 10}, nil
+}
+
+// parseSectionalizer handles shape 164 (Отделитель/Sectionalizer): a
+// two-terminal device whose real Closed(1)/Open(0) state, unlike every
+// other switching device here, isn't a data-state attribute on a <path>
+// (what parseState looks for) but a pair of visibility-swapped child
+// groups, <g data-state="1" visibility="visible|hidden"> and <g
+// data-state="0" visibility="hidden|visible"> (see element_164.go) — both
+// always present, only one ever actually visible — so State is read
+// directly from whichever one carries visibility="visible" instead. Real
+// instances only carry their own rotate() transform when Orient != 0 (used
+// directly, same as every other two-port shape); at Orient 0 the source
+// omits it entirely (a real corpus's own Sectionalizer instances are
+// overwhelmingly this case), so the anchor instead falls back to
+// sectionalizerAnchorFromTick.
+func parseSectionalizer(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+
+	var activeGroup *rawNode
+	var state *int
+	for _, g := range n.childrenTagged("g") {
+		if g.attr("visibility") != "visible" {
+			continue
+		}
+		activeGroup = g
+		if v, err := strconv.Atoi(g.attr("data-state")); err == nil {
+			state = &v
+		}
+		break
+	}
+	if activeGroup == nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: sectionalizer %s: no visible data-state group", n.attr("id"))
+	}
+
+	var anchor Point
+	var angle int
+	if a, center, ok := parseRotate(n.attr("transform")); ok {
+		angle, anchor = a, center
+	} else {
+		anchor, err = sectionalizerAnchorFromTick(activeGroup)
+		if err != nil {
+			return Element{}, nil, "", fmt.Errorf("slddoc: sectionalizer %s: %w", n.attr("id"), err)
+		}
+	}
+
+	ports := []Point{
+		rotate(Point{X: anchor.X, Y: anchor.Y - 10}, anchor, float64(angle)),
+		rotate(Point{X: anchor.X, Y: anchor.Y + 10}, anchor, float64(angle)),
+	}
+
+	return Element{
+		ID:     id,
+		Class:  ClassSectionalizer,
+		Shape:  "164",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: angle,
+		State:  state,
+		Ports: []Port{
+			{Name: "1"},
+			{Name: "2"},
+		},
+	}, ports, n.attr("data-voltage"), nil
+}
+
 // parseOnePortDevice handles a single-electrical-port device whose real
 // connection point is its combined path's own first point, *in the path's
 // own local/pre-rotation coordinates* — ReactorShunt (397), SurgeArrester
