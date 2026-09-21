@@ -33,7 +33,7 @@ var elementDataTypes = map[string]bool{
 	"203": true, "388": true, "106": true, "320003": true, "37": true,
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
-	"164": true, "3": true, "2": true,
+	"164": true, "3": true, "2": true, "4": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -63,7 +63,7 @@ var twoPortShapes = map[string]Class{
 // from the xsde2svg catalog's own object-type list, not derived from
 // anything in this package.
 var unrecognizedShapeName = map[string]string{
-	"1": "Line", "4": "Circle",
+	"1":    "Line",
 	"6":    "Booster/voltage regulator (single-winding power transformer)",
 	"9":    "Arc",
 	"10":   "Connector",
@@ -116,10 +116,12 @@ var unrecognizedShapeName = map[string]string{
 // order: a rotate() transform's own center (the same true anchor most
 // real two-port shapes use), then a descendant <path>'s own first drawn
 // point, then a descendant <circle>'s own cx/cy, then a <rect>'s own
-// center (n itself included for both, matching a bare untyped-Rectangle
-// (data-type 3) or Circle (data-type 4) node, which — unlike every real
-// equipment shape — isn't wrapped in its own outer <g> at all). false when
-// none of these apply (a genuinely empty/unparseable node) —
+// center (n itself included for both — a bare untyped shape, unlike every
+// real equipment symbol, generally isn't wrapped in its own outer <g> at
+// all, the same reason parseRectangle/parseCircle read n's own attributes
+// directly rather than a descendant's). false when none of these apply
+// (a genuinely empty/unparseable node, or one recognized well enough for
+// its own dedicated parser but shaped nothing like a rect/circle/path) —
 // addMissingLabel skips adding a Label in that case, though
 // Report.Skipped/Failed still record it either way.
 func missingElementAnchor(n *rawNode) (Point, bool) {
@@ -291,6 +293,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "3":
 			el, err := parseRectangle(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "4":
+			el, err := parseCircle(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

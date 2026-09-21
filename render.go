@@ -186,6 +186,7 @@ func lampColor(e Element) string {
 var shapeName = map[string]string{
 	"2":      "Arrow",
 	"3":      "Rectangle",
+	"4":      "Circle",
 	"7":      "Junction point",
 	"14":     "Non-intersection",
 	"24":     "Busbar",
@@ -378,6 +379,13 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// part of the electrical network, using its own Stroke instead of
 		// the color computed above.
 		writeArrow(w, e, mode)
+		return
+	}
+	if e.Class == ClassCircle {
+		// Same reasoning as ClassRectangle just above (it shares that
+		// shape's own Fill/Stroke/Points convention exactly, just drawn
+		// as an <ellipse>).
+		writeCircle(w, e, mode)
 		return
 	}
 
@@ -641,6 +649,46 @@ func writeRectangle(w io.Writer, e Element, mode RenderMode) {
 	}
 	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"3\"%s />\n",
 		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
+}
+
+// writeCircle draws a Circle (shape 4) as a single flat <ellipse>, the
+// same "no wrapping <g>" convention writeRectangle uses — matching the
+// real xsde2svg source (internal/modus/element_4.go: canvas.Ellipse), which
+// likewise emits a bare <ellipse> rather than a <g>-wrapped symbol. Its own
+// two Points (any order, same as writeRectangle's own) are normalized into
+// a center (their own midpoint) plus a positive rx/ry, the same way that
+// source's own x0/y0/w/h computation does. Fill/Stroke/StrokeWidth fall
+// back exactly the same way writeRectangle's own do — this shape shares
+// that one's entire color/width model, just rendered as an ellipse instead
+// of a rect. A Circle with fewer than 2 Points draws nothing, same as
+// writeRectangle.
+func writeCircle(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	cx, cy := (p0.X+p1.X)/2, (p0.Y+p1.Y)/2
+	rx, ry := math.Abs(p1.X-p0.X)/2, math.Abs(p1.Y-p0.Y)/2
+
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<ellipse id=\"%d\" cx=\"%s\" cy=\"%s\" rx=\"%s\" ry=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"4\"%s />\n",
+		e.ID, fmtNum(cx), fmtNum(cy), fmtNum(rx), fmtNum(ry), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
 }
 
 // arrowChevron is the open two-stroke chevron writeArrow draws at either

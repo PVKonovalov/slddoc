@@ -884,6 +884,43 @@ func parseRectangle(n *rawNode) (Element, error) {
 	}, nil
 }
 
+// parseCircle handles shape 4 (Circle): a purely decorative annotation
+// ellipse (see ClassCircle's own doc comment) — no Ports are ever created
+// for one. Real instances are a bare <ellipse cx cy rx ry style>, no
+// wrapping <g> (matching writeCircle's own convention). Its own two Points
+// are the ellipse's own bounding box corners, (cx-rx,cy-ry) and
+// (cx+rx,cy+ry) — the same "two opposite corners" convention
+// parseRectangle already uses, so Circle reuses every one of Rectangle's
+// own Points-based frontend/backend machinery unchanged.
+func parseCircle(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	cx, errCX := strconv.ParseFloat(n.attr("cx"), 64)
+	cy, errCY := strconv.ParseFloat(n.attr("cy"), 64)
+	rx, errRX := strconv.ParseFloat(n.attr("rx"), 64)
+	ry, errRY := strconv.ParseFloat(n.attr("ry"), 64)
+	if errCX != nil || errCY != nil || errRX != nil || errRY != nil {
+		return Element{}, fmt.Errorf("slddoc: circle %s: invalid cx/cy/rx/ry", n.attr("id"))
+	}
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		ID:          id,
+		Class:       ClassCircle,
+		Shape:       "4",
+		Name:        n.attr("data-name"),
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           cx,
+		Y:           cy,
+		Fill:        styleProp(style, "fill"),
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      []Point{{X: cx - rx, Y: cy - ry}, {X: cx + rx, Y: cy + ry}},
+	}, nil
+}
+
 // parseArrow handles shape 2 (Arrow): a purely decorative annotation line
 // with an open chevron arrowhead (see ClassArrow's own doc comment) — no
 // Ports are ever created for one. Real instances are a bare <path d

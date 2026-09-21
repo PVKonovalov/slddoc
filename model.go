@@ -157,6 +157,11 @@ const (
 	// arrowhead is always drawn at the second point, or both when
 	// DoubleHeaded).
 	ClassArrow Class = "Arrow"
+	// ClassCircle (shape 4) is a decorative annotation ellipse — same
+	// non-electrical status and same two-opposite-corners Points
+	// convention as ClassRectangle (order-independent, unlike
+	// ClassArrow's), just rendered as an <ellipse> instead of a <rect>.
+	ClassCircle Class = "Circle"
 )
 
 // Element is one placed piece of equipment.
@@ -214,22 +219,22 @@ type Element struct {
 	// 320003) drawn circle radius; unlike other shapes' fixed template
 	// geometry, these are meaningfully different per instance.
 	Radius float64 `xml:"radius,attr,omitempty" json:"radius,omitempty"`
-	// Fill is a Rectangle's (shape 3) own interior color — free-text like
-	// Lamp's own FillOff/FillOn, not a VoltageClass reference, since a
-	// decorative annotation box has no electrical voltage of its own to
-	// resolve one from. Empty means "none" (transparent), matching the
-	// real xsde2svg source's own default. Unused by an Arrow (shape 2,
-	// stroke-only, no interior to fill).
+	// Fill is a Rectangle's (shape 3) or Circle's (shape 4) own interior
+	// color — free-text like Lamp's own FillOff/FillOn, not a VoltageClass
+	// reference, since a decorative annotation shape has no electrical
+	// voltage of its own to resolve one from. Empty means "none"
+	// (transparent), matching the real xsde2svg source's own default.
+	// Unused by an Arrow (shape 2, stroke-only, no interior to fill).
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
-	// Stroke is a Rectangle's own border color, or an Arrow's own line
-	// color — same free-text convention as Fill. Empty falls back to a
+	// Stroke is a Rectangle's/Circle's own border color, or an Arrow's own
+	// line color — same free-text convention as Fill. Empty falls back to a
 	// plain visible color the same way an unset Lamp color does.
 	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
-	// StrokeWidth is a Rectangle's own border thickness, or an Arrow's own
-	// line thickness, in the same local/diagram units every other shape's
-	// fixed stroke-width:1 is — unlike those, meaningfully different per
-	// instance the way Radius is. 0 (unset) means the real xsde2svg
-	// default of 1, not literally invisible.
+	// StrokeWidth is a Rectangle's/Circle's own border thickness, or an
+	// Arrow's own line thickness, in the same local/diagram units every
+	// other shape's fixed stroke-width:1 is — unlike those, meaningfully
+	// different per instance the way Radius is. 0 (unset) means the real
+	// xsde2svg default of 1, not literally invisible.
 	StrokeWidth float64 `xml:"strokeWidth,attr,omitempty" json:"strokeWidth,omitempty"`
 	// DoubleHeaded draws an Arrow's (shape 2) own open chevron arrowhead
 	// at both Points, not just the second one — matching the real
@@ -238,12 +243,13 @@ type Element struct {
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
 	// Points holds a BusBarSection's (shape 24) own drawn geometry (its two
-	// or more vertices), a Rectangle's (shape 3) own two opposite corners
-	// (order-independent — Render normalizes them into a proper top-left/
-	// width/height the same way the real xsde2svg source does), or an
-	// Arrow's (shape 2) own start and end (order *does* matter here — the
-	// arrowhead is drawn at Points[1], the second one); unused by every
-	// other, template-drawn class.
+	// or more vertices), a Rectangle's (shape 3) or Circle's (shape 4) own
+	// two opposite corners of its own bounding box (order-independent —
+	// Render normalizes them into a proper top-left/width/height, or
+	// center/rx/ry for a Circle, the same way the real xsde2svg source
+	// does), or an Arrow's (shape 2) own start and end (order *does*
+	// matter here — the arrowhead is drawn at Points[1], the second one);
+	// unused by every other, template-drawn class.
 	Points []Point `xml:"geometry>point,omitempty" json:"points,omitempty"`
 
 	// Autotransformer/Windings/VectorGroupLabel are a PowerTransformer's
