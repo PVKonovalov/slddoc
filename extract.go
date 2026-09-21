@@ -55,6 +55,148 @@ var twoPortShapes = map[string]Class{
 	"51":  ClassChassis,
 }
 
+// unrecognizedShapeName gives a human-readable name for an xsde2svg
+// ObjectType code this package's v1 extractor doesn't (yet) turn into a
+// real Element — addMissingLabel's own fallback when shapeName (every
+// code this package *does* render, keyed the same way) doesn't have one
+// either, i.e. every code Report.Skipped can report. English names taken
+// from the xsde2svg catalog's own object-type list, not derived from
+// anything in this package.
+var unrecognizedShapeName = map[string]string{
+	"1": "Line", "2": "Arrow", "3": "Rectangle", "4": "Circle",
+	"6":    "Booster/voltage regulator (single-winding power transformer)",
+	"9":    "Arc",
+	"10":   "Connector",
+	"11":   "Backdrop/image file",
+	"16":   "Polygon",
+	"19":   "Metal anchor/angle pole",
+	"26":   "Fork/branch point",
+	"32":   "Cable joint/coupling",
+	"38":   "Thermal power plant",
+	"39":   "Synchronous motor",
+	"44":   "Knife switch",
+	"50":   "Withdrawable sectionalizer",
+	"56":   "Cable connector",
+	"60":   "Zone division",
+	"71":   "RZD connection/disconnector",
+	"83":   "Connector arrow",
+	"102":  "Panel/board",
+	"103":  "Automation device",
+	"113":  "3D button",
+	"130":  "Device",
+	"146":  "Power pole",
+	"156":  "Resistor",
+	"157":  "Thyristor",
+	"163":  "Short-circuiter without ground",
+	"166":  "Disconnector-fuse",
+	"174":  "Synchronous compensator",
+	"175":  "3-position knife switch",
+	"292":  "Post-type pole",
+	"302":  "Window icon",
+	"310":  "Container",
+	"312":  "Table",
+	"313":  "Table 2",
+	"319":  "Small window",
+	"320":  "Custom element",
+	"335":  "Road",
+	"360":  "Substation",
+	"385":  "Package transformer substation (KTP)",
+	"386":  "Enclosed transformer substation (ZTP)",
+	"389":  "Blocking filter",
+	"391":  "RTF text",
+	"398":  "Short-circuiter",
+	"399":  "Power circuit breaker",
+	"3206": "RZD connection/disconnector (arc-extinguishing contacts)",
+}
+
+// missingElementAnchor makes a best-effort attempt at a diagram-space
+// position for a top-level node Extract couldn't otherwise parse, so
+// addMissingLabel's own diagnostic Label lands close to where the real
+// element would have been instead of not appearing at all. Tries, in
+// order: a rotate() transform's own center (the same true anchor most
+// real two-port shapes use), then a descendant <path>'s own first drawn
+// point, then a descendant <circle>'s own cx/cy, then a <rect>'s own
+// center (n itself included for both, matching a bare untyped-Rectangle
+// (data-type 3) or Circle (data-type 4) node, which — unlike every real
+// equipment shape — isn't wrapped in its own outer <g> at all). false when
+// none of these apply (a genuinely empty/unparseable node) —
+// addMissingLabel skips adding a Label in that case, though
+// Report.Skipped/Failed still record it either way.
+func missingElementAnchor(n *rawNode) (Point, bool) {
+	if _, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		return center, true
+	}
+	for _, p := range elementPaths(n) {
+		subpaths, err := parseSubpaths(p.attr("d"))
+		if err != nil {
+			continue
+		}
+		for _, sp := range subpaths {
+			if len(sp) > 0 {
+				return sp[0], true
+			}
+		}
+	}
+	circles := n.descendants("circle")
+	if n.Tag == "circle" {
+		circles = append([]*rawNode{n}, circles...)
+	}
+	for _, c := range circles {
+		cx, errX := strconv.ParseFloat(c.attr("cx"), 64)
+		cy, errY := strconv.ParseFloat(c.attr("cy"), 64)
+		if errX == nil && errY == nil {
+			return Point{X: cx, Y: cy}, true
+		}
+	}
+	rects := n.descendants("rect")
+	if n.Tag == "rect" {
+		rects = append([]*rawNode{n}, rects...)
+	}
+	for _, r := range rects {
+		x, errX := strconv.ParseFloat(r.attr("x"), 64)
+		y, errY := strconv.ParseFloat(r.attr("y"), 64)
+		w, errW := strconv.ParseFloat(r.attr("width"), 64)
+		h, errH := strconv.ParseFloat(r.attr("height"), 64)
+		if errX == nil && errY == nil && errW == nil && errH == nil {
+			return Point{X: x + w/2, Y: y + h/2}, true
+		}
+	}
+	return Point{}, false
+}
+
+// addMissingLabel appends a red diagnostic Label at n's own best-effort
+// position, naming the xsde2svg ObjectType code (dt) that couldn't be
+// turned into a real Element/Connector — either because Extract doesn't
+// recognize dt at all (a Report.Skipped call site) or because a
+// recognized dt's own specific instance failed to parse (a Report.Failed
+// one) — so nothing from the source SVG goes silently missing from the
+// extracted diagram: a diagram author sees exactly where and what wasn't
+// carried over, rather than a topology with an unexplained gap. Its own
+// ID is left unset (0), the same as any other extracted Label lacking a
+// real source id — see ensureLastId's own doc comment (frontend
+// diagramOps.ts) for how that gets backfilled into a real unique one.
+func addMissingLabel(d *Diagram, n *rawNode, dt string) {
+	anchor, ok := missingElementAnchor(n)
+	if !ok {
+		return
+	}
+	name := dt
+	if known, ok := shapeName[dt]; ok {
+		name = fmt.Sprintf("%s (%s)", known, dt)
+	} else if known, ok := unrecognizedShapeName[dt]; ok {
+		name = fmt.Sprintf("%s (%s)", known, dt)
+	}
+	d.Labels = append(d.Labels, Label{
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Size:   13,
+		Text:   fmt.Sprintf("Missing: %s #%s", name, n.attr("id")),
+		Color:  "red",
+		Anchor: "middle",
+	})
+}
+
 // Extract parses raw as an xsde2svg-generated SVG and builds a Diagram.
 func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagram, Report, error) {
 	root, err := parseRawTree(raw)
@@ -127,11 +269,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 				d.DigitalDevices = append(d.DigitalDevices, dd)
 			} else {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 			}
 			continue
 		}
 		if !elementDataTypes[dt] {
 			report.Skipped[dt]++
+			addMissingLabel(d, n, dt)
 			continue
 		}
 
@@ -140,6 +284,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, voltage, err := parseBusBar(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, nil, voltage)
@@ -148,6 +293,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			c, voltage, err := parseConnector(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			colors = append(colors, voltage)
@@ -158,6 +304,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, voltage, err := parseJunctionPoint(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, []Point{{X: el.X, Y: el.Y}}, voltage)
@@ -166,6 +313,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, err := parseLamp(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, nil, "")
@@ -174,6 +322,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, err := parseFaultPassageIndicator(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, nil, "")
@@ -182,6 +331,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -190,6 +340,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseOnePortDevice(n, ClassReactorShunt, "397")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -198,6 +349,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseOnePortDevice(n, ClassSurgeArrester, "168")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -206,6 +358,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseOnePortDevice(n, ClassCapacitorBank, "172")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -214,6 +367,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseOnePortDevice(n, ClassHalfChassis, "52")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -222,6 +376,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseVoltageTransformer(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -230,6 +385,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseOnePortDevice(n, ClassGenerator, "173")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -238,6 +394,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseGround(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -246,6 +403,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseGroundSwitch(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -254,6 +412,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, voltage, err := parseSectionalizer(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			addElement(el, ports, voltage)
@@ -262,6 +421,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			el, ports, wColors, err := parsePowerTransformer(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
 				continue
 			}
 			idx := len(d.Elements)
@@ -292,7 +452,10 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	}
 
 	buildTopology(d, bindings)
-	d.Labels = matchLabels(d, labelNodes)
+	// append, not assign — d.Labels may already hold addMissingLabel's own
+	// diagnostic entries from earlier in this same loop, which matchLabels
+	// itself knows nothing about and would otherwise silently clobber.
+	d.Labels = append(d.Labels, matchLabels(d, labelNodes)...)
 
 	report.Elements = len(d.Elements)
 	report.Connectors = len(d.Connectors)
