@@ -329,28 +329,70 @@ func parseGround(n *rawNode) (Element, []Point, string, error) {
 }
 
 // parseGroundSwitch handles shape 54 (ground switch): a single electrical
-// port at the element's own rotation anchor.
+// port at the element's own rotation anchor. Real instances appear both
+// with and without a rotate() transform (element_54.go only emits one when
+// its own computed angle is non-zero) — when absent, the anchor is
+// recovered from the drawn path's own geometry instead, the same
+// "real instance never guaranteed a transform" gap PackageSubstation/
+// EnclosedSubstation's own substationAnchorFromGeometry fixed for those two
+// shapes (see that function's own doc comment). Unlike a simple "first
+// point" fallback (Ground/31's own, where the formula's first M point *is*
+// the anchor), element_54.go's own first path always starts drawing at a
+// fixed *offset* from the anchor — "M x y+yx v -tail ..." where x is the
+// anchor's own X (never offset) but y+yx is the anchor's own Y plus a
+// scale-dependent vertical offset — so recovering Y needs that offset
+// undone. yx and tail are both Scale(scaleChosed, N) of fixed source
+// constants (12 and 9 respectively, in the common/plain draw branch every
+// real corpus instance found actually uses — see this function's own doc
+// comment on ShortDraw/CustomView not being modeled) that scale together,
+// so their ratio (tail/yx = 9/12 = 0.75) holds regardless of any given
+// diagram's own scale factor — confirmed against all 2856 real corpus
+// instances found carrying a rotate() (whose true anchor is directly
+// knowable from that transform's own center, letting yx be recovered
+// independently and checked): every single one matches this exact ratio,
+// so no real instance found uses ShortDraw/CustomView's own different
+// ratios (0.583/1.286) instead. yx is therefore recovered as
+// tail*(12/9) from the path's own first segment (whatever its own real
+// scale), without needing to know or guess that diagram's scale factor.
 func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return Element{}, nil, "", err
 	}
-	angle, center, ok := parseRotate(n.attr("transform"))
-	if !ok {
-		return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: no rotate() transform (unrotated ground switches are not yet supported)", n.attr("id"))
+
+	var anchor Point
+	var orient int
+	if angle, center, ok := parseRotate(n.attr("transform")); ok {
+		anchor, orient = center, angle
+	} else {
+		paths := elementPaths(n)
+		if len(paths) == 0 {
+			return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: no <path> geometry", n.attr("id"))
+		}
+		subpaths, err := parseSubpaths(paths[0].attr("d"))
+		if err != nil {
+			return Element{}, nil, "", err
+		}
+		if len(subpaths) == 0 || len(subpaths[0]) < 2 {
+			return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: first path has fewer than 2 points", n.attr("id"))
+		}
+		p0, p1 := subpaths[0][0], subpaths[0][1]
+		tail := p0.Y - p1.Y
+		anchor = Point{X: p0.X, Y: p0.Y - tail*12/9}
 	}
+
 	return Element{
 		ID:     id,
 		Class:  ClassGroundSwitch,
 		Shape:  "54",
 		Name:   n.attr("data-name"),
 		Layer:  resolveLayer(n.attr("data-layer")),
-		X:      center.X,
-		Y:      center.Y,
-		Orient: angle,
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
 		State:  parseState(n),
 		Ports:  []Port{{Name: "1"}},
-	}, []Point{center}, n.attr("data-voltage"), nil
+	}, []Point{anchor}, n.attr("data-voltage"), nil
 }
 
 // parseShortCircuiter handles shape 398 (short-circuiter): a single
@@ -1249,6 +1291,95 @@ func parseArrow(n *rawNode) (Element, error) {
 		Stroke:      styleProp(style, "stroke"),
 		StrokeWidth: strokeWidth,
 		Points:      []Point{p0, p1},
+	}, nil
+}
+
+// parseButton handles shape 113 (Объемная кнопка/3D button): a purely
+// decorative annotation widget (see ClassButton's own doc comment) — no
+// Ports are ever created for one. A real instance is a <g data-type="113">
+// wrapping a <rect x y width height style> (its own box) and, when it
+// carries a label, a <text style>...</text> sibling (see writeButton's own
+// doc comment for the exact markup) — the box's own two Points are its
+// top-left/bottom-right corners, the same convention parseRectangle already
+// uses. Bold is recovered from the text's own style the same
+// strings.Contains(style, "font-weight: bold") way parseDigitalDevice's own
+// is. A Button with no <text> child at all (real corpus shows this never
+// happens, but a hand-edited file could) simply extracts with an empty
+// PropertyText, same as an ordinary unlabeled Rectangle.
+func parseButton(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	rects := n.childrenTagged("rect")
+	if len(rects) == 0 {
+		rects = n.descendants("rect")
+	}
+	if len(rects) == 0 {
+		return Element{}, fmt.Errorf("slddoc: button %s: no rect child", n.attr("id"))
+	}
+	rn := rects[0]
+	x, errX := strconv.ParseFloat(rn.attr("x"), 64)
+	y, errY := strconv.ParseFloat(rn.attr("y"), 64)
+	w, errW := strconv.ParseFloat(rn.attr("width"), 64)
+	h, errH := strconv.ParseFloat(rn.attr("height"), 64)
+	if errX != nil || errY != nil || errW != nil || errH != nil {
+		return Element{}, fmt.Errorf("slddoc: button %s: invalid x/y/width/height", n.attr("id"))
+	}
+	rectStyle := rn.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(rectStyle, "stroke-width"), 64)
+
+	el := Element{
+		ID:          id,
+		Class:       ClassButton,
+		Shape:       "113",
+		Name:        n.attr("data-name"),
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           x + w/2,
+		Y:           y + h/2,
+		Fill:        styleProp(rectStyle, "fill"),
+		Stroke:      styleProp(rectStyle, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      []Point{{X: x, Y: y}, {X: x + w, Y: y + h}},
+	}
+
+	if t := firstTextChild(n); t != nil {
+		textStyle := t.attr("style")
+		el.PropertyText = t.Text
+		el.TextColor = styleProp(textStyle, "fill")
+		el.Bold = strings.Contains(textStyle, "font-weight: bold") || strings.Contains(textStyle, "font-weight:bold")
+	}
+	return el, nil
+}
+
+// parseRoad handles shape 335 (Дорога/Road): a purely decorative
+// geographic background line, not real electrical equipment (see
+// ClassRoad's own doc comment) — no Ports are ever created for one. A real
+// instance is a bare <polyline points style>, no wrapping <g> and no
+// data-name (matching writeRoad's own convention — a real Road never
+// carries one, unlike a real busbar's own bare polyline), so this reuses
+// parseBusBar's own points/style reading exactly, just without a data-name.
+func parseRoad(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	pts, err := parsePointList(n.attr("points"))
+	if err != nil {
+		return Element{}, err
+	}
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		ID:          id,
+		Class:       ClassRoad,
+		Shape:       "335",
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           pts[0].X,
+		Y:           pts[0].Y,
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      pts,
 	}, nil
 }
 

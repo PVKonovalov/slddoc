@@ -214,6 +214,37 @@ const (
 	// downward-pointing triangle always drawn inside it (see
 	// writeEnclosedSubstation for the full geometry).
 	ClassEnclosedSubstation Class = "EnclosedSubstation"
+	// ClassButton (shape 113, "Объемная кнопка"/3D button) is a purely
+	// decorative annotation widget — not real electrical equipment, same
+	// non-electrical status as ClassRectangle (no Ports/Voltage/State,
+	// never a connectElements/routing endpoint) — used in real diagrams as
+	// a static navigation/action control (e.g. a button labeled "Журнал
+	// событий"/"Event log") rather than anything reflecting live switching
+	// state: real corpus never shows a data-state/data-voltage on one
+	// despite the source computing both, and every real instance found
+	// uses a single fixed look, not two Closed-driven variants. Its
+	// geometry is its own drawn Points (two opposite corners), the same
+	// convention ClassRectangle already uses, with PropertyText as its own
+	// centered label (see that field's own doc comment) and TextColor/Bold
+	// as that label's own per-instance color/weight — real corpus shows
+	// both genuinely varying (a dark box with plain white text vs. a light
+	// box with bold dark text), unlike PackageSubstation/
+	// EnclosedSubstation/FaultPassageIndicator's own fixed-style overlay
+	// text.
+	ClassButton Class = "Button"
+	// ClassRoad (shape 335, "Дорога"/Road) is a purely decorative
+	// geographic background line — not real electrical equipment, same
+	// non-electrical status as ClassRectangle (no Ports/Voltage/State,
+	// never a connectElements/routing endpoint). Unlike Rectangle/Circle's
+	// own two-opposite-corners Points convention or Arrow's own two-
+	// ordered-endpoints one, a Road's geometry is an arbitrary multi-vertex
+	// Points polyline, the same convention ClassBusBarSection already uses
+	// (real corpus shows real instances bending through several points,
+	// e.g. a 5-point road). Reuses Stroke/StrokeWidth for its own line
+	// color/thickness — both genuinely vary per real instance (orangered/
+	// blue/royalblue/white seen, widths 8/10/12) — with no Fill of its own
+	// (an open line, like Arrow, not a closed shape).
+	ClassRoad Class = "Road"
 )
 
 // Element is one placed piece of equipment.
@@ -299,15 +330,21 @@ type Element struct {
 	// same as it does for a Rectangle, rather than leaving that majority
 	// case unset just because it happens to match {color}.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
-	// Stroke is a Rectangle's/Circle's own border color, or an Arrow's own
-	// line color — same free-text convention as Fill. Empty falls back to a
-	// plain visible color the same way an unset Lamp color does.
+	// Stroke is a Rectangle's/Circle's own border color, an Arrow's/Road's
+	// own line color, or a Button's own box border color — same free-text
+	// convention as Fill. Empty falls back to a plain visible color the
+	// same way an unset Lamp color does.
 	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
-	// StrokeWidth is a Rectangle's/Circle's own border thickness, or an
-	// Arrow's own line thickness, in the same local/diagram units every
-	// other shape's fixed stroke-width:1 is — unlike those, meaningfully
-	// different per instance the way Radius is. 0 (unset) means the real
-	// xsde2svg default of 1, not literally invisible.
+	// StrokeWidth is a Rectangle's/Circle's own border thickness, an
+	// Arrow's/Road's own line thickness, or a Button's own box border
+	// thickness, in the same local/diagram units every other shape's fixed
+	// stroke-width:1 is — unlike those, meaningfully different per instance
+	// the way Radius is. 0 (unset) means the real xsde2svg default of 1 for
+	// every one of these except Road, whose own writeRoad instead falls
+	// back to a much thicker thumbnail width — a real instance is never
+	// actually drawn at width 1 (real corpus shows 8-12), so this editor's
+	// own default reflects a road's real visual weight rather than that
+	// generic fallback.
 	StrokeWidth float64 `xml:"strokeWidth,attr,omitempty" json:"strokeWidth,omitempty"`
 	// DoubleHeaded draws an Arrow's (shape 2) own open chevron arrowhead
 	// at both Points, not just the second one — matching the real
@@ -339,18 +376,33 @@ type Element struct {
 	// text of any kind; the label is purely this schema's own
 	// long-standing convention), so empty here means the admin-configured
 	// default (Render's own defaultFPIText param, "FPI" out of the box —
-	// see config.Config.Indicators.DefaultFPIText), not "no label".
+	// see config.Config.Indicators.DefaultFPIText), not "no label". Also
+	// used by Button (113) for its own centered label — unlike 385/386/
+	// FPI, this one carries no fixed style of its own; see TextColor/Bold.
 	PropertyText string `xml:"propertyText,attr,omitempty" json:"propertyText,omitempty"`
+	// TextColor is a Button's (113) own PropertyText color — unlike 385/
+	// 386/FPI's fixed white overlay text, real corpus shows this genuinely
+	// varying per instance (plain white text on a dark box, or dark text
+	// on a light box). Empty falls back to white, the more common real
+	// case. Unused by every other class.
+	TextColor string `xml:"textColor,attr,omitempty" json:"textColor,omitempty"`
+	// Bold draws a Button's (113) own PropertyText in bold — matches the
+	// real source's own ParamText.FontStyle containing "BOLD" — real
+	// corpus shows both a plain and a bold real instance. Unused by every
+	// other class.
+	Bold bool `xml:"bold,attr,omitempty" json:"bold,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
-	// Points holds a BusBarSection's (shape 24) own drawn geometry (its two
-	// or more vertices), a Rectangle's (shape 3) or Circle's (shape 4) own
-	// two opposite corners of its own bounding box (order-independent —
-	// Render normalizes them into a proper top-left/width/height, or
-	// center/rx/ry for a Circle, the same way the real xsde2svg source
-	// does), or an Arrow's (shape 2) own start and end (order *does*
-	// matter here — the arrowhead is drawn at Points[1], the second one);
-	// unused by every other, template-drawn class.
+	// Points holds a BusBarSection's (shape 24) or Road's (shape 335) own
+	// drawn geometry (its two or more vertices, in drawn order — a Road can
+	// genuinely bend through several, unlike the fixed-two-point shapes
+	// below), a Rectangle's (shape 3), Circle's (shape 4), or Button's
+	// (shape 113) own two opposite corners of its own bounding box
+	// (order-independent — Render normalizes them into a proper
+	// top-left/width/height, or center/rx/ry for a Circle, the same way the
+	// real xsde2svg source does), or an Arrow's (shape 2) own start and end
+	// (order *does* matter here — the arrowhead is drawn at Points[1], the
+	// second one); unused by every other, template-drawn class.
 	Points []Point `xml:"geometry>point,omitempty" json:"points,omitempty"`
 
 	// Autotransformer/Windings/VectorGroupLabel are a PowerTransformer's

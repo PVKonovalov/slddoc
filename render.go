@@ -210,6 +210,7 @@ var shapeName = map[string]string{
 	"71":     "Disconnector",
 	"76":     "Starter",
 	"106":    "Lamp",
+	"113":    "Button",
 	"154":    "Fuse (withdrawable)",
 	"162":    "Disconnector",
 	"164":    "Sectionalizer",
@@ -222,6 +223,7 @@ var shapeName = map[string]string{
 	"320003": "Fault passage indicator",
 	"385":    "Package substation",
 	"386":    "Enclosed substation",
+	"335":    "Road",
 }
 
 // connectorKindName gives the name Render annotates a run of same-Kind
@@ -446,6 +448,25 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// shape's own Fill/Stroke/Points convention exactly, just drawn
 		// as an <ellipse>).
 		writeCircle(w, e, mode)
+		return
+	}
+	if e.Class == ClassButton {
+		// Same reasoning as ClassRectangle just above — a decorative
+		// annotation whose own geometry varies per instance and isn't
+		// part of the electrical network — but unlike Rectangle/Arrow/
+		// Circle it also draws its own centered PropertyText label, so it
+		// needs a wrapping <g> rather than a bare tag.
+		writeButton(w, e, mode)
+		return
+	}
+	if e.Class == ClassRoad {
+		// Same reasoning as ClassRectangle just above — a decorative
+		// annotation whose own geometry varies per instance and isn't
+		// part of the electrical network — but its own Points are an
+		// arbitrary multi-vertex polyline (BusBarSection's own convention),
+		// not a fixed two-point shape, so it's drawn with writePolyline
+		// directly rather than its own bespoke writeX function.
+		writeRoad(w, e, mode)
 		return
 	}
 
@@ -762,6 +783,95 @@ func writeCircle(w io.Writer, e Element, mode RenderMode) {
 	}
 	fmt.Fprintf(w, "<ellipse id=\"%d\" cx=\"%s\" cy=\"%s\" rx=\"%s\" ry=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"4\"%s />\n",
 		e.ID, fmtNum(cx), fmtNum(cy), fmtNum(rx), fmtNum(ry), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
+}
+
+// buttonFontSize is a Button's (113) own PropertyText size — fixed, not
+// per-instance, matching every real corpus instance found (23px regardless
+// of the button's own drawn width/height).
+const buttonFontSize = 23
+
+// writeButton draws a Button (shape 113) as a <rect>+<text> pair inside a
+// wrapping <g id data-type="113">, matching real xsde2svg-exported markup
+// (internal/modus/element_113.go's own canvas.Group/Rect/Textspan calls) —
+// unlike writeRectangle/writeCircle/writeArrow, this shape always draws a
+// centered label too, so it needs the wrapping <g> real bare-tag shapes
+// don't. Its own two Points (any order, same convention as
+// writeRectangle's) are normalized into a top-left x/y plus a positive
+// width/height. Fill/Stroke/StrokeWidth fall back exactly the same way
+// writeRectangle's own do ("none"/"white"/1) — real corpus always draws a
+// solid background, but this editor's own placeButton defaults it
+// transparent anyway, the same "user picks a real fill" convention every
+// other decorative annotation shape already uses. TextColor falls back to
+// white, the more common real case; Bold draws PropertyText with font-weight:bold,
+// matching the real source's own ParamText.FontStyle-driven "BOLD" branch.
+// A Button with fewer than 2 Points draws nothing, same as writeRectangle.
+func writeButton(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	x, y := math.Min(p0.X, p1.X), math.Min(p0.Y, p1.Y)
+	width, height := math.Abs(p1.X-p0.X), math.Abs(p1.Y-p0.Y)
+
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+	textColor := e.TextColor
+	if textColor == "" {
+		textColor = "white"
+	}
+	weight := ""
+	if e.Bold {
+		weight = ";font-weight: bold"
+	}
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"113\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, esc(e.Name), esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" />\n",
+		fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth))
+	if e.PropertyText != "" {
+		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial%s", textColor, buttonFontSize, weight)
+		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", fmtNum(x+width/2), fmtNum(y+height/2), esc(style), esc(e.PropertyText))
+	}
+	fmt.Fprint(w, "</g>\n")
+}
+
+// writeRoad draws a Road (shape 335) as a single flat <polyline>, matching
+// a real xsde2svg-exported one exactly (internal/modus/element_335.go's own
+// canvas.Polyline call): no wrapping <g>, no data-name (unlike a busbar's
+// own writePolyline call, a real Road instance never carries one). Stroke
+// falls back to white, the same unset-color convention every other
+// decorative annotation shape uses; StrokeWidth falls back to 8 rather than
+// the generic 1 every other shape's own unset default is — a real Road is
+// never actually drawn that thin (real corpus shows 8-12), so a thumbnail
+// still reads as a road. A Road with fewer than 2 Points draws nothing,
+// same as writeRectangle.
+func writeRoad(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 8
+	}
+	dataAttrs := fmt.Sprintf(" data-voltage=\"%s\" data-type=\"335\"", esc(stroke))
+	writePolyline(w, e.ID, "element", e.Points, stroke, false, strokeWidth, dataAttrs, mode)
 }
 
 // writePackageSubstation draws a PackageSubstation (shape 385) — a
