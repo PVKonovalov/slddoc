@@ -1447,6 +1447,50 @@ func parsePole(n *rawNode) (Element, error) {
 	}, nil
 }
 
+// lineDashStyles is the reverse of render.go's own lineDashPatterns — a
+// real instance's own stroke-dasharray value back to the LineStyle that
+// produces it. Anything else (absent, or a value neither real dash
+// pattern this shape's own source ever produces) reads as
+// LineStyleSolid/unset, the same "no known match, fall back to the
+// default" approach parseVAlign already uses for a different field.
+var lineDashStyles = map[string]ConnectorLineStyle{
+	"6,5":     LineStyleDashed,
+	"9 2 2 2": LineStyleDashDot,
+}
+
+// parseLine handles shape 1 (Линия/Line): a purely decorative generic
+// line, not real electrical equipment (see ClassLine's own doc comment) —
+// no Ports are ever created for one. A real instance is a bare <polyline
+// points style>, no wrapping <g> and no data-name (same gap writeRoad's
+// own doc comment notes for Road), so this reuses parseBusBar's own
+// points/style reading exactly, just without a data-name, plus its own
+// LineStyle recovered from the style's own stroke-dasharray (see
+// lineDashStyles).
+func parseLine(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	pts, err := parsePointList(n.attr("points"))
+	if err != nil {
+		return Element{}, err
+	}
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		ID:          id,
+		Class:       ClassLine,
+		Shape:       "1",
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           pts[0].X,
+		Y:           pts[0].Y,
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		LineStyle:   lineDashStyles[styleProp(style, "stroke-dasharray")],
+		Points:      pts,
+	}, nil
+}
+
 // firstCircleChild returns n itself when it's already a <circle> (the
 // older, bare-element real xsde2svg export style several shapes still use —
 // Lamp, Junction point, ...), or its first <circle> child/descendant when
@@ -1618,8 +1662,63 @@ func parseFaultPassageIndicator(n *rawNode) (Element, error) {
 	}, nil
 }
 
+// powerflowGlyphState is the reverse of render.go's own powerflowGlyph — a
+// real instance's own text content back to State: "←" reads as 1, anything
+// else (the common "→", or an unrecognized value) as nil/unset, matching
+// writePowerflowIndicator's own nil-draws-"→" default.
+func powerflowGlyphState(text string) *int {
+	if strings.TrimSpace(text) == "←" {
+		one := 1
+		return &one
+	}
+	return nil
+}
+
+// parsePowerflowIndicator handles shape 320001 (Направление перетока/
+// Powerflow direction): a purely decorative arrow glyph, not real
+// electrical equipment (see ClassPowerflowIndicator's own doc comment) — no
+// Ports are ever created for one. A real instance is a bare <text x y style
+// transform data-type data-angle data-voltage>→|←</text>, no wrapping <g>
+// (same gap writeLine/writeRoad's own doc comments note). Unlike
+// parsePole's own conditional rotate parsing, the real source always emits
+// both the rotate() transform and its own data-angle attribute (even for
+// angle 0), so Orient is read directly from data-angle rather than via
+// parseRotate.
+func parsePowerflowIndicator(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	x, errX := strconv.ParseFloat(n.attr("x"), 64)
+	y, errY := strconv.ParseFloat(n.attr("y"), 64)
+	if errX != nil || errY != nil {
+		return Element{}, fmt.Errorf("slddoc: powerflow indicator %s: invalid x/y", n.attr("id"))
+	}
+	orient, _ := strconv.Atoi(n.attr("data-angle"))
+	style := n.attr("style")
+	return Element{
+		ID:        id,
+		Class:     ClassPowerflowIndicator,
+		Shape:     "320001",
+		Layer:     resolveLayer(n.attr("data-layer")),
+		X:         x,
+		Y:         y - 3,
+		Orient:    orient,
+		State:     powerflowGlyphState(n.Text),
+		TextColor: styleProp(style, "fill"),
+	}, nil
+}
+
+// connectorKindByType is the reverse of render.go's own connectorTypeCode
+// (must be kept in exact sync with it) — "21" is KindBusWork's own code,
+// not KindBusbarWire's: real xsde2svg data-type="21" is a plain Buswork
+// connector ("Ошиновка"), and KindBusbarWire has no code of its own at
+// all (connectorTypeCode has no entry for it — it was removed as a
+// palette choice, see wireKindIcon.ts's own doc comment, so a real
+// instance is never produced by this editor and Extract never needs to
+// recover one either).
 var connectorKindByType = map[string]ConnectorKind{
-	"21": KindBusbarWire,
+	"21": KindBusWork,
 	"22": KindOverheadLine,
 	"23": KindCableLine,
 	"28": KindLinkToObject,

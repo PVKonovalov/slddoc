@@ -20,7 +20,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			Ports: []Port{{Name: "1", Node: 2}},
 		}},
 		Connectors: []Connector{{
-			ID: 4, Kind: KindBusbarWire, Voltage: 1, Layer: BaseLayer,
+			// KindOverheadLine, not KindBusbarWire — Load rewrites the
+			// latter to KindBusWork (see its own doc comment), which
+			// would make this round-trip test's own choice of Kind
+			// silently misleading.
+			ID: 4, Kind: KindOverheadLine, Voltage: 1, Layer: BaseLayer,
 			From: 2, To: 2, Points: []Point{{X: 900, Y: 240}, {X: 900, Y: 270}},
 		}},
 		Labels:         []Label{{For: 3, Layer: BaseLayer, X: 1, Y: 2, Size: 13, Text: "CB-1"}},
@@ -65,7 +69,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if len(got.Elements[0].Ports) != 1 || got.Elements[0].Ports[0].Node != 2 {
 		t.Errorf("ports mismatch: %+v", got.Elements[0].Ports)
 	}
-	if len(got.Connectors) != 1 || len(got.Connectors[0].Points) != 2 {
+	if len(got.Connectors) != 1 || len(got.Connectors[0].Points) != 2 || got.Connectors[0].Kind != KindOverheadLine {
 		t.Errorf("connectors mismatch: %+v", got.Connectors)
 	}
 	if len(got.Labels) != 1 || got.Labels[0].For != 3 {
@@ -73,6 +77,32 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if len(got.DigitalDevices) != 1 || got.DigitalDevices[0].Name != "R T-1" || got.DigitalDevices[0].Unit != "MW" {
 		t.Errorf("digital devices mismatch: %+v", got.DigitalDevices)
+	}
+}
+
+// TestLoad_RewritesLegacyBusbarWire covers Extract's own former bug (fixed
+// alongside this test): connectorKindByType misread a real data-type="21"
+// (Ошиновка/Buswork) connector as KindBusbarWire instead of KindBusWork —
+// "21" was always KindBusWork's own code, never KindBusbarWire's (which
+// has none at all — see connectorKindByType's own doc comment). The
+// frontend itself never creates a KindBusbarWire connector, so every one
+// already saved to disk by that bug is rewritten back to KindBusWork here
+// on Load, the same way kindObjectLinkLegacy already is.
+func TestLoad_RewritesLegacyBusbarWire(t *testing.T) {
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Connectors: []Connector{{ID: 1, Kind: KindBusbarWire, Points: []Point{{X: 0, Y: 0}, {X: 1, Y: 1}}}},
+	}
+	var buf bytes.Buffer
+	if err := d.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Connectors) != 1 || got.Connectors[0].Kind != KindBusWork {
+		t.Errorf("Load should rewrite a stored KindBusbarWire connector to KindBusWork, got %+v", got.Connectors)
 	}
 }
 

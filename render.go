@@ -225,6 +225,8 @@ var shapeName = map[string]string{
 	"386":    "Enclosed substation",
 	"335":    "Road",
 	"292":    "Post-type pole",
+	"1":      "Line",
+	"320001": "Powerflow direction",
 }
 
 // connectorKindName gives the name Render annotates a run of same-Kind
@@ -311,16 +313,18 @@ func typeComment(w io.Writer, names map[string]string, key, code string, last *s
 
 // elementZOrder ranks the handful of Element classes that must draw above
 // connectors rather than in ordinary document order, instead of the default
-// 0 (drawn in document order, before connectors): JunctionPoint and
-// FaultPassageIndicator sit directly on top of a wire — unlike ordinary
-// equipment, which only ever touches a connector at a port, so painting the
-// wire afterward would cut through them — and Lamp is a decorative status
-// indicator meant to read as foreground UI. Render draws every such class in
-// ascending order of this value, each tier after the connectors loop.
+// 0 (drawn in document order, before connectors): JunctionPoint,
+// FaultPassageIndicator, and PowerflowIndicator sit directly on top of a
+// wire — unlike ordinary equipment, which only ever touches a connector at a
+// port, so painting the wire afterward would cut through them — and Lamp is
+// a decorative status indicator meant to read as foreground UI. Render draws
+// every such class in ascending order of this value, each tier after the
+// connectors loop.
 var elementZOrder = map[Class]int{
 	ClassJunctionPoint:         1,
 	ClassLamp:                  1,
 	ClassFaultPassageIndicator: 1,
+	ClassPowerflowIndicator:    1,
 }
 
 // renderElement writes one Element's symbol (or, for a BusBarSection, its
@@ -477,6 +481,22 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// substitution can't express, so it bypasses the template lookup
 		// below the same way Rectangle/Circle/Button/Road do.
 		writePole(w, e, mode)
+		return
+	}
+	if e.Class == ClassLine {
+		// Same reasoning as ClassRoad just above — a decorative annotation
+		// whose own geometry is an arbitrary multi-vertex polyline
+		// (BusBarSection's own convention), not part of the electrical
+		// network, drawn with writePolyline directly.
+		writeLine(w, e, mode)
+		return
+	}
+	if e.Class == ClassPowerflowIndicator {
+		// Same reasoning as ClassPostPole just above — a decorative,
+		// single-anchor marker (here, a rotated arrow glyph rather than a
+		// <rect>/<circle>) using its own TextColor/State instead of the
+		// color computed above.
+		writePowerflowIndicator(w, e, mode)
 		return
 	}
 
@@ -884,6 +904,68 @@ func writeRoad(w io.Writer, e Element, mode RenderMode) {
 	writePolyline(w, e.ID, "element", e.Points, stroke, false, strokeWidth, dataAttrs, mode)
 }
 
+// lineDashPatterns maps a Line's (shape 1) own LineStyle to its real
+// stroke-dasharray value, matching xsde2svg's own line-style switch
+// (internal/modus/element_1.go's own "штриховая"/"штрихпунктирная" cases)
+// exactly — different literal numbers than a KindCableLine connector's own
+// (cableLineDashPatterns): the two real sources don't share dash values
+// just because this schema shares the enum type between them.
+// LineStyleDotted has no real source counterpart for this shape (see
+// ClassLine's own doc comment), so it's mapped the same as unset/solid
+// rather than guessing at a value nothing real ever produces.
+var lineDashPatterns = map[ConnectorLineStyle]string{
+	LineStyleSolid:   "",
+	LineStyleDashed:  "stroke-dasharray: 6,5;",
+	LineStyleDashDot: "stroke-dasharray: 9 2 2 2;",
+}
+
+// writeLine draws a Line (shape 1) as a single flat <polyline>, matching a
+// real xsde2svg-exported one exactly (internal/modus/element_1.go's own
+// canvas.Polyline call): no wrapping <g>, no data-name (same gap writeRoad's
+// own doc comment notes for Road). Stroke/StrokeWidth fall back to
+// "black"/1, the real source's own defaults (writePolyline's own built-in
+// "" -> "black" fallback covers Stroke; StrokeWidth is resolved here since
+// writePolyline takes it as a plain already-resolved number). Doesn't reuse
+// writePolyline for the dash portion — unlike its own generic bool
+// "dashed" flag (a single fixed pattern, used by BusBarSection/Connector.
+// Dashed), Line needs one of its own two real dash values, the same
+// "resolve first, pass the real string in" approach writeNamedLine already
+// uses for a KindCableLine connector's own dash. A Line with fewer than 2
+// Points draws nothing, same as writeRoad.
+func writeLine(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "black"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+	dash := lineDashPatterns[e.LineStyle]
+	var sb strings.Builder
+	for i, p := range e.Points {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(fmtNum(p.X))
+		sb.WriteByte(',')
+		sb.WriteString(fmtNum(p.Y))
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	idAttr := ""
+	if e.ID != 0 {
+		idAttr = fmt.Sprintf(" id=\"%d\"", e.ID)
+	}
+	fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;%sstroke-width:%s\" data-voltage=\"%s\" data-type=\"1\"%s%s />\n",
+		esc(sb.String()), esc(stroke), dash, fmtNum(strokeWidth), esc(stroke), idAttr, editorAttr)
+}
+
 // polePostRadius is the drawn radius/half-width a PostPole (shape 292)
 // falls back to when Radius is unset — matching the real source's own
 // fixed Scale(scaleChosed, 10) default (internal/modus/element_292.go),
@@ -934,6 +1016,46 @@ func writePole(w io.Writer, e Element, mode RenderMode) {
 	}
 	fmt.Fprintf(w, "<circle id=\"%d\" cx=\"%s\" cy=\"%s\" r=\"%s\" style=\"%s\" data-voltage=\"%s\" data-type=\"292\"%s%s />\n",
 		e.ID, fmtNum(e.X), fmtNum(e.Y), fmtNum(radius), style, esc(stroke), rotate, editorAttr)
+}
+
+// powerflowGlyph picks a PowerflowIndicator's (shape 320001) own arrow
+// character from State, matching the real source's own `FState != "0"`
+// check exactly: nil/0 draws "→", anything else draws "←".
+func powerflowGlyph(state *int) string {
+	if state != nil && *state != 0 {
+		return "←"
+	}
+	return "→"
+}
+
+// writePowerflowIndicator draws a PowerflowIndicator (shape 320001) as a
+// single flat <text>, matching a real xsde2svg-exported one exactly
+// (internal/modus/element_320.go's own "Направление перетока" case): no
+// wrapping <g>, no data-name (same gap writeRoad's own doc comment notes
+// for Road). TextColor falls back to "black" (see that field's own doc
+// comment for why this differs from Button's own "white" default).
+// Font size/vertical shift are fixed (26/3), matching the real source's
+// own values at its default diagram scale — real corpus shows this only
+// varying *between* diagrams, not per instance (see ClassPowerflowIndicator's
+// own doc comment). Unlike writePole's own conditional rotate, the real
+// source always emits the rotate() transform (even for angle 0 — confirmed
+// against real corpus, e.g. `transform="rotate(0,1530,1200)"`), so this
+// does too, along with the real data-angle attribute Extract reads back.
+func writePowerflowIndicator(w io.Writer, e Element, mode RenderMode) {
+	color := e.TextColor
+	if color == "" {
+		color = "black"
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	idAttr := ""
+	if e.ID != 0 {
+		idAttr = fmt.Sprintf(" id=\"%d\"", e.ID)
+	}
+	fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"font-size:26;fill:%s;font-weight: bold\" transform=\"rotate(%d,%s,%s)\"%s data-type=\"320001\" data-angle=\"%d\" data-voltage=\"%s\"%s>%s</text>\n",
+		fmtNum(e.X), fmtNum(e.Y+3), esc(color), e.Orient, fmtNum(e.X), fmtNum(e.Y), idAttr, e.Orient, esc(color), editorAttr, powerflowGlyph(e.State))
 }
 
 // writePackageSubstation draws a PackageSubstation (shape 385) — a

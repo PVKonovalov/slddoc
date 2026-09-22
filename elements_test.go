@@ -459,6 +459,50 @@ func TestParseFaultPassageIndicator(t *testing.T) {
 	}
 }
 
+func TestParsePowerflowIndicator(t *testing.T) {
+	// Real corpus markup (PS_Novaya_L2_PS_Nelushka_L3.svg): the "←" variant,
+	// with a non-zero rotation.
+	n := parseFirst(t, `<text x="1380" y="452" style="font-size:18;fill:skyblue;font-weight: bold" transform="rotate(90,1380,450)" id="148791591" data-type="320001" data-angle="90" >←</text>`)
+
+	el, err := parsePowerflowIndicator(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.Class != ClassPowerflowIndicator || el.Shape != "320001" {
+		t.Errorf("unexpected element: %+v", el)
+	}
+	if el.X != 1380 || el.Y != 449 {
+		t.Errorf("anchor = (%v,%v), want (1380,449) (y recovered from the text's own y=452 minus its own +3 shift)", el.X, el.Y)
+	}
+	if el.Orient != 90 {
+		t.Errorf("orient = %v, want 90 (from data-angle)", el.Orient)
+	}
+	if el.TextColor != "skyblue" {
+		t.Errorf("textColor = %q, want skyblue", el.TextColor)
+	}
+	if el.State == nil || *el.State != 1 {
+		t.Errorf("state = %v, want 1 (the \"←\" glyph)", el.State)
+	}
+	if len(el.Ports) != 0 {
+		t.Errorf("ports = %v, want none (a powerflow indicator is a decorative annotation, not a wired device)", el.Ports)
+	}
+
+	// The "→" variant reads back as State nil/unset, not a plain 0 — real
+	// instances never carry a data-state attribute of their own for this
+	// shape, and there's no reason to disagree once extracted.
+	n2 := parseFirst(t, `<text x="990" y="153" style="font-size:26;fill:skyblue;font-weight: bold" transform="rotate(-180,990,150)" id="148796122" data-type="320001" data-angle="-180" >→</text>`)
+	el2, err := parsePowerflowIndicator(n2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el2.State != nil {
+		t.Errorf("state = %v, want nil for the \"→\" glyph", el2.State)
+	}
+	if el2.Orient != -180 {
+		t.Errorf("orient = %v, want -180 (from data-angle)", el2.Orient)
+	}
+}
+
 func TestParseConnector(t *testing.T) {
 	n := parseFirst(t, `<polyline points="900,360 900,420" style="fill:none;stroke:#326400;stroke-dasharray: 14,9;stroke-width:1 " data-type="23" id="148694387" data-voltage="#326400" />`)
 
@@ -468,5 +512,36 @@ func TestParseConnector(t *testing.T) {
 	}
 	if c.Kind != KindCableLine || !c.Dashed || len(c.Points) != 2 {
 		t.Errorf("unexpected connector: %+v", c)
+	}
+}
+
+// TestParseConnector_Kind covers every data-type code parseConnector
+// understands against its own real xsde2svg code — "21" (Ошиновка/
+// Buswork) must resolve to KindBusWork, not KindBusbarWire, which has no
+// code of its own at all (see connectorKindByType's own doc comment) —
+// this is the exact real corpus data that surfaced the bug this test
+// guards against (a real data-type="21" connector, id=148795659, from
+// "Энергомониторинг_Л-5_Почеп - Л-3_Зеленая.svg").
+func TestParseConnector_Kind(t *testing.T) {
+	cases := []struct {
+		dataType string
+		want     ConnectorKind
+	}{
+		{"21", KindBusWork},
+		{"22", KindOverheadLine},
+		{"23", KindCableLine},
+		{"28", KindLinkToObject},
+	}
+	for _, c := range cases {
+		t.Run(c.dataType, func(t *testing.T) {
+			n := parseFirst(t, `<polyline points="0,0 1,1" style="fill:none;stroke:#962896;stroke-width:2 " data-type="`+c.dataType+`" id="1" data-voltage="#962896" />`)
+			conn, _, err := parseConnector(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if conn.Kind != c.want {
+				t.Errorf("data-type=%q: Kind = %q, want %q", c.dataType, conn.Kind, c.want)
+			}
+		})
 	}
 }

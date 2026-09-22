@@ -21,7 +21,7 @@ const testDiagramSVG = `<?xml version="1.0"?>
 <text x="910" y="293" style="fill:white;text-anchor:start;font-size:13px;font-family:Arial;white-space: pre;" >Breaker 1</text>
 </g>
 <text x="1876" y="759" style="fill:darkturquoise;text-anchor:end;dominant-baseline:middle;font-size:16px;font-family:Arial ;font-weight: bold" data-type="134" id="148704875" data-name="R T-1 10" data-unit="МВт" >0.00 <tspan style="fill:darkturquoise;text-anchor:end;dominant-baseline:middle;font-size:16px;font-family:Arial ;font-weight: bold" >MW</tspan></text>
-<polyline points="0,0 5,0" style="fill:none;stroke:black;stroke-width:1" data-type="1" id="border" />
+<polyline points="0,0 5,0" style="fill:none;stroke:black;stroke-width:1" data-type="1" id="99" />
 </svg>
 `
 
@@ -37,8 +37,8 @@ func TestExtract_EndToEnd(t *testing.T) {
 	if len(d.VoltageClasses) != 1 || d.VoltageClasses[0].Name != "6кВ" {
 		t.Errorf("voltage classes = %+v", d.VoltageClasses)
 	}
-	if report.Elements != 3 {
-		t.Errorf("report.Elements = %d, want 3 (bus, point, breaker)", report.Elements)
+	if report.Elements != 4 {
+		t.Errorf("report.Elements = %d, want 4 (bus, point, breaker, line)", report.Elements)
 	}
 	if report.Connectors != 1 {
 		t.Errorf("report.Connectors = %d, want 1", report.Connectors)
@@ -88,11 +88,25 @@ func TestExtract_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// The decorative border (data-type="1", a plain line) is a recognized
-	// SVG shape but not one v1 understands electrically; it must be
-	// reported, not silently absorbed into an element.
-	if report.Skipped["1"] != 1 {
-		t.Errorf("expected the border polyline (data-type=1) to be skipped and counted, got %+v", report.Skipped)
+	// The decorative border (data-type="1", a plain line) is a purely
+	// decorative annotation (ClassLine), not skipped.
+	if len(report.Skipped) != 0 {
+		t.Errorf("report.Skipped = %+v, want none", report.Skipped)
+	}
+	var line Element
+	for _, e := range d.Elements {
+		if e.Class == ClassLine {
+			line = e
+		}
+	}
+	if line.ID == 0 {
+		t.Fatalf("no line in %+v", d.Elements)
+	}
+	if len(line.Points) != 2 || line.Points[0] != (Point{X: 0, Y: 0}) || line.Points[1] != (Point{X: 5, Y: 0}) {
+		t.Errorf("line.Points = %+v, want [(0,0) (5,0)]", line.Points)
+	}
+	if line.Stroke != "black" || line.StrokeWidth != 1 {
+		t.Errorf("line stroke/width = %q/%v, want black/1", line.Stroke, line.StrokeWidth)
 	}
 }
 

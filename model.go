@@ -266,6 +266,42 @@ const (
 	// identical regardless — so Properties hides the field entirely, the
 	// same treatment ClassLamp's own equally-inert Orientation gets.
 	ClassPostPole Class = "PostPole"
+	// ClassLine (shape 1, "Линия"/Line) is a purely decorative generic
+	// line — not real electrical equipment (no Ports/Voltage/State, never
+	// a connectElements/routing endpoint, same status as ClassRectangle).
+	// Its geometry is an arbitrary multi-vertex Points polyline, the same
+	// convention ClassBusBarSection/ClassRoad already use. Reuses Stroke/
+	// StrokeWidth (both genuinely vary per real instance — black/gray/
+	// white/red/yellow/hex colors, widths 1-10), with no Fill of its own
+	// (an open line, like Arrow/Road). Unlike Road, the real source never
+	// resolves its own color from anything voltage-like even loosely — it
+	// comes purely from a line-style table — so there's no ambiguity
+	// there. LineStyle (reusing Connector's own ConnectorLineStyle type,
+	// not a dedicated one — same solid/dashed/dashDot choice, just
+	// resolved through its own dash values, see writeLine) captures the
+	// real source's own dashed/dash-dot line styles, confirmed genuinely
+	// used in ~10% of real corpus instances found (its own third value,
+	// LineStyleDotted, has no real source counterpart for this shape and
+	// is never produced by Extract, only reachable by hand-editing).
+	ClassLine Class = "Line"
+	// ClassPowerflowIndicator (shape 320001, "Направление перетока"/
+	// Powerflow direction) is a purely decorative annotation glyph — not
+	// real electrical equipment (no Ports/Voltage, never a connectElements/
+	// routing endpoint, same non-electrical status as ClassRectangle) — a
+	// single bold arrow character drawn at its own anchor, rotated by
+	// Orient the same generic way every other rotate-based shape is. State
+	// selects which glyph: nil/0 draws "→", any other value draws "←"
+	// (matching the real source's own `FState != "0"` check) — a plain
+	// two-way toggle, not a switching-device-style legend. Reuses TextColor
+	// (Button's own PropertyText color field) for the glyph's own fill —
+	// real corpus shows this genuinely varying per instance (skyblue,
+	// #C8A2C8, ...), resolved from the real source's own Color1, not from
+	// any VoltageClass. Font size is not modeled per instance: real corpus
+	// shows it varying only *between* diagrams (26 in one file, 18 in
+	// another), consistent with the real source's own diagram-wide Scale
+	// factor rather than a genuine per-instance property, so
+	// writePowerflowIndicator draws it at one fixed size.
+	ClassPowerflowIndicator Class = "PowerflowIndicator"
 )
 
 // Element is one placed piece of equipment.
@@ -303,7 +339,10 @@ type Element struct {
 	// editor-side property a user can toggle after placement.
 	Mirror bool `xml:"mirror,attr,omitempty" json:"mirror,omitempty"`
 	// State carries an element's status (e.g. breaker open/closed), when
-	// one applies to this class.
+	// one applies to this class. Also used by PowerflowIndicator (shape
+	// 320001) for its own two-way arrow direction: nil/0 draws "→", any
+	// other value draws "←" — not a real switching status, but the same
+	// nil-defaults-to-0 convention.
 	State *int `xml:"state,attr,omitempty" json:"state,omitempty"`
 	// Position carries a withdrawable device's own racking position
 	// (Service/Normal/Test — see config.Config's PositionStates), a status
@@ -356,23 +395,24 @@ type Element struct {
 	// reuses this same "none" default too, even though real corpus shows
 	// both a filled and unfilled marker are common.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
-	// Stroke is a Rectangle's/Circle's own border color, an Arrow's/Road's
-	// own line color, a Button's own box border color, or a PostPole's own
-	// marker border color — same free-text convention as Fill. Empty falls
-	// back to a plain visible color the same way an unset Lamp color does
-	// (PostPole's own unset fallback is "gray", the real corpus's own
-	// dominant color, rather than Rectangle/Arrow/Button's own "white").
+	// Stroke is a Rectangle's/Circle's own border color, an Arrow's/Road's/
+	// Line's own line color, a Button's own box border color, or a
+	// PostPole's own marker border color — same free-text convention as
+	// Fill. Empty falls back to a plain visible color the same way an
+	// unset Lamp color does (PostPole's own unset fallback is "gray", the
+	// real corpus's own dominant color, rather than Rectangle/Arrow/
+	// Button/Line's own "white"/"black" — see writeLine for Line's own).
 	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
 	// StrokeWidth is a Rectangle's/Circle's own border thickness, an
-	// Arrow's/Road's own line thickness, or a Button's own box border
-	// thickness, in the same local/diagram units every other shape's fixed
-	// stroke-width:1 is — unlike those, meaningfully different per instance
-	// the way Radius is. 0 (unset) means the real xsde2svg default of 1 for
-	// every one of these except Road, whose own writeRoad instead falls
-	// back to a much thicker thumbnail width — a real instance is never
-	// actually drawn at width 1 (real corpus shows 8-12), so this editor's
-	// own default reflects a road's real visual weight rather than that
-	// generic fallback.
+	// Arrow's/Road's/Line's own line thickness, or a Button's own box
+	// border thickness, in the same local/diagram units every other
+	// shape's fixed stroke-width:1 is — unlike those, meaningfully
+	// different per instance the way Radius is. 0 (unset) means the real
+	// xsde2svg default of 1 for every one of these except Road, whose own
+	// writeRoad instead falls back to a much thicker thumbnail width — a
+	// real instance is never actually drawn at width 1 (real corpus shows
+	// 8-12), so this editor's own default reflects a road's real visual
+	// weight rather than that generic fallback.
 	StrokeWidth float64 `xml:"strokeWidth,attr,omitempty" json:"strokeWidth,omitempty"`
 	// DoubleHeaded draws an Arrow's (shape 2) own open chevron arrowhead
 	// at both Points, not just the second one — matching the real
@@ -383,6 +423,19 @@ type Element struct {
 	// "sqware" value (see ClassPostPole's own doc comment). Unused by
 	// every other class.
 	Square bool `xml:"square,attr,omitempty" json:"square,omitempty"`
+	// LineStyle is a Line's (shape 1) own dash pattern — reuses
+	// Connector's own ConnectorLineStyle type (the same solid/dashed/
+	// dashDot choice), but resolved through writeLine's own dash values,
+	// distinct from a KindCableLine connector's own (see
+	// resolveCableLineDash) — the two real xsde2svg sources use different
+	// literal stroke-dasharray numbers for the "same" named styles. Empty
+	// means solid, matching the real source's own default (unlike
+	// Connector.LineStyle, whose own empty value defaults to dashed for
+	// historical reasons specific to that field). LineStyleDotted has no
+	// real source counterpart for this shape, so Extract never produces
+	// it — included only because the type is shared, not because a real
+	// instance can carry it.
+	LineStyle ConnectorLineStyle `xml:"lineStyle,attr,omitempty" json:"lineStyle,omitempty"`
 	// NType selects between PackageSubstation's (shape 385) own two real
 	// appearance variants, matching the real source's own Tech.NType field
 	// exactly (recovered via xsde2svg's own element_385.go, whose data
@@ -417,7 +470,12 @@ type Element struct {
 	// 386/FPI's fixed white overlay text, real corpus shows this genuinely
 	// varying per instance (plain white text on a dark box, or dark text
 	// on a light box). Empty falls back to white, the more common real
-	// case. Unused by every other class.
+	// case. Also used by PowerflowIndicator (320001) for its own arrow
+	// glyph's fill color (the real source's own Color1) — empty falls back
+	// to black there instead, matching Line's own default rather than
+	// Button's, since a real instance is drawn directly on the canvas
+	// background rather than inside its own filled box. Unused by every
+	// other class.
 	TextColor string `xml:"textColor,attr,omitempty" json:"textColor,omitempty"`
 	// Bold draws a Button's (113) own PropertyText in bold — matches the
 	// real source's own ParamText.FontStyle containing "BOLD" — real
@@ -426,10 +484,11 @@ type Element struct {
 	Bold bool `xml:"bold,attr,omitempty" json:"bold,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
-	// Points holds a BusBarSection's (shape 24) or Road's (shape 335) own
-	// drawn geometry (its two or more vertices, in drawn order — a Road can
-	// genuinely bend through several, unlike the fixed-two-point shapes
-	// below), a Rectangle's (shape 3), Circle's (shape 4), or Button's
+	// Points holds a BusBarSection's (shape 24), Road's (shape 335), or
+	// Line's (shape 1) own drawn geometry (its two or more vertices, in
+	// drawn order — a Road/Line can genuinely bend through several, unlike
+	// the fixed-two-point shapes below), a Rectangle's (shape 3), Circle's
+	// (shape 4), or Button's
 	// (shape 113) own two opposite corners of its own bounding box
 	// (order-independent — Render normalizes them into a proper
 	// top-left/width/height, or center/rx/ry for a Circle, the same way the
@@ -752,6 +811,18 @@ func Load(r io.Reader) (*Diagram, error) {
 	}
 	for i, c := range d.Connectors {
 		if c.Kind == kindObjectLinkLegacy {
+			d.Connectors[i].Kind = KindBusWork
+		}
+		// A real data-type="21" connector (Ошиновка/Buswork) was, until
+		// this bug was fixed, misread by Extract's own connectorKindByType
+		// as KindBusbarWire instead of KindBusWork (KindBusbarWire's own
+		// code "21" belonged to KindBusWork all along — see that map's own
+		// doc comment). The frontend itself never creates a KindBusbarWire
+		// connector (removed as a palette choice, no rendering distinction
+		// of its own — see wireKindIcon.ts), so every one on disk is this
+		// same bug's own artifact, not real data, and is rewritten here the
+		// same way kindObjectLinkLegacy already is above.
+		if c.Kind == KindBusbarWire {
 			d.Connectors[i].Kind = KindBusWork
 		}
 	}
