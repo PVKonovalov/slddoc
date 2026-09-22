@@ -110,6 +110,100 @@ func TestExtract_EndToEnd(t *testing.T) {
 	}
 }
 
+// testDigitalDeviceBackgroundSVG matches real xsde2svg output (element134):
+// a bare, untyped, id-less <rect> immediately preceding a data-type="134"
+// <text> is that reading's own colored background — see
+// parseDigitalDeviceBackgroundRect's own doc comment for why it's recovered
+// as a standalone Rectangle rather than a field on DigitalDevice itself. The
+// second reading has no preceding rect at all (an older export, or simply
+// one instance among many not carrying one), the third is preceded by an
+// ordinary real Rectangle (its own id) that must NOT be swept in as a
+// background just because it happens to sit next to an unrelated reading,
+// and the fourth has its own second background rect — checked to make sure
+// two synthesized rects get distinct ids, not colliding with each other.
+const testDigitalDeviceBackgroundSVG = `<?xml version="1.0"?>
+<svg width="600" height="600" style='stroke-width: 0px; background-color: #12161d;' xmlns="http://www.w3.org/2000/svg">
+<rect x="570" y="630" width="60" height="30" style="fill:#FFFFCC;stroke:#777777;stroke-width:1" />
+<text x="620" y="647" style="fill:#333333;text-anchor:end;dominant-baseline:middle;font-size:19px;font-family:Arial " data-type="134" id="148793466" data-name="Ia" data-unit="" data-voltage="#777777" >0 </text>
+<text x="620" y="677" style="fill:#333333;text-anchor:end;dominant-baseline:middle;font-size:19px;font-family:Arial " data-type="134" id="148793467" data-name="Ib" data-unit="" >0 </text>
+<rect x="10" y="10" width="40" height="20" style="fill:red;stroke:black;stroke-width:1" data-type="3" id="500" />
+<text x="60" y="27" style="fill:#333333;text-anchor:end;dominant-baseline:middle;font-size:19px;font-family:Arial " data-type="134" id="501" data-name="Ic" data-unit="" >0 </text>
+<rect x="510" y="660" width="60" height="30" style="fill:#99FF99;stroke:#777777;stroke-width:1" />
+<text x="560" y="677" style="fill:#333333;text-anchor:end;dominant-baseline:middle;font-size:19px;font-family:Arial " data-type="134" id="148793468" data-name="Id" data-unit="" >0 </text>
+</svg>
+`
+
+func TestExtract_DigitalDeviceBackgroundRect(t *testing.T) {
+	d, report, err := Extract([]byte(testDigitalDeviceBackgroundSVG), "test.svg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.DigitalDevices != 4 || len(d.DigitalDevices) != 4 {
+		t.Fatalf("report.DigitalDevices = %d, len(d.DigitalDevices) = %d, want 4 each", report.DigitalDevices, len(d.DigitalDevices))
+	}
+
+	var rects []Element
+	for _, e := range d.Elements {
+		if e.Class == ClassRectangle {
+			rects = append(rects, e)
+		}
+	}
+	// Exactly three Rectangles: the real shape-3 one (id 500, untouched) and
+	// the two synthesized from Ia's/Id's own background rects. The second
+	// reading (no preceding rect) and third (preceded by a real, unrelated
+	// Rectangle) must not produce or reuse a phantom background.
+	if len(rects) != 3 {
+		t.Fatalf("elements with ClassRectangle = %+v, want 3", rects)
+	}
+
+	var real Element
+	var synthesized []Element
+	for _, r := range rects {
+		if r.ID == 500 {
+			real = r
+		} else {
+			synthesized = append(synthesized, r)
+		}
+	}
+	if real.ID == 0 || real.Fill != "red" {
+		t.Errorf("real Rectangle (id 500) should extract normally, got %+v", rects)
+	}
+	if len(synthesized) != 2 {
+		t.Fatalf("synthesized background Rectangles = %+v, want 2", synthesized)
+	}
+	// Each must be a real, non-zero id that collides with nothing else
+	// already in the document (id 0 doubles as "unset" elsewhere in this
+	// model) and, critically, not with EACH OTHER either — the highest real
+	// id in this fixture is 148793468 (the last reading, Id), so both
+	// synthesized ids must land above that, and must differ from each other.
+	maxRealID := 148793468
+	if synthesized[0].ID <= maxRealID || synthesized[1].ID <= maxRealID {
+		t.Errorf("synthesized Rectangles should get ids above every real id in the document (>%d), got %d and %d", maxRealID, synthesized[0].ID, synthesized[1].ID)
+	}
+	if synthesized[0].ID == synthesized[1].ID {
+		t.Errorf("two synthesized background Rectangles must not collide on the same id, both got %d", synthesized[0].ID)
+	}
+	wantLastID := synthesized[0].ID
+	if synthesized[1].ID > wantLastID {
+		wantLastID = synthesized[1].ID
+	}
+	if d.LastID != wantLastID {
+		t.Errorf("d.LastID = %d, want %d (the highest synthesized id)", d.LastID, wantLastID)
+	}
+	// synthesized[0]/[1] follow document order: Ia's rect, then Id's.
+	if synthesized[0].Fill != "#FFFFCC" || synthesized[0].Stroke != "#777777" || synthesized[0].StrokeWidth != 1 {
+		t.Errorf("Ia's synthesized background Rectangle fill/stroke/width = %q/%q/%v, want #FFFFCC/#777777/1", synthesized[0].Fill, synthesized[0].Stroke, synthesized[0].StrokeWidth)
+	}
+	if synthesized[1].Fill != "#99FF99" {
+		t.Errorf("Id's synthesized background Rectangle fill = %q, want #99FF99", synthesized[1].Fill)
+	}
+	wantPoints := []Point{{X: 570, Y: 630}, {X: 630, Y: 660}}
+	if len(synthesized[0].Points) != 2 || synthesized[0].Points[0] != wantPoints[0] || synthesized[0].Points[1] != wantPoints[1] {
+		t.Errorf("Ia's synthesized background Rectangle points = %+v, want %+v", synthesized[0].Points, wantPoints)
+	}
+}
+
 // testAutotransformerSVG is real xsde2svg output (xsde2svg/examples/test/svg/
 // Test_47_AutoTransformer2-1.svg, its own id="1" instance) — a 2-real-winding
 // autotransformer whose own tap arc+stub is drawn before its first <circle>.

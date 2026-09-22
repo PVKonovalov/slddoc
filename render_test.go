@@ -897,3 +897,237 @@ func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
 		t.Errorf("spoke tip on-screen = (%.4f,%.4f), want (93,111)", onScreen.X, onScreen.Y)
 	}
 }
+
+func TestRenderFragments_OnlyRendersRequestedIds(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Diagram{
+		Width: 100, Height: 100,
+		VoltageClasses: []VoltageClass{{ID: 9, Name: "10kV", Color: "#326400"}},
+		Elements: []Element{
+			{ID: 1, Class: ClassBreaker, Shape: "41", Voltage: 9, X: 1, Y: 1},
+			{ID: 2, Class: ClassBreaker, Shape: "41", Voltage: 9, X: 2, Y: 2},
+		},
+		Connectors: []Connector{
+			{ID: 3, Voltage: 9, Points: []Point{{X: 0, Y: 0}, {X: 10, Y: 0}}},
+		},
+		Labels:         []Label{{ID: 4, X: 5, Y: 5, Size: 10, Text: "Note"}},
+		DigitalDevices: []DigitalDevice{{ID: 5, X: 6, Y: 6, Size: 10, Name: "R", Value: "1", Unit: "MW"}},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1, 3, 4, 5}, Interactive, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frags) != 4 {
+		t.Fatalf("frags = %+v, want exactly the 4 requested ids", frags)
+	}
+	for _, id := range []int{1, 3, 4, 5} {
+		if _, ok := frags[id]; !ok {
+			t.Errorf("missing fragment for requested id %d: %+v", id, frags)
+		}
+	}
+	if _, ok := frags[2]; ok {
+		t.Errorf("element 2 wasn't requested, should not be rendered: %+v", frags)
+	}
+	if !strings.Contains(frags[1], `id="1"`) {
+		t.Errorf("element fragment should carry its own id: %q", frags[1])
+	}
+	if !strings.Contains(frags[1], "stroke:#326400") {
+		t.Errorf("element fragment should still resolve its own voltage color from the diagram's VoltageClasses, even though id 9 wasn't itself requested: %q", frags[1])
+	}
+	if !strings.Contains(frags[3], `id="3" data-editor-kind="connector"`) {
+		t.Errorf("connector fragment should carry its own id and data-editor-kind: %q", frags[3])
+	}
+	if !strings.Contains(frags[4], `data-editor-kind="label"`) {
+		t.Errorf("label fragment should carry its own data-editor-kind: %q", frags[4])
+	}
+	if !strings.Contains(frags[5], "R") {
+		t.Errorf("digital device fragment should carry its own name: %q", frags[5])
+	}
+}
+
+func TestRenderFragments_SkipsIdsNoLongerInTheDiagram(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 10, Height: 10,
+		Elements: []Element{{ID: 1, Class: ClassBusBarSection, Points: []Point{{X: 0, Y: 0}, {X: 1, Y: 0}}}},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1, 999}, Interactive, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frags) != 1 {
+		t.Errorf("frags = %+v, want only id 1 — 999 names nothing in d and should be silently skipped, not an error", frags)
+	}
+	if _, ok := frags[1]; !ok {
+		t.Errorf("expected a fragment for id 1: %+v", frags)
+	}
+}
+
+func TestRenderFragments_ReportsMissingShapeWithoutDroppingOtherFragments(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(`<symbols></symbols>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Diagram{
+		Width: 10, Height: 10,
+		Elements: []Element{
+			{ID: 1, Class: ClassBreaker, Shape: "41", X: 1, Y: 1},
+			{ID: 2, Class: ClassBusBarSection, Points: []Point{{X: 0, Y: 0}, {X: 1, Y: 0}}},
+		},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1, 2}, Static, "", nil)
+	if err == nil {
+		t.Fatal("expected an error for the missing shape (41)")
+	}
+	if !strings.Contains(err.Error(), "41") {
+		t.Errorf("error should name the missing shape: %v", err)
+	}
+	if _, ok := frags[2]; !ok {
+		t.Errorf("id 2 (busbar, no template needed) should still have been rendered despite id 1's own missing shape: %+v", frags)
+	}
+}
+
+func TestRenderFragments_NoTypeCommentsOrZOrdering(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"7": `<circle cx="0" cy="0" r="{radius}" style="fill:{junctionFill};stroke:{color}"{fillAttr} />`})
+	d := &Diagram{
+		Width: 10, Height: 10,
+		Elements: []Element{{ID: 1, Class: ClassJunctionPoint, Shape: "7", X: 1, Y: 1, Radius: 3}},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1}, Interactive, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JunctionPoint is one of elementZOrder's own elevated classes — Render
+	// draws it in a separate, later pass, but a fragment is just its own
+	// markup with no z-order concept at all.
+	if strings.Contains(frags[1], "<!--") {
+		t.Errorf("a fragment should carry no type-comment header, unlike a full Render: %q", frags[1])
+	}
+}
+
+func TestRender_Table(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{
+			ID: 1, Class: ClassTable, Shape: "312", Name: "Note",
+			Points:       []Point{{X: 10, Y: 10}, {X: 60, Y: 40}},
+			Fill:         "gray",
+			Stroke:       "#952896",
+			StrokeWidth:  2,
+			LineStyle:    LineStyleDashed,
+			PropertyText: "Hello",
+			TextColor:    "yellow",
+			Orient:       90,
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `<g id="1" data-type="312" data-name="Note" data-voltage="#952896" data-editor-kind="element">`) {
+		t.Errorf("table should carry its own id/data-type/data-name in a wrapping <g>: %s", out)
+	}
+	if !strings.Contains(out, `<rect x="10" y="10" width="50" height="30" style="fill:gray;stroke:#952896;stroke-dasharray: 6,5;stroke-width:2" />`) {
+		t.Errorf("table's own rect missing expected geometry/style: %s", out)
+	}
+	if !strings.Contains(out, `transform="rotate(90,35,25)"`) {
+		t.Errorf("table's own label should rotate around the box's own center when Orient is set: %s", out)
+	}
+	if !strings.Contains(out, `>Hello</text>`) || !strings.Contains(out, "fill:yellow") {
+		t.Errorf("table's own label text/color missing: %s", out)
+	}
+}
+
+func TestRender_TableTooFewPointsDrawsNothing(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 10, Height: 10,
+		Elements: []Element{{ID: 1, Class: ClassTable, Shape: "312", Points: []Point{{X: 0, Y: 0}}}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "<rect") {
+		t.Errorf("a table with fewer than 2 points should draw nothing: %s", buf.String())
+	}
+}
+
+func TestRender_Table2(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 200, Height: 200,
+		Elements: []Element{{
+			ID: 1, Class: ClassTable2, Shape: "313",
+			X: 100, Y: 200,
+			RowHeights:   []float64{20, 20},
+			ColumnWidths: []float64{60, 50},
+			Stroke:       "#952896",
+			StrokeWidth:  1,
+			Fill:         "gray",
+			Cells: []TableCell{
+				{Row: 0, Col: 0, Text: "A"},
+				{Row: 0, Col: 1, Text: "B", Fill: "red", TextColor: "white"},
+				{Row: 1, Col: 0},
+				{Row: 1, Col: 1, Text: "D"},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `<g id="1" data-type="313" data-name="" data-voltage="#952896" data-editor-kind="element">`) {
+		t.Errorf("table2 should carry its own id/data-type in a wrapping <g>: %s", out)
+	}
+	// Cell (0,0): top-left at the table's own X,Y anchor.
+	if !strings.Contains(out, `<path d="M 100 200 h 60 v 20 h -60 v -20 " style="fill:gray;stroke:#952896;stroke-width:1" />`) {
+		t.Errorf("cell (0,0) missing expected geometry/style (own default fill): %s", out)
+	}
+	// Cell (0,1): starts at column boundary 100+60=160.
+	if !strings.Contains(out, `<path d="M 160 200 h 50 v 20 h -50 v -20 " style="fill:red;stroke:#952896;stroke-width:1" />`) {
+		t.Errorf("cell (0,1) missing expected geometry/own fill override: %s", out)
+	}
+	if !strings.Contains(out, `fill:white`) {
+		t.Errorf("cell (0,1)'s own text color override missing: %s", out)
+	}
+	// Cell (1,0): starts at row boundary 200+20=220, no text.
+	if !strings.Contains(out, `<path d="M 100 220 h 60 v 20 h -60 v -20 " style="fill:gray;stroke:#952896;stroke-width:1" />`) {
+		t.Errorf("cell (1,0) (blank) still missing its own geometry: %s", out)
+	}
+	if strings.Count(out, "<path") != 4 {
+		t.Errorf("expected exactly 4 cell paths, got: %s", out)
+	}
+	if strings.Count(out, "<text") != 3 {
+		t.Errorf("expected exactly 3 cell labels (A, B, D — cell (1,0) is blank): %s", out)
+	}
+}
+
+func TestRender_Table2NoGeometryDrawsNothing(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 10, Height: 10,
+		Elements: []Element{{ID: 1, Class: ClassTable2, Shape: "313", X: 0, Y: 0}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "<path") {
+		t.Errorf("a table2 with no RowHeights/ColumnWidths should draw nothing: %s", buf.String())
+	}
+}

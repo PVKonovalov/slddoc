@@ -176,6 +176,53 @@ func parseDigitalDevice(n *rawNode) (DigitalDevice, bool) {
 	}, true
 }
 
+// parseDigitalDeviceBackgroundRect reads a data-type="134" node's own
+// immediately-preceding sibling <rect> (see Extract's own call site) as a
+// standalone Rectangle (shape 3) element — the real xsde2svg source
+// (element134) always draws this rect as its own instance's colored
+// background, but as a bare, untyped, id-less sibling with no wrapping <g>
+// tying it to the reading's own <text> (deliberately left that way: shape
+// 134 is live-animated by data-type="134" in the real SCADA system, and
+// wrapping it in a <g> the way shapes 7/106/385/386/312/313 were fixed
+// would risk breaking that). Extract can't tell this rect apart from an
+// unrelated decorative Rectangle by data-type alone (it has none), so it's
+// recovered here purely by sibling position — same field extraction as
+// parseRectangle, but without requiring a real id attribute, since this one
+// never has one; its returned ID is always 0 (unset) — Extract's own call
+// site is what assigns the real, collision-free one (see maxNumericID),
+// since only it knows every id already used elsewhere in the document.
+// Known limitation: this is a positional heuristic, not a real link — the
+// resulting Rectangle is a fully independent element in the editor (moving
+// or deleting the digital device doesn't move or delete it), and if some
+// unrelated decorative Rectangle ever happened to sit immediately before a
+// data-type="134" node in the source with no data-type/id of its own
+// either, it would be swept in here too.
+func parseDigitalDeviceBackgroundRect(n *rawNode) (Element, bool) {
+	if n == nil || n.Tag != "rect" || n.attr("data-type") != "" || n.attr("id") != "" {
+		return Element{}, false
+	}
+	x, errX := strconv.ParseFloat(n.attr("x"), 64)
+	y, errY := strconv.ParseFloat(n.attr("y"), 64)
+	w, errW := strconv.ParseFloat(n.attr("width"), 64)
+	h, errH := strconv.ParseFloat(n.attr("height"), 64)
+	if errX != nil || errY != nil || errW != nil || errH != nil {
+		return Element{}, false
+	}
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		Class:       ClassRectangle,
+		Shape:       "3",
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           x + w/2,
+		Y:           y + h/2,
+		Fill:        styleProp(style, "fill"),
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      []Point{{X: x, Y: y}, {X: x + w, Y: y + h}},
+	}, true
+}
+
 // matchLabels resolves each label's owning Element by exact data-name
 // match. A name shared by more than one element (or by none) is left
 // unresolved: the label still renders standalone, just without a For link a

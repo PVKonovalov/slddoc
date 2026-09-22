@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -1349,6 +1350,259 @@ func parseButton(n *rawNode) (Element, error) {
 		el.TextColor = styleProp(textStyle, "fill")
 		el.Bold = strings.Contains(textStyle, "font-weight: bold") || strings.Contains(textStyle, "font-weight:bold")
 	}
+	return el, nil
+}
+
+// tableDashStyles is the reverse of render.go's own tableDashPatterns.
+var tableDashStyles = map[string]ConnectorLineStyle{
+	"6,5":         LineStyleDashed,
+	"70 20 25 20": LineStyleDashDot,
+}
+
+// parseTable handles shape 312 (Таблица/Table): a purely decorative
+// annotation box (see ClassTable's own doc comment) — no Ports are ever
+// created for one. A real instance is a <g id data-type="312"> (this
+// project's own addition to the real source, see ClassTable's own doc
+// comment for why) wrapping a bare <rect x y width height style> and,
+// when it carries a label, a <text style transform?>...</text> sibling
+// (see writeTable's own doc comment for the exact markup) — the box's own
+// two Points are its top-left/bottom-right corners, the same convention
+// parseButton/parseRectangle already use. LineStyle is recovered from the
+// rect's own style stroke-dasharray (see tableDashStyles); Orient from
+// the text's own rotate() transform, when it carries one — only present
+// when non-zero, the same conditional parsePole already handles for a
+// different shape's own transform.
+func parseTable(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	rects := n.childrenTagged("rect")
+	if len(rects) == 0 {
+		rects = n.descendants("rect")
+	}
+	if len(rects) == 0 {
+		return Element{}, fmt.Errorf("slddoc: table %s: no rect child", n.attr("id"))
+	}
+	rn := rects[0]
+	x, errX := strconv.ParseFloat(rn.attr("x"), 64)
+	y, errY := strconv.ParseFloat(rn.attr("y"), 64)
+	w, errW := strconv.ParseFloat(rn.attr("width"), 64)
+	h, errH := strconv.ParseFloat(rn.attr("height"), 64)
+	if errX != nil || errY != nil || errW != nil || errH != nil {
+		return Element{}, fmt.Errorf("slddoc: table %s: invalid x/y/width/height", n.attr("id"))
+	}
+	rectStyle := rn.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(rectStyle, "stroke-width"), 64)
+
+	el := Element{
+		ID:          id,
+		Class:       ClassTable,
+		Shape:       "312",
+		Name:        n.attr("data-name"),
+		Layer:       resolveLayer(n.attr("data-layer")),
+		Fill:        styleProp(rectStyle, "fill"),
+		Stroke:      styleProp(rectStyle, "stroke"),
+		StrokeWidth: strokeWidth,
+		LineStyle:   tableDashStyles[styleProp(rectStyle, "stroke-dasharray")],
+		Points:      []Point{{X: x, Y: y}, {X: x + w, Y: y + h}},
+	}
+
+	if t := firstTextChild(n); t != nil {
+		el.PropertyText = t.Text
+		el.TextColor = styleProp(t.attr("style"), "fill")
+		if angle, _, ok := parseRotate(t.attr("transform")); ok {
+			el.Orient = angle
+		}
+	}
+	return el, nil
+}
+
+// table2DashStyles is the reverse of render.go's own table2DashPatterns.
+var table2DashStyles = map[string]ConnectorLineStyle{
+	"3,2": LineStyleDashed,
+}
+
+// table2CellPathRe matches a Table2 (313) cell's own <path> d attribute —
+// internal/modus/element_313.go's own "M x y h w v h h -w v -h " format
+// (writeTable2 emits the identical shape) — capturing the cell's own
+// top-left x,y and width,height; the trailing "h -w v -h" closing the
+// rectangle back to its own start carries no extra information.
+var table2CellPathRe = regexp.MustCompile(`^M\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s+h\s+(-?[0-9.]+)\s+v\s+(-?[0-9.]+)`)
+
+// tableBoundaries collects the distinct, sorted set of a Table2's own row
+// or column edges from every cell's own start/end coordinate along one
+// axis (start[i], start[i]+size[i] for each cell) — a small tolerance
+// (0.5 unit) merges two edges floating-point/rounding noise would
+// otherwise keep narrowly distinct, since a real Table2's own coordinates
+// are always integers in practice.
+func tableBoundaries(starts, sizes []float64) []float64 {
+	edges := make([]float64, 0, len(starts)*2)
+	for i, s := range starts {
+		edges = append(edges, s, s+sizes[i])
+	}
+	sort.Float64s(edges)
+	out := make([]float64, 0, len(edges))
+	for _, e := range edges {
+		if len(out) == 0 || e-out[len(out)-1] > 0.5 {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// boundaryIndex finds v's own index in a sorted boundaries slice (see
+// tableBoundaries), within the same small tolerance — the row/column a
+// cell starting at v belongs to, or -1 if none matches closely enough.
+func boundaryIndex(boundaries []float64, v float64) int {
+	for i, b := range boundaries {
+		if math.Abs(b-v) <= 0.5 {
+			return i
+		}
+	}
+	return -1
+}
+
+// mostCommon returns the most frequently occurring string in vals (ties
+// broken by whichever is seen first) — used to recover a Table2's own
+// table-wide default Fill from its own cells' real rendered fill colors,
+// since a real cell's own style always carries an already-resolved color
+// whether or not that cell had a real per-cell override of its own (see
+// ClassTable2's own doc comment on TableCell.Fill) — the majority value is
+// the table's own real default in the overwhelmingly common case of a
+// uniformly-colored table, with any genuinely differing cell still
+// recovered exactly via its own TableCell.Fill.
+func mostCommon(vals []string) string {
+	counts := map[string]int{}
+	best, bestCount := "", 0
+	for _, v := range vals {
+		counts[v]++
+		if counts[v] > bestCount {
+			best, bestCount = v, counts[v]
+		}
+	}
+	return best
+}
+
+// parseTable2 handles shape 313 (Таблица 2/Table 2): a purely decorative
+// multi-row/multi-column grid (see ClassTable2's own doc comment for the
+// full model, and what it deliberately doesn't recover — cell merging,
+// multi-paragraph cell text) — no Ports are ever created for one. A real
+// instance is a <g id data-type="313"> (this project's own addition to
+// the real source, see ClassTable2's own doc comment for why) wrapping one
+// bare <path style> per real cell (table2CellPathRe's own d format) and,
+// for a cell that carries one, an immediately-following <text> sibling
+// (matching writeTable2's own document-order pairing exactly — real
+// xsde2svg emits Path then, only when that cell's own text is non-empty,
+// Textspan/Span/TextEnd right after it, the identical adjacency). Row/
+// column boundaries (and so each cell's own Row/Col) are reconstructed
+// purely from the cells' own real drawn geometry (tableBoundaries/
+// boundaryIndex) — there's no other structure to read them from, since a
+// real cell carries no row/col index of its own at all. Every real cell
+// found gets its own TableCell entry regardless of whether it carries
+// text or a Fill/TextColor override, so an entirely blank cell still
+// round-trips as a real (empty) grid position rather than silently
+// vanishing.
+func parseTable2(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+
+	type rawCell struct {
+		x, y, w, h float64
+		fill       string
+		text       string
+		textColor  string
+	}
+	var cells []rawCell
+	for i, child := range n.Children {
+		if child.Tag != "path" {
+			continue
+		}
+		m := table2CellPathRe.FindStringSubmatch(child.attr("d"))
+		if m == nil {
+			continue
+		}
+		x, _ := strconv.ParseFloat(m[1], 64)
+		y, _ := strconv.ParseFloat(m[2], 64)
+		w, _ := strconv.ParseFloat(m[3], 64)
+		h, _ := strconv.ParseFloat(m[4], 64)
+		c := rawCell{x: x, y: y, w: w, h: h, fill: styleProp(child.attr("style"), "fill")}
+		if i+1 < len(n.Children) && n.Children[i+1].Tag == "text" {
+			t := n.Children[i+1]
+			c.text = t.Text
+			c.textColor = styleProp(t.attr("style"), "fill")
+		}
+		cells = append(cells, c)
+	}
+	if len(cells) == 0 {
+		return Element{}, fmt.Errorf("slddoc: table2 %s: no cells found", n.attr("id"))
+	}
+
+	starts := make([]float64, len(cells))
+	sizes := make([]float64, len(cells))
+	for i, c := range cells {
+		starts[i], sizes[i] = c.x, c.w
+	}
+	colBounds := tableBoundaries(starts, sizes)
+	for i, c := range cells {
+		starts[i], sizes[i] = c.y, c.h
+	}
+	rowBounds := tableBoundaries(starts, sizes)
+
+	fills := make([]string, len(cells))
+	for i, c := range cells {
+		fills[i] = c.fill
+	}
+	defaultFill := mostCommon(fills)
+
+	el := Element{
+		ID:    id,
+		Class: ClassTable2,
+		Shape: "313",
+		Name:  n.attr("data-name"),
+		Layer: resolveLayer(n.attr("data-layer")),
+		X:     colBounds[0],
+		Y:     rowBounds[0],
+		Fill:  defaultFill,
+	}
+	for i := 1; i < len(colBounds); i++ {
+		el.ColumnWidths = append(el.ColumnWidths, colBounds[i]-colBounds[i-1])
+	}
+	for i := 1; i < len(rowBounds); i++ {
+		el.RowHeights = append(el.RowHeights, rowBounds[i]-rowBounds[i-1])
+	}
+
+	// A real cell's own style always carries the same stroke/stroke-width/
+	// dash regardless of position (the real source's own per-cell override
+	// of these is a corpus rarity not modeled — see ClassTable2's own doc
+	// comment), so the first cell found is representative of the whole
+	// table.
+	if firstPaths := n.childrenTagged("path"); len(firstPaths) > 0 {
+		style := firstPaths[0].attr("style")
+		strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+		el.Stroke = styleProp(style, "stroke")
+		el.StrokeWidth = strokeWidth
+		el.LineStyle = table2DashStyles[styleProp(style, "stroke-dasharray")]
+	}
+
+	for _, c := range cells {
+		row := boundaryIndex(rowBounds, c.y)
+		col := boundaryIndex(colBounds, c.x)
+		if row < 0 || col < 0 {
+			continue
+		}
+		cell := TableCell{Row: row, Col: col, Text: c.text}
+		if c.textColor != "" && c.textColor != "black" {
+			cell.TextColor = c.textColor
+		}
+		if c.fill != "" && c.fill != defaultFill {
+			cell.Fill = c.fill
+		}
+		el.Cells = append(el.Cells, cell)
+	}
+
 	return el, nil
 }
 

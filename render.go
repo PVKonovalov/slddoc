@@ -1,6 +1,7 @@
 package slddoc
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -227,6 +228,8 @@ var shapeName = map[string]string{
 	"292":    "Post-type pole",
 	"1":      "Line",
 	"320001": "Powerflow direction",
+	"312":    "Table",
+	"313":    "Table 2",
 }
 
 // connectorKindName gives the name Render annotates a run of same-Kind
@@ -329,10 +332,13 @@ var elementZOrder = map[Class]int{
 
 // renderElement writes one Element's symbol (or, for a BusBarSection, its
 // drawn polyline), recording its Shape in missing/seenMissing when lib has
-// no template for it. lastShape tracks the running type-comment header, the
-// same way across whichever pass of Render calls it.
-func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, lastShape *string, mode RenderMode) {
-	typeComment(w, shapeName, e.Shape, e.Shape, lastShape)
+// no template for it. Doesn't write its own type-comment header (unlike an
+// earlier version of this function) — that only makes sense in the context
+// of a full, ordered document, not a standalone fragment, so a caller that
+// wants one (Render, across both of its own element passes) writes it
+// itself just before calling this, the same split renderConnector's own
+// doc comment describes for a connector's.
+func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
 
 	var color string
 	if e.Class == ClassLamp {
@@ -499,6 +505,24 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		writePowerflowIndicator(w, e, mode)
 		return
 	}
+	if e.Class == ClassTable {
+		// Same reasoning as ClassButton just above — a decorative
+		// annotation whose own geometry varies per instance and isn't
+		// part of the electrical network, using its own Fill/Stroke/
+		// LineStyle instead of the color computed above, and always
+		// drawing its own centered PropertyText label the identical
+		// wrapping-<g> way Button's own does.
+		writeTable(w, e, mode)
+		return
+	}
+	if e.Class == ClassTable2 {
+		// A Table2's own geometry (RowHeights/ColumnWidths/Cells) is
+		// driven entirely by its own fields, not template substitution —
+		// bypasses the template lookup below the same way
+		// PowerTransformer's own Windings-driven geometry does.
+		writeTable2(w, e, mode)
+		return
+	}
 
 	tmpl, ok := lib.templates[e.Shape]
 	if !ok {
@@ -634,26 +658,15 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaul
 			elevated[z] = append(elevated[z], e)
 			continue
 		}
-		renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, &lastShape, mode)
+		typeComment(w, shapeName, e.Shape, e.Shape, &lastShape)
+		renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, mode)
 	}
 
 	var lastConnKind string
 	for _, c := range d.Connectors {
-		code, hasCode := connectorTypeCode[c.Kind]
+		code := connectorTypeCode[c.Kind]
 		typeComment(w, connectorKindName, string(c.Kind), code, &lastConnKind)
-		if c.Kind == KindOverheadLine || c.Kind == KindCableLine {
-			writeNamedLine(w, c, voltageColor[c.Voltage], code, mode)
-			continue
-		}
-		if c.Kind == KindLinkToObject {
-			writeObjectLink(w, c, voltageColor[c.Voltage], code, mode)
-			continue
-		}
-		dataAttrs := ""
-		if hasCode {
-			dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
-		}
-		writePolyline(w, c.ID, "connector", c.Points, voltageColor[c.Voltage], c.Dashed, 1, dataAttrs, mode)
+		renderConnector(w, c, voltageColor, mode)
 	}
 
 	tiers := make([]int, 0, len(elevated))
@@ -664,7 +677,8 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaul
 	for _, z := range tiers {
 		var lastTierShape string
 		for _, e := range elevated[z] {
-			renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, &lastTierShape, mode)
+			typeComment(w, shapeName, e.Shape, e.Shape, &lastTierShape)
+			renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, mode)
 		}
 	}
 
@@ -682,6 +696,123 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaul
 		return fmt.Errorf("slddoc: symbol library missing shape(s): %s", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// RenderFragments is Render's incremental-editing counterpart: instead of a
+// whole document, it renders only the requested ids' own markup — for a
+// caller that already has a live rendering of (an earlier version of) d and
+// only needs fresh markup for whatever actually changed since, rather than
+// regenerating and re-transferring the entire diagram on every edit (the
+// "big diagram, small edit" cost — see TODO.md's own "Reducing frontend/
+// backend traffic" section for the fuller rationale). It still runs the
+// same whole-diagram voltage/topology resolution pass Render does (an id's
+// own rendered color, e.g., can depend on a VoltageClass that isn't itself
+// one of the requested ids), but only writes markup for ids actually asked
+// for — every other Element/Connector/Label/DigitalDevice in d is resolved
+// against but never rendered, so this is still O(diagram size) to run, just
+// not O(diagram size) to transfer back.
+//
+// ids may name an Element, a Connector, a Label, or a DigitalDevice — this
+// schema's ids are one shared space across all four (see Diagram.LastID's
+// own doc comment, and diagramOps.IdSequence on the frontend), so a plain
+// int works as the lookup key regardless of which kind an id turns out to
+// be, without the caller having to say which in advance. An id present in
+// ids but no longer found in d at all (the caller's own record of
+// something it just deleted locally) is silently skipped, not an error —
+// the caller already knows it's gone and isn't asking this to confirm it;
+// the returned map simply won't have an entry for that id.
+//
+// Two things Render does that this deliberately doesn't: it never writes
+// per-shape/per-Kind type-comment headers (typeComment) — those only make
+// sense in the context of a full, ordered document grouping same-shape
+// runs together, not a handful of scattered, unrelated fragments — and it
+// ignores elementZOrder/z-order tiering entirely, since a fragment is
+// meant to replace one already-positioned DOM node in place (keeping
+// whatever position a prior full Render already gave it), not to be
+// inserted fresh into document order.
+func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode, defaultFPIText string, fpiStateColorLegend []StateColor, stateColorLegend ...StateColor) (map[int]string, error) {
+	voltageColor := map[int]string{}
+	for _, vc := range d.VoltageClasses {
+		voltageColor[vc.ID] = vc.Color
+	}
+	stateColors := newStateColorSet(stateColorLegend)
+	fpiColors := newStateColorSet(fpiStateColorLegend)
+
+	want := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+
+	fragments := make(map[int]string, len(ids))
+	var missing []string
+	seenMissing := map[string]bool{}
+
+	for _, e := range d.Elements {
+		if !want[e.ID] {
+			continue
+		}
+		var buf bytes.Buffer
+		renderElement(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, mode)
+		fragments[e.ID] = buf.String()
+	}
+
+	for _, c := range d.Connectors {
+		if !want[c.ID] {
+			continue
+		}
+		var buf bytes.Buffer
+		renderConnector(&buf, c, voltageColor, mode)
+		fragments[c.ID] = buf.String()
+	}
+
+	for _, l := range d.Labels {
+		if !want[l.ID] {
+			continue
+		}
+		var buf bytes.Buffer
+		writeLabel(&buf, l, mode)
+		fragments[l.ID] = buf.String()
+	}
+
+	for _, dd := range d.DigitalDevices {
+		if !want[dd.ID] {
+			continue
+		}
+		var buf bytes.Buffer
+		writeDigitalDevice(&buf, dd, mode)
+		fragments[dd.ID] = buf.String()
+	}
+
+	if len(missing) > 0 {
+		return fragments, fmt.Errorf("slddoc: symbol library missing shape(s): %s", strings.Join(missing, ", "))
+	}
+	return fragments, nil
+}
+
+// renderConnector writes one Connector's own rendered markup — the
+// Kind-based dispatch (a named `<g>` for OverheadLine/CableLine, an object
+// link's own arrow-plus-stub, or a plain `<polyline>` for everything else)
+// Render's own connectors loop used to inline directly; factored out so
+// RenderFragments can render a single connector's own fragment without
+// duplicating that branching. Does not write the connectors loop's own
+// typeComment — that only makes sense in the context of a full, ordered
+// document, not a standalone fragment, so callers that want one (Render)
+// still write it themselves just before calling this.
+func renderConnector(w io.Writer, c Connector, voltageColor map[int]string, mode RenderMode) {
+	code := connectorTypeCode[c.Kind]
+	if c.Kind == KindOverheadLine || c.Kind == KindCableLine {
+		writeNamedLine(w, c, voltageColor[c.Voltage], code, mode)
+		return
+	}
+	if c.Kind == KindLinkToObject {
+		writeObjectLink(w, c, voltageColor[c.Voltage], code, mode)
+		return
+	}
+	dataAttrs := ""
+	if code != "" {
+		dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
+	}
+	writePolyline(w, c.ID, "connector", c.Points, voltageColor[c.Voltage], c.Dashed, 1, dataAttrs, mode)
 }
 
 // writePolyline draws a busbar's or connector's geometry as a single flat
@@ -874,6 +1005,190 @@ func writeButton(w io.Writer, e Element, mode RenderMode) {
 	if e.PropertyText != "" {
 		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial%s", textColor, buttonFontSize, weight)
 		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", fmtNum(x+width/2), fmtNum(y+height/2), esc(style), esc(e.PropertyText))
+	}
+	fmt.Fprint(w, "</g>\n")
+}
+
+// tableFontSize is a Table's (312) own PropertyText size — fixed, not
+// per-instance, the same simplification buttonFontSize already makes (the
+// real source's own default computes to ~13.6px; a genuinely varying
+// per-instance ParamText.Font.Size is not modeled).
+const tableFontSize = 14
+
+// tableDashPatterns maps a Table's (312) own LineStyle to its real
+// stroke-dasharray value, matching xsde2svg's own line-style switch
+// (internal/modus/element_312.go's own "штриховая"/"штрихпунктирная" cases)
+// exactly — LineStyleDashed's own value happens to match Line's (1) own,
+// but LineStyleDashDot's doesn't (it matches a KindCableLine connector's
+// own instead — a real coincidence in the source, not a pattern to read
+// into), so this shape needs its own map rather than reusing either.
+var tableDashPatterns = map[ConnectorLineStyle]string{
+	LineStyleSolid:   "",
+	LineStyleDashed:  "stroke-dasharray: 6,5;",
+	LineStyleDashDot: "stroke-dasharray: 70 20 25 20;",
+}
+
+// writeTable draws a Table (shape 312) as a <rect>+<text> pair inside a
+// wrapping <g id data-type="312">, the same structure writeButton already
+// uses — matching real xsde2svg-exported markup only since this project's
+// own request added that wrapping <g> to internal/modus/element_312.go
+// (see ClassTable's own doc comment for why: a real instance had no
+// stable id/grouping of its own at all before that). Its own two Points
+// (any order, same convention as writeRectangle's) are normalized into a
+// top-left x/y plus a positive width/height. Fill falls back to "none",
+// Stroke to "white" — the real source's own fallback for both is "none"
+// (this editor has no per-object-type default-color config to replicate
+// that against, so an unconfigured table would otherwise render with no
+// visible border at all; every other decorative shape here already picks
+// a visible fallback over literal fidelity for the same reason).
+// PropertyText, when set, draws centered and — unlike writeButton's own
+// label, which never rotates — is rotated around the box's own center by
+// Orient when non-zero, matching the real source's own ParamText.Orient
+// (only the label rotates; the box itself never does). A Table with fewer
+// than 2 Points draws nothing, same as writeRectangle.
+func writeTable(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	x, y := math.Min(p0.X, p1.X), math.Min(p0.Y, p1.Y)
+	width, height := math.Abs(p1.X-p0.X), math.Abs(p1.Y-p0.Y)
+
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+	dash := tableDashPatterns[e.LineStyle]
+	textColor := e.TextColor
+	if textColor == "" {
+		textColor = "black"
+	}
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"312\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, esc(e.Name), esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;%sstroke-width:%s\" />\n",
+		fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), dash, fmtNum(strokeWidth))
+	if e.PropertyText != "" {
+		cx, cy := x+width/2, y+height/2
+		rotate := ""
+		if e.Orient != 0 {
+			rotate = fmt.Sprintf(" transform=\"rotate(%d,%s,%s)\"", e.Orient, fmtNum(cx), fmtNum(cy))
+		}
+		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial", textColor, tableFontSize)
+		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\"%s>%s</text>\n", fmtNum(cx), fmtNum(cy), style, rotate, esc(e.PropertyText))
+	}
+	fmt.Fprint(w, "</g>\n")
+}
+
+// tableCellFontSize is a Table2's (313) own per-cell text size — fixed,
+// not per-instance, the same simplification tableFontSize/buttonFontSize
+// already make.
+const tableCellFontSize = 11
+
+// table2DashPatterns maps a Table2's (313) own LineStyle to its real
+// stroke-dasharray value, matching xsde2svg's own line-style switch
+// (internal/modus/element_313.go's own single "пунктирная" case) — unlike
+// every other LineStyle consumer, the real source only ever recognizes one
+// dash variant for this shape, so LineStyleDashDot has no real value to
+// resolve to and falls back to the same "" (solid) unset/unrecognized
+// default LineStyleDotted already does for every consumer.
+var table2DashPatterns = map[ConnectorLineStyle]string{
+	LineStyleSolid:  "",
+	LineStyleDashed: "stroke-dasharray: 3,2;",
+}
+
+// writeTable2 draws a Table2 (shape 313) as a grid of individually-drawn
+// bare <path> cells (each a closed rectangle, matching the real source's
+// own canvas.Path M-h-v-h-v convention) inside a wrapping <g id
+// data-type="313"> — see ClassTable2's own doc comment for why that
+// wrapping <g> exists at all (this project's own request, since a real
+// cell carries no id/grouping of its own). Cumulative sums of
+// RowHeights/ColumnWidths (from the table's own X,Y top-left anchor) place
+// each cell; a (Row, Col) with no entry in Cells at all, or one naming a
+// row/column index out of range, is simply not drawn (see TableCell's own
+// doc comment). Each cell's own Fill falls back to the table-wide Fill
+// (itself falling back to "white", the real source's own default when
+// neither a cell nor the table sets one); Stroke/StrokeWidth/LineStyle are
+// shared by every cell (the real source's own rare per-cell override of
+// stroke width/style isn't modeled). cell.Text, when set, draws centered
+// in its own cell in cell.TextColor (falling back to black, the real
+// source's own default). A Table2 with no RowHeights or no ColumnWidths
+// draws nothing, the same "not enough geometry" treatment writeRectangle/
+// writeTable give too few Points.
+func writeTable2(w io.Writer, e Element, mode RenderMode) {
+	if len(e.RowHeights) == 0 || len(e.ColumnWidths) == 0 {
+		return
+	}
+
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "white"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+	dash := table2DashPatterns[e.LineStyle]
+	defaultFill := e.Fill
+	if defaultFill == "" {
+		defaultFill = "white"
+	}
+
+	// rowY[i]/colX[j] is row i's/column j's own top/left edge, relative to
+	// the table's own X,Y anchor — cumulative sums of RowHeights/
+	// ColumnWidths, one entry longer than each so a cell's own bottom/
+	// right edge is always rowY[i+1]/colX[j+1] without a separate bounds
+	// check.
+	rowY := make([]float64, len(e.RowHeights)+1)
+	for i, h := range e.RowHeights {
+		rowY[i+1] = rowY[i] + h
+	}
+	colX := make([]float64, len(e.ColumnWidths)+1)
+	for j, cw := range e.ColumnWidths {
+		colX[j+1] = colX[j] + cw
+	}
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"313\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, esc(e.Name), esc(stroke), editorAttr)
+	for _, cell := range e.Cells {
+		if cell.Row < 0 || cell.Row >= len(e.RowHeights) || cell.Col < 0 || cell.Col >= len(e.ColumnWidths) {
+			continue
+		}
+		x := e.X + colX[cell.Col]
+		y := e.Y + rowY[cell.Row]
+		cw := colX[cell.Col+1] - colX[cell.Col]
+		ch := rowY[cell.Row+1] - rowY[cell.Row]
+
+		fill := cell.Fill
+		if fill == "" {
+			fill = defaultFill
+		}
+		style := fmt.Sprintf("fill:%s;stroke:%s;%sstroke-width:%s", fill, stroke, dash, fmtNum(strokeWidth))
+		path := fmt.Sprintf("M %s %s h %s v %s h %s v %s ", fmtNum(x), fmtNum(y), fmtNum(cw), fmtNum(ch), fmtNum(-cw), fmtNum(-ch))
+		fmt.Fprintf(w, "<path d=\"%s\" style=\"%s\" />\n", path, style)
+
+		if cell.Text != "" {
+			textColor := cell.TextColor
+			if textColor == "" {
+				textColor = "black"
+			}
+			textStyle := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial", textColor, tableCellFontSize)
+			fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", fmtNum(x+cw/2), fmtNum(y+ch/2), textStyle, esc(cell.Text))
+		}
 	}
 	fmt.Fprint(w, "</g>\n")
 }

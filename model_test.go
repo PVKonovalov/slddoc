@@ -120,6 +120,7 @@ func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 			{ID: 2, Class: ClassLamp, Shape: "106"},
 			{ID: 3, Class: ClassPowerTransformer, Shape: "47", Windings: []TransformerWinding{{Scheme: SchemeWye}, {Scheme: SchemeWye}}},
 			{ID: 4, Class: ClassBreaker, Shape: "41"},
+			{ID: 5, Class: ClassTable2, Shape: "313", RowHeights: []float64{20}, ColumnWidths: []float64{60}, Cells: []TableCell{{Row: 0, Col: 0}}},
 		},
 	}
 
@@ -144,19 +145,32 @@ func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 	if bytes.Count(buf.Bytes(), []byte("<windings")) != 1 {
 		t.Errorf("expected exactly one real <windings> (the transformer's), got: %s", saved)
 	}
+	// The Breaker (no RowHeights/ColumnWidths/Cells) must not carry empty
+	// <rows/>/<columns/>/<cells/>, but the Table2 (real ones) must still
+	// carry real ones.
+	for _, tag := range []string{"<rows", "<columns", "<cells"} {
+		if bytes.Count(buf.Bytes(), []byte(tag)) != 1 {
+			t.Errorf("expected exactly one real %s (the table2's), got: %s", tag, saved)
+		}
+	}
 
 	got, err := Load(&buf)
 	if err != nil {
 		t.Fatalf("Load: %v\nXML was:\n%s", err, saved)
 	}
-	var busbar, lamp Element
+	var busbar, lamp, table2 Element
 	for _, e := range got.Elements {
 		switch e.ID {
 		case 1:
 			busbar = e
 		case 2:
 			lamp = e
+		case 5:
+			table2 = e
 		}
+	}
+	if len(table2.RowHeights) != 1 || len(table2.ColumnWidths) != 1 || len(table2.Cells) != 1 {
+		t.Errorf("table2 should still round-trip its own real grid: %+v", table2)
 	}
 	if len(busbar.Points) != 2 {
 		t.Errorf("busbar should still round-trip its own real points: %+v", busbar)
@@ -183,5 +197,53 @@ func TestSaveLoadRoundTrip_NoEditorSettings(t *testing.T) {
 	}
 	if got.Editor != nil {
 		t.Errorf("Editor = %+v, want nil for a diagram saved without one", got.Editor)
+	}
+}
+
+// TestSaveLoadRoundTrip_Table2 covers Element's own RowHeights/
+// ColumnWidths ([]float64, marshaled as repeated child elements rather
+// than a struct-wrapped list the way Points/Windings are) and Cells
+// ([]TableCell) round-tripping through Save/Load intact.
+func TestSaveLoadRoundTrip_Table2(t *testing.T) {
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{
+			ID: 1, Class: ClassTable2, Shape: "313",
+			X: 10, Y: 20,
+			RowHeights:   []float64{20, 30},
+			ColumnWidths: []float64{60, 50, 40},
+			Cells: []TableCell{
+				{Row: 0, Col: 0, Text: "A"},
+				{Row: 0, Col: 1, Text: "B", Fill: "red", TextColor: "white"},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := d.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(&buf)
+	if err != nil {
+		t.Fatalf("Load: %v\nXML was:\n%s", err, buf.String())
+	}
+	if len(got.Elements) != 1 {
+		t.Fatalf("elements = %+v, want 1", got.Elements)
+	}
+	e := got.Elements[0]
+	if len(e.RowHeights) != 2 || e.RowHeights[0] != 20 || e.RowHeights[1] != 30 {
+		t.Errorf("RowHeights = %v, want [20 30]", e.RowHeights)
+	}
+	if len(e.ColumnWidths) != 3 || e.ColumnWidths[0] != 60 || e.ColumnWidths[1] != 50 || e.ColumnWidths[2] != 40 {
+		t.Errorf("ColumnWidths = %v, want [60 50 40]", e.ColumnWidths)
+	}
+	if len(e.Cells) != 2 {
+		t.Fatalf("Cells = %+v, want 2 entries", e.Cells)
+	}
+	if e.Cells[0].Row != 0 || e.Cells[0].Col != 0 || e.Cells[0].Text != "A" {
+		t.Errorf("Cells[0] = %+v, want {Row:0 Col:0 Text:A}", e.Cells[0])
+	}
+	if e.Cells[1].Fill != "red" || e.Cells[1].TextColor != "white" {
+		t.Errorf("Cells[1] = %+v, want Fill:red TextColor:white", e.Cells[1])
 	}
 }

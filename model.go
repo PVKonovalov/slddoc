@@ -302,7 +302,92 @@ const (
 	// factor rather than a genuine per-instance property, so
 	// writePowerflowIndicator draws it at one fixed size.
 	ClassPowerflowIndicator Class = "PowerflowIndicator"
+	// ClassTable (shape 312, "Таблица"/Table) is a purely decorative
+	// annotation box — not real electrical equipment, same non-electrical
+	// status as ClassRectangle (no Ports/Voltage/State, never a
+	// connectElements/routing endpoint). The real source (element_312.go)
+	// only actually draws the simple case modeled here (its own Points
+	// this schema uses, the same two-opposite-corners convention
+	// ClassRectangle/ClassButton already use) — a real instance with more
+	// than two corners (an attempt at a real multi-cell grid via this
+	// shape) is explicitly skipped by the real exporter itself with a log
+	// telling the operator to use shape 313 instead, so that case has no
+	// real markup to model here at all. Reuses Fill (the real source's own
+	// BGColor) and Stroke (its own Color) for interior/border, StrokeWidth,
+	// LineStyle (reusing Connector's own ConnectorLineStyle, the same
+	// solid/dashed/dashDot choice Line's own does, resolved through its own
+	// real dash values — see writeTable) for the border's own dash pattern,
+	// and PropertyText/TextColor for an optional centered text label
+	// (Button's own convention) — unlike Button, Orient additionally
+	// rotates that label around the box's own center when set, matching
+	// the real source's own ParamText.Orient (never modeled for any other
+	// Points-based shape, since none of them has a text label of its own
+	// to rotate).
+	ClassTable Class = "Table"
+	// ClassTable2 (shape 313, "Таблица 2"/Table 2) is a purely decorative
+	// multi-row/multi-column grid — not real electrical equipment, same
+	// non-electrical status as ClassRectangle. Unlike every other
+	// decorative shape so far, its own geometry isn't Points-based: X/Y is
+	// its own top-left anchor, and RowHeights/ColumnWidths (each row's/
+	// column's own real size) lay out a grid from there — Cells then
+	// places each real cell's own text (and, only when a real extracted
+	// instance sets one, its own Fill/TextColor override — see TableCell's
+	// own doc comment) at a (Row, Col) position within that grid. The real
+	// source's own cell-merging (one cell spanning several grid positions
+	// at once) is deliberately not modeled — a real instance using it
+	// still extracts, its own would-be-merged cells just render as
+	// separate ones instead of one wide/tall cell, the same kind of
+	// partial-fidelity tradeoff already made for a few other shapes (e.g.
+	// ClassCableConnector's own unmodeled CustomView variant) — nor is a
+	// cell's own real multi-paragraph text (the real source's own literal
+	// "#x9" newline-split), reduced here to a single line per cell.
+	// Reuses Stroke/StrokeWidth/LineStyle for the grid's own line color/
+	// thickness/dash (LineStyle resolved through its own real dash value,
+	// different from every other consumer's — see writeTable2) and Fill
+	// as the whole table's own default cell background, overridden per
+	// cell by TableCell.Fill when a real extracted instance's own cell had
+	// one. A real instance has no stable id of its own at all in the
+	// format this schema was originally ported from — internal/modus/
+	// element_313.go emitted one untagged, ungrouped `<path
+	// data-type="313">` per cell, with no marker distinguishing one real
+	// table's own cells from an unrelated adjacent one's — so, at this
+	// project's own request, the real xsde2svg source (and element_312.go,
+	// ClassTable's own real source, for the identical reason) was changed
+	// to wrap a whole table's own output in a single `<g id
+	// data-type="312"|"313">`, the same fix already made for shapes 7/106/
+	// 385/386; Extract requires that wrapping `<g>` to recognize either
+	// shape at all, so a real diagram exported by an xsde2svg build from
+	// before that fix simply doesn't have its own table(s) recognized —
+	// same "not yet understood, skipped" treatment either shape already
+	// implicitly got before this schema modeled them at all, not a
+	// regression.
+	ClassTable2 Class = "Table2"
 )
+
+// TableCell is one real cell of a Table2 (shape 313) grid — see
+// ClassTable2's own doc comment for what this schema does and doesn't
+// model of the real shape. Row/Col are 0-based grid positions (matching
+// however many entries RowHeights/ColumnWidths respectively give the
+// owning Element); a (Row, Col) with no corresponding TableCell entry at
+// all is simply not drawn, rather than defaulting to an empty cell — real
+// corpus tables are usually, but not always, a fully-populated rectangle.
+type TableCell struct {
+	Row int `xml:"row,attr" json:"row"`
+	Col int `xml:"col,attr" json:"col"`
+	// Text is this cell's own content, reduced to a single line — see
+	// ClassTable2's own doc comment for why a real multi-paragraph cell
+	// isn't modeled.
+	Text string `xml:"text,attr,omitempty" json:"text,omitempty"`
+	// Fill overrides the owning Element's own Fill (its table-wide default
+	// cell background) for this one cell — empty means "use the table's
+	// own default", matching the real source's own cell.GridProp.BGColor-
+	// falls-back-to-sde.BGColor convention exactly.
+	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
+	// TextColor overrides this cell's own text color; empty falls back to
+	// black, the real source's own default when a cell sets no color of
+	// its own.
+	TextColor string `xml:"textColor,attr,omitempty" json:"textColor,omitempty"`
+}
 
 // Element is one placed piece of equipment.
 type Element struct {
@@ -327,7 +412,12 @@ type Element struct {
 	X float64 `xml:"x,attr" json:"x"`
 	Y float64 `xml:"y,attr" json:"y"`
 	// Orient is the rotation applied to the symbol template around (X,Y),
-	// in degrees (0, 90, 180, -90).
+	// in degrees (0, 90, 180, -90). Also used by Table (312), whose own
+	// geometry is otherwise Points-based and has no template/anchor
+	// rotation of its own to apply this to — there, Orient instead rotates
+	// its own optional centered PropertyText label around the box's own
+	// center, matching the real source's own ParamText.Orient (the box
+	// itself never rotates).
 	Orient int `xml:"orient,attr,omitempty" json:"orient,omitempty"`
 	// Mirror flips the symbol template horizontally (in its own local,
 	// unrotated frame — applied before Orient's own rotation, matching the
@@ -393,19 +483,25 @@ type Element struct {
 	// same as it does for a Rectangle, rather than leaving that majority
 	// case unset just because it happens to match {color}. PostPole (292)
 	// reuses this same "none" default too, even though real corpus shows
-	// both a filled and unfilled marker are common.
+	// both a filled and unfilled marker are common. Also a Table's (312)
+	// own box interior (the real source's own BGColor) and a Table2's
+	// (313) own table-wide default cell background, overridden per cell by
+	// TableCell.Fill when set.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
 	// Stroke is a Rectangle's/Circle's own border color, an Arrow's/Road's/
-	// Line's own line color, a Button's own box border color, or a
-	// PostPole's own marker border color — same free-text convention as
-	// Fill. Empty falls back to a plain visible color the same way an
-	// unset Lamp color does (PostPole's own unset fallback is "gray", the
-	// real corpus's own dominant color, rather than Rectangle/Arrow/
-	// Button/Line's own "white"/"black" — see writeLine for Line's own).
+	// Line's own line color, a Button's own box border color, a
+	// PostPole's own marker border color, a Table's (312) own box border
+	// color, or a Table2's (313) own grid line color — same free-text
+	// convention as Fill. Empty falls back to a plain visible color the
+	// same way an unset Lamp color does (PostPole's own unset fallback is
+	// "gray", the real corpus's own dominant color, rather than
+	// Rectangle/Arrow/Button/Line/Table/Table2's own "white"/"black" — see
+	// writeLine for Line's own).
 	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
 	// StrokeWidth is a Rectangle's/Circle's own border thickness, an
-	// Arrow's/Road's/Line's own line thickness, or a Button's own box
-	// border thickness, in the same local/diagram units every other
+	// Arrow's/Road's/Line's own line thickness, a Button's own box
+	// border thickness, or a Table's/Table2's own border/grid line
+	// thickness, in the same local/diagram units every other
 	// shape's fixed stroke-width:1 is — unlike those, meaningfully
 	// different per instance the way Radius is. 0 (unset) means the real
 	// xsde2svg default of 1 for every one of these except Road, whose own
@@ -423,17 +519,20 @@ type Element struct {
 	// "sqware" value (see ClassPostPole's own doc comment). Unused by
 	// every other class.
 	Square bool `xml:"square,attr,omitempty" json:"square,omitempty"`
-	// LineStyle is a Line's (shape 1) own dash pattern — reuses
-	// Connector's own ConnectorLineStyle type (the same solid/dashed/
-	// dashDot choice), but resolved through writeLine's own dash values,
+	// LineStyle is a Line's (shape 1) own dash pattern, a Table's (312)
+	// own box border dash pattern, or a Table2's (313) own grid line dash
+	// pattern — reuses Connector's own ConnectorLineStyle type (the same
+	// solid/dashed/dashDot choice), but each resolved through its own
+	// consumer-specific dash values (writeLine/writeTable/writeTable2),
 	// distinct from a KindCableLine connector's own (see
-	// resolveCableLineDash) — the two real xsde2svg sources use different
-	// literal stroke-dasharray numbers for the "same" named styles. Empty
-	// means solid, matching the real source's own default (unlike
-	// Connector.LineStyle, whose own empty value defaults to dashed for
-	// historical reasons specific to that field). LineStyleDotted has no
-	// real source counterpart for this shape, so Extract never produces
-	// it — included only because the type is shared, not because a real
+	// resolveCableLineDash) — every one of these real xsde2svg sources
+	// uses different literal stroke-dasharray numbers for the "same"
+	// named styles. Empty means solid, matching the real source's own
+	// default (unlike Connector.LineStyle, whose own empty value defaults
+	// to dashed for historical reasons specific to that field).
+	// LineStyleDotted has no real source counterpart for any of these
+	// shapes, so Extract never produces it for any of them — included
+	// only because the type is shared, not because a real
 	// instance can carry it.
 	LineStyle ConnectorLineStyle `xml:"lineStyle,attr,omitempty" json:"lineStyle,omitempty"`
 	// NType selects between PackageSubstation's (shape 385) own two real
@@ -465,6 +564,9 @@ type Element struct {
 	// see config.Config.Indicators.DefaultFPIText), not "no label". Also
 	// used by Button (113) for its own centered label — unlike 385/386/
 	// FPI, this one carries no fixed style of its own; see TextColor/Bold.
+	// Also used by Table (312) for its own optional centered cell text
+	// (the real source's own Cell field) — like Button, no fixed style of
+	// its own; see TextColor, and Orient for its own text-rotation reuse.
 	PropertyText string `xml:"propertyText,attr,omitempty" json:"propertyText,omitempty"`
 	// TextColor is a Button's (113) own PropertyText color — unlike 385/
 	// 386/FPI's fixed white overlay text, real corpus shows this genuinely
@@ -474,8 +576,12 @@ type Element struct {
 	// glyph's fill color (the real source's own Color1) — empty falls back
 	// to black there instead, matching Line's own default rather than
 	// Button's, since a real instance is drawn directly on the canvas
-	// background rather than inside its own filled box. Unused by every
-	// other class.
+	// background rather than inside its own filled box. Also used by
+	// Table (312) for its own PropertyText color, empty falling back to
+	// black the same way PowerflowIndicator's own does (the real source's
+	// own default too). Unused by every other class — a Table2's (313)
+	// own per-cell text color is TableCell.TextColor instead, since a
+	// whole Table2 has many independent cells, not one shared label.
 	TextColor string `xml:"textColor,attr,omitempty" json:"textColor,omitempty"`
 	// Bold draws a Button's (113) own PropertyText in bold — matches the
 	// real source's own ParamText.FontStyle containing "BOLD" — real
@@ -489,12 +595,15 @@ type Element struct {
 	// drawn order — a Road/Line can genuinely bend through several, unlike
 	// the fixed-two-point shapes below), a Rectangle's (shape 3), Circle's
 	// (shape 4), or Button's
-	// (shape 113) own two opposite corners of its own bounding box
-	// (order-independent — Render normalizes them into a proper
-	// top-left/width/height, or center/rx/ry for a Circle, the same way the
-	// real xsde2svg source does), or an Arrow's (shape 2) own start and end
-	// (order *does* matter here — the arrowhead is drawn at Points[1], the
-	// second one); unused by every other, template-drawn class.
+	// (shape 113), or Table's (shape 312) own two opposite corners of its
+	// own bounding box (order-independent — Render normalizes them into a
+	// proper top-left/width/height, or center/rx/ry for a Circle, the same
+	// way the real xsde2svg source does), or an Arrow's (shape 2) own
+	// start and end (order *does* matter here — the arrowhead is drawn at
+	// Points[1], the second one); unused by every other, template-drawn
+	// class — including Table2 (313), whose own geometry is X/Y plus
+	// RowHeights/ColumnWidths instead, not Points (see ClassTable2's own
+	// doc comment).
 	Points []Point `xml:"geometry>point,omitempty" json:"points,omitempty"`
 
 	// Autotransformer/Windings/VectorGroupLabel are a PowerTransformer's
@@ -516,6 +625,18 @@ type Element struct {
 	// doesn't carry — so it's simply typed in and stored verbatim, not
 	// derived from the windings' own Scheme.
 	VectorGroupLabel string `xml:"vectorGroupLabel,attr,omitempty" json:"vectorGroupLabel,omitempty"`
+
+	// RowHeights/ColumnWidths/Cells are a Table2's (shape 313) own grid —
+	// see ClassTable2's own doc comment for the full model. Like
+	// PowerTransformer's own Windings above, a Table2's real geometry is
+	// driven entirely by these fields via writeTable2, not template
+	// substitution. RowHeights[i]/ColumnWidths[j] is row i's/column j's own
+	// real size (local units, summed from the table's own X,Y anchor to
+	// place each cell); len(RowHeights)/len(ColumnWidths) is the grid's own
+	// row/column count.
+	RowHeights   []float64   `xml:"rows>row,omitempty" json:"rowHeights,omitempty"`
+	ColumnWidths []float64   `xml:"columns>column,omitempty" json:"columnWidths,omitempty"`
+	Cells        []TableCell `xml:"cells>cell,omitempty" json:"cells,omitempty"`
 }
 
 // WindingScheme is a PowerTransformer winding's own connection scheme.
@@ -757,30 +878,32 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // emptyPathWrapperLine matches a whole line consisting solely of one of
 // this model's nested "parent>child" xml tags — Diagram's own
 // Layers/VoltageClasses/Nodes/Elements/Connectors/Labels/DigitalDevices,
-// and Element's own Points ("geometry>point") and Windings
-// ("windings>winding") — immediately closed with no children, i.e. its
-// slice happened to be empty. encoding/xml's own omitempty is documented
-// to apply to a slice, but is silently ignored specifically for a tag with
-// a chained "parent>child" path (a long-standing stdlib limitation:
-// golang/go#4256), so it still writes the parent wrapper unconditionally
-// regardless of omitempty — e.g. a non-BusBarSection Element, which never
-// populates Points, otherwise always carried a meaningless empty
-// <geometry/> (self-closing, after the emptyElement collapse below), and
-// (before this line added "windings") a non-PowerTransformer Element
-// carried an equally meaningless empty <windings/> the same way. None of
-// these 9 wrapper tags ever carries its own attributes, so matching the
-// immediately-closed (zero content) case can't mistake a populated one
-// (whose own child elements/whitespace separate its open and close tags)
-// for an empty one. Removed entirely, not just collapsed, since a wrapper
-// with no attributes and no children carries no information Load could
-// ever need — an entirely absent one round-trips identically to an
-// explicit empty one (a nil slice either way). This must run before
-// emptyElement's own collapse below: stripping an Element's only child
-// (e.g. a Lamp with no Ports and no Points) can leave that Element's own
-// tag newly empty, which emptyElement then collapses to self-closing in
-// the usual way.
+// and Element's own Points ("geometry>point"), Windings
+// ("windings>winding"), and a Table2's own RowHeights/ColumnWidths/Cells
+// ("rows>row"/"columns>column"/"cells>cell") — immediately closed with no
+// children, i.e. its slice happened to be empty. encoding/xml's own
+// omitempty is documented to apply to a slice, but is silently ignored
+// specifically for a tag with a chained "parent>child" path (a
+// long-standing stdlib limitation: golang/go#4256), so it still writes the
+// parent wrapper unconditionally regardless of omitempty — e.g. a
+// non-BusBarSection Element, which never populates Points, otherwise
+// always carried a meaningless empty <geometry/> (self-closing, after the
+// emptyElement collapse below), a non-PowerTransformer Element an equally
+// meaningless empty <windings/>, and a non-Table2 Element (every other
+// class) three equally meaningless empty <rows/>/<columns/>/<cells/> the
+// same way. None of these 12 wrapper tags ever carries its own attributes,
+// so matching the immediately-closed (zero content) case can't mistake a
+// populated one (whose own child elements/whitespace separate its open
+// and close tags) for an empty one. Removed entirely, not just collapsed,
+// since a wrapper with no attributes and no children carries no
+// information Load could ever need — an entirely absent one round-trips
+// identically to an explicit empty one (a nil slice either way). This must
+// run before emptyElement's own collapse below: stripping an Element's
+// only child (e.g. a Lamp with no Ports and no Points) can leave that
+// Element's own tag newly empty, which emptyElement then collapses to
+// self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices|rows|columns|cells)></[A-Za-z][\w:.-]*>`,
 )
 
 // Save writes d as indented XML.

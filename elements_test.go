@@ -1,6 +1,10 @@
 package slddoc
 
-import "testing"
+import (
+	"bytes"
+	"math"
+	"testing"
+)
 
 func parseFirst(t *testing.T, fragment string) *rawNode {
 	t.Helper()
@@ -500,6 +504,133 @@ func TestParsePowerflowIndicator(t *testing.T) {
 	}
 	if el2.Orient != -180 {
 		t.Errorf("orient = %v, want -180 (from data-angle)", el2.Orient)
+	}
+}
+
+func TestParseTable(t *testing.T) {
+	n := parseFirst(t, `<g id="1" data-type="312" data-name="Note" data-voltage="#952896" >
+<rect x="10" y="10" width="50" height="30" style="fill:gray;stroke:#952896;stroke-dasharray: 6,5;stroke-width:2" />
+<text x="35" y="25" style="fill:yellow;text-anchor:middle;dominant-baseline:middle;font-size:14px;font-family:Arial" transform="rotate(90,35,25)">Hello</text>
+</g>`)
+
+	el, err := parseTable(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.Class != ClassTable || el.Shape != "312" || el.Name != "Note" {
+		t.Errorf("unexpected element: %+v", el)
+	}
+	if len(el.Points) != 2 || el.Points[0] != (Point{X: 10, Y: 10}) || el.Points[1] != (Point{X: 60, Y: 40}) {
+		t.Errorf("points = %+v, want [(10,10),(60,40)]", el.Points)
+	}
+	if el.Fill != "gray" || el.Stroke != "#952896" || el.StrokeWidth != 2 {
+		t.Errorf("fill/stroke/strokeWidth = %q/%q/%v, want gray/#952896/2", el.Fill, el.Stroke, el.StrokeWidth)
+	}
+	if el.LineStyle != LineStyleDashed {
+		t.Errorf("lineStyle = %q, want dashed (from stroke-dasharray: 6,5)", el.LineStyle)
+	}
+	if el.PropertyText != "Hello" || el.TextColor != "yellow" {
+		t.Errorf("propertyText/textColor = %q/%q, want Hello/yellow", el.PropertyText, el.TextColor)
+	}
+	if el.Orient != 90 {
+		t.Errorf("orient = %v, want 90 (from the label's own rotate() transform)", el.Orient)
+	}
+}
+
+func TestParseTable_NoLabel(t *testing.T) {
+	n := parseFirst(t, `<g id="1" data-type="312" data-voltage="white" >
+<rect x="0" y="0" width="20" height="20" style="fill:none;stroke:white;stroke-width:1" />
+</g>`)
+
+	el, err := parseTable(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.PropertyText != "" || el.Orient != 0 {
+		t.Errorf("a table with no label should have no PropertyText/Orient: %+v", el)
+	}
+}
+
+func TestParseTable2_RoundTripsThroughRender(t *testing.T) {
+	// Build a Table2, render it (the same markup a real, now-patched
+	// xsde2svg export would carry — see ClassTable2's own doc comment),
+	// then parse that rendered output straight back — the strongest
+	// available check that parseTable2's own geometry reconstruction
+	// (tableBoundaries/boundaryIndex/mostCommon) actually inverts
+	// writeTable2 correctly, not just that it doesn't error.
+	original := Element{
+		ID: 1, Class: ClassTable2, Shape: "313",
+		X: 100, Y: 200,
+		RowHeights:   []float64{20, 30},
+		ColumnWidths: []float64{60, 50, 40},
+		Stroke:       "#952896",
+		StrokeWidth:  1,
+		LineStyle:    LineStyleDashed,
+		Fill:         "gray",
+		Cells: []TableCell{
+			{Row: 0, Col: 0, Text: "A"},
+			{Row: 0, Col: 1, Text: "B", Fill: "red", TextColor: "white"},
+			{Row: 0, Col: 2},
+			{Row: 1, Col: 0, Text: "D"},
+			{Row: 1, Col: 1},
+			{Row: 1, Col: 2, Text: "F"},
+		},
+	}
+
+	var buf bytes.Buffer
+	writeTable2(&buf, original, Static)
+
+	n := parseFirst(t, buf.String())
+	got, err := parseTable2(n)
+	if err != nil {
+		t.Fatalf("parseTable2: %v\nrendered markup was:\n%s", err, buf.String())
+	}
+
+	if got.X != original.X || got.Y != original.Y {
+		t.Errorf("anchor = (%v,%v), want (%v,%v)", got.X, got.Y, original.X, original.Y)
+	}
+	if len(got.RowHeights) != len(original.RowHeights) || len(got.ColumnWidths) != len(original.ColumnWidths) {
+		t.Fatalf("grid shape = %d rows x %d cols, want %d x %d", len(got.RowHeights), len(got.ColumnWidths), len(original.RowHeights), len(original.ColumnWidths))
+	}
+	for i := range original.RowHeights {
+		if math.Abs(got.RowHeights[i]-original.RowHeights[i]) > 0.01 {
+			t.Errorf("RowHeights[%d] = %v, want %v", i, got.RowHeights[i], original.RowHeights[i])
+		}
+	}
+	for j := range original.ColumnWidths {
+		if math.Abs(got.ColumnWidths[j]-original.ColumnWidths[j]) > 0.01 {
+			t.Errorf("ColumnWidths[%d] = %v, want %v", j, got.ColumnWidths[j], original.ColumnWidths[j])
+		}
+	}
+	if got.Stroke != original.Stroke || got.StrokeWidth != original.StrokeWidth || got.LineStyle != original.LineStyle {
+		t.Errorf("stroke/strokeWidth/lineStyle = %q/%v/%q, want %q/%v/%q", got.Stroke, got.StrokeWidth, got.LineStyle, original.Stroke, original.StrokeWidth, original.LineStyle)
+	}
+	if got.Fill != original.Fill {
+		t.Errorf("recovered default fill = %q, want %q (the majority real cell fill)", got.Fill, original.Fill)
+	}
+	if len(got.Cells) != len(original.Cells) {
+		t.Fatalf("cells = %+v, want %d entries", got.Cells, len(original.Cells))
+	}
+	byPos := map[[2]int]TableCell{}
+	for _, c := range got.Cells {
+		byPos[[2]int{c.Row, c.Col}] = c
+	}
+	for _, want := range original.Cells {
+		got, ok := byPos[[2]int{want.Row, want.Col}]
+		if !ok {
+			t.Errorf("missing cell (%d,%d)", want.Row, want.Col)
+			continue
+		}
+		if got.Text != want.Text || got.Fill != want.Fill || got.TextColor != want.TextColor {
+			t.Errorf("cell (%d,%d) = %+v, want %+v", want.Row, want.Col, got, want)
+		}
+	}
+}
+
+func TestParseTable2_NoCellsIsAnError(t *testing.T) {
+	n := parseFirst(t, `<g id="1" data-type="313" ></g>`)
+	if _, err := parseTable2(n); err == nil {
+		t.Error("expected an error for a table2 with no cell <path> children")
 	}
 }
 

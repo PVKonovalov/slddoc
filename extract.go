@@ -36,6 +36,7 @@ var elementDataTypes = map[string]bool{
 	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
 	"385": true, "386": true, "32": true, "113": true, "335": true, "292": true, "1": true,
 	"320001": true,
+	"312":    true, "313": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -93,8 +94,6 @@ var unrecognizedShapeName = map[string]string{
 	"175":  "3-position knife switch",
 	"302":  "Window icon",
 	"310":  "Container",
-	"312":  "Table",
-	"313":  "Table 2",
 	"319":  "Small window",
 	"320":  "Custom element",
 	"360":  "Substation",
@@ -194,6 +193,27 @@ func addMissingLabel(d *Diagram, n *rawNode, dt string) {
 	})
 }
 
+// maxNumericID walks n's entire subtree (n included) and returns the
+// largest integer "id" attribute found anywhere, or 0 if none parse — the
+// same id space every real Element/Connector/Label/DigitalDevice's own
+// source id already lives in (see Diagram.LastID's own doc comment).
+// Extract uses this to seed a counter for the rare element it must
+// synthesize an id for itself (one with no id in the original at all —
+// see parseDigitalDeviceBackgroundRect), so a freshly assigned id can
+// never collide with any real one already present in the document.
+func maxNumericID(n *rawNode) int {
+	max := 0
+	if id, err := strconv.Atoi(n.attr("id")); err == nil && id > max {
+		max = id
+	}
+	for _, c := range n.Children {
+		if m := maxNumericID(c); m > max {
+			max = m
+		}
+	}
+	return max
+}
+
 // Extract parses raw as an xsde2svg-generated SVG and builds a Diagram.
 func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagram, Report, error) {
 	root, err := parseRawTree(raw)
@@ -206,6 +226,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 	width, _ := strconv.ParseFloat(root.attr("width"), 64)
 	height, _ := strconv.ParseFloat(root.attr("height"), 64)
+	nextSynthID := maxNumericID(root) + 1
 
 	d := &Diagram{Width: width, Height: height, Source: source}
 	report := Report{Skipped: map[string]int{}}
@@ -243,7 +264,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 		}
 	}
 
-	for _, n := range root.Children {
+	for i, n := range root.Children {
 		if n.Tag == "metadata" {
 			layers, err := parseLayers(n.Text)
 			if err != nil {
@@ -264,6 +285,19 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 		if dt == "134" {
 			if dd, ok := parseDigitalDevice(n); ok {
 				d.DigitalDevices = append(d.DigitalDevices, dd)
+				if i > 0 {
+					if rect, ok := parseDigitalDeviceBackgroundRect(root.Children[i-1]); ok {
+						// The real source never gives this rect its own id
+						// (see parseDigitalDeviceBackgroundRect's own doc
+						// comment) — synthesize one now rather than leaving
+						// it at 0, which every other Element's id treats as
+						// "unset" and which every synthesized rect would
+						// otherwise share, colliding with each other.
+						rect.ID = nextSynthID
+						nextSynthID++
+						addElement(rect, nil, "")
+					}
+				}
 			} else {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
@@ -403,6 +437,24 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "320001":
 			el, err := parsePowerflowIndicator(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "312":
+			el, err := parseTable(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "313":
+			el, err := parseTable2(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
@@ -559,6 +611,10 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 				d.Elements[idx].Windings[i].Voltage = colorToID[normalizeColor(c)]
 			}
 		}
+	}
+
+	if nextSynthID-1 > d.LastID {
+		d.LastID = nextSynthID - 1
 	}
 
 	buildTopology(d, bindings)
