@@ -224,6 +224,7 @@ var shapeName = map[string]string{
 	"385":    "Package substation",
 	"386":    "Enclosed substation",
 	"335":    "Road",
+	"292":    "Post-type pole",
 }
 
 // connectorKindName gives the name Render annotates a run of same-Kind
@@ -467,6 +468,15 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		// not a fixed two-point shape, so it's drawn with writePolyline
 		// directly rather than its own bespoke writeX function.
 		writeRoad(w, e, mode)
+		return
+	}
+	if e.Class == ClassPostPole {
+		// Same reasoning as ClassRectangle just above — a decorative,
+		// single-anchor marker whose own drawn tag (<rect> or <circle>)
+		// switches on Square, something a single static template
+		// substitution can't express, so it bypasses the template lookup
+		// below the same way Rectangle/Circle/Button/Road do.
+		writePole(w, e, mode)
 		return
 	}
 
@@ -872,6 +882,58 @@ func writeRoad(w io.Writer, e Element, mode RenderMode) {
 	}
 	dataAttrs := fmt.Sprintf(" data-voltage=\"%s\" data-type=\"335\"", esc(stroke))
 	writePolyline(w, e.ID, "element", e.Points, stroke, false, strokeWidth, dataAttrs, mode)
+}
+
+// polePostRadius is the drawn radius/half-width a PostPole (shape 292)
+// falls back to when Radius is unset — matching the real source's own
+// fixed Scale(scaleChosed, 10) default (internal/modus/element_292.go),
+// shared by both its round and square variants.
+const polePostRadius = 10
+
+// writePole draws a PostPole (shape 292) as a single flat <rect> or
+// <circle> depending on Square, matching a real xsde2svg-exported one
+// exactly: no wrapping <g>, no data-name (element_292.go never computes
+// one, the same gap writeRoad's own doc comment notes for Road). Fill
+// falls back to "none", the same convention every other decorative
+// annotation shape uses; Stroke falls back to "gray" rather than
+// Rectangle/Arrow/Button's own "white" — the real corpus's own dominant
+// color for this shape specifically. StrokeWidth is always 1, matching
+// the real source's own hardcoded value (unlike Rectangle/Road, no real
+// corpus variance to justify a field for it). Orient rotates the drawn
+// shape around its own anchor (X,Y) when set, mirroring the real source's
+// own rotate(angle,x,y) exactly — visually inert either way (see
+// ClassPostPole's own doc comment) but still round-tripped for fidelity
+// with a real instance that carries one.
+func writePole(w io.Writer, e Element, mode RenderMode) {
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "gray"
+	}
+	radius := e.Radius
+	if radius <= 0 {
+		radius = polePostRadius
+	}
+	rotate := ""
+	if e.Orient != 0 {
+		rotate = fmt.Sprintf(" transform=\"rotate(%d,%s,%s)\"", e.Orient, fmtNum(e.X), fmtNum(e.Y))
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	style := fmt.Sprintf("fill:%s;stroke:%s;stroke-width:1", esc(fill), esc(stroke))
+	if e.Square {
+		side := radius * 2
+		fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"%s\" data-voltage=\"%s\" data-type=\"292\"%s%s />\n",
+			e.ID, fmtNum(e.X-radius), fmtNum(e.Y-radius), fmtNum(side), fmtNum(side), style, esc(stroke), rotate, editorAttr)
+		return
+	}
+	fmt.Fprintf(w, "<circle id=\"%d\" cx=\"%s\" cy=\"%s\" r=\"%s\" style=\"%s\" data-voltage=\"%s\" data-type=\"292\"%s%s />\n",
+		e.ID, fmtNum(e.X), fmtNum(e.Y), fmtNum(radius), style, esc(stroke), rotate, editorAttr)
 }
 
 // writePackageSubstation draws a PackageSubstation (shape 385) — a

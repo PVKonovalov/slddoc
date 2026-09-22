@@ -245,6 +245,27 @@ const (
 	// blue/royalblue/white seen, widths 8/10/12) — with no Fill of its own
 	// (an open line, like Arrow, not a closed shape).
 	ClassRoad Class = "Road"
+	// ClassPostPole (shape 292, "Опора стоечная"/Post-type pole) is a
+	// purely decorative structural marker — a utility pole's own drawn
+	// location on a pole-by-pole layout diagram, not real electrical
+	// equipment (no Ports/Voltage/State, never a connectElements/routing
+	// endpoint, same status as ClassRectangle). Real corpus shows it drawn
+	// as either a round or a square marker (Square selects which — the
+	// real source's own StyleTow "round"/"sqware", collapsed from its own
+	// three-way Material/StyleTow/FillTow branching, which always reduces
+	// to just those two visual shapes either way) at a genuinely varying
+	// per-instance Radius/Fill/Stroke (reused from Rectangle/Circle's own
+	// fields — Radius doubles as the square variant's own half-width, the
+	// same numeric value the real source's own Radius/w constants always
+	// share). StrokeWidth is not modeled — the real source hardcodes 1,
+	// unlike Rectangle/Road's own genuinely-varying width. Orient rotates
+	// around the marker's own anchor when set (matching a real instance
+	// that carries one), but is visually inert either way — a circle has
+	// no orientation of its own, and an axis-aligned square drawn at any
+	// of this editor's own 4 supported angles (0/90/180/-90) looks
+	// identical regardless — so Properties hides the field entirely, the
+	// same treatment ClassLamp's own equally-inert Orientation gets.
+	ClassPostPole Class = "PostPole"
 )
 
 // Element is one placed piece of equipment.
@@ -308,7 +329,10 @@ type Element struct {
 	// junction point's look doesn't change), not literally invisible the
 	// way an unset Lamp radius would be — Extract always sets this
 	// explicitly from a real instance's own r attribute instead of relying
-	// on that fallback.
+	// on that fallback. Also used by PostPole (shape 292) for its own
+	// drawn circle radius, doubling as the Square variant's own
+	// half-width — the real source's own Radius/w constants always share
+	// one value, so this schema doesn't need a second field for it.
 	Radius float64 `xml:"radius,attr,omitempty" json:"radius,omitempty"`
 	// Fill is a Rectangle's (shape 3) or Circle's (shape 4) own interior
 	// color — free-text like Lamp's own FillOff/FillOn, not a VoltageClass
@@ -328,12 +352,16 @@ type Element struct {
 	// filled with their own voltage color instead — Extract sets this
 	// explicitly to whatever real instance's own fill color actually is,
 	// same as it does for a Rectangle, rather than leaving that majority
-	// case unset just because it happens to match {color}.
+	// case unset just because it happens to match {color}. PostPole (292)
+	// reuses this same "none" default too, even though real corpus shows
+	// both a filled and unfilled marker are common.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
 	// Stroke is a Rectangle's/Circle's own border color, an Arrow's/Road's
-	// own line color, or a Button's own box border color — same free-text
-	// convention as Fill. Empty falls back to a plain visible color the
-	// same way an unset Lamp color does.
+	// own line color, a Button's own box border color, or a PostPole's own
+	// marker border color — same free-text convention as Fill. Empty falls
+	// back to a plain visible color the same way an unset Lamp color does
+	// (PostPole's own unset fallback is "gray", the real corpus's own
+	// dominant color, rather than Rectangle/Arrow/Button's own "white").
 	Stroke string `xml:"stroke,attr,omitempty" json:"stroke,omitempty"`
 	// StrokeWidth is a Rectangle's/Circle's own border thickness, an
 	// Arrow's/Road's own line thickness, or a Button's own box border
@@ -350,6 +378,11 @@ type Element struct {
 	// at both Points, not just the second one — matching the real
 	// xsde2svg source's own FDouble flag. Unused by every other class.
 	DoubleHeaded bool `xml:"doubleHeaded,attr,omitempty" json:"doubleHeaded,omitempty"`
+	// Square draws a PostPole's (shape 292) own square marker instead of
+	// its default round one — matching the real source's own StyleTow
+	// "sqware" value (see ClassPostPole's own doc comment). Unused by
+	// every other class.
+	Square bool `xml:"square,attr,omitempty" json:"square,omitempty"`
 	// NType selects between PackageSubstation's (shape 385) own two real
 	// appearance variants, matching the real source's own Tech.NType field
 	// exactly (recovered via xsde2svg's own element_385.go, whose data

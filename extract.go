@@ -34,7 +34,7 @@ var elementDataTypes = map[string]bool{
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
 	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
-	"385": true, "386": true, "32": true, "113": true, "335": true,
+	"385": true, "386": true, "32": true, "113": true, "335": true, "292": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -91,7 +91,6 @@ var unrecognizedShapeName = map[string]string{
 	"166":  "Disconnector-fuse",
 	"174":  "Synchronous compensator",
 	"175":  "3-position knife switch",
-	"292":  "Post-type pole",
 	"302":  "Window icon",
 	"310":  "Container",
 	"312":  "Table",
@@ -325,6 +324,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "335":
 			el, err := parseRoad(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "292":
+			el, err := parsePole(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

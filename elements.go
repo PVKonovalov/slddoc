@@ -1383,6 +1383,70 @@ func parseRoad(n *rawNode) (Element, error) {
 	}, nil
 }
 
+// parsePole handles shape 292 (Опора стоечная/Post-type pole): a purely
+// decorative structural marker, not real electrical equipment (see
+// ClassPostPole's own doc comment) — no Ports are ever created for one. A
+// real instance is a bare <rect> (Square) or <circle>, no wrapping <g> and
+// no data-name (matching writePole's own convention, the same gap
+// writeRoad's own doc comment notes for Road). n's own tag selects which:
+// a <rect>'s own center/half-width become X/Y/Radius, a <circle>'s own
+// cx/cy/r are read directly. Orient recovers only the angle from a
+// rotate(angle,x,y) transform if present — never its own center, unlike
+// GroundSwitch's (54) fallback-anchor case, since this shape's own tag
+// already carries its true anchor as a literal attribute either way.
+func parsePole(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+
+	var x, y, radius float64
+	var square bool
+	switch n.Tag {
+	case "rect":
+		square = true
+		rx, errX := strconv.ParseFloat(n.attr("x"), 64)
+		ry, errY := strconv.ParseFloat(n.attr("y"), 64)
+		w, errW := strconv.ParseFloat(n.attr("width"), 64)
+		h, errH := strconv.ParseFloat(n.attr("height"), 64)
+		if errX != nil || errY != nil || errW != nil || errH != nil {
+			return Element{}, fmt.Errorf("slddoc: pole %s: invalid x/y/width/height", n.attr("id"))
+		}
+		x, y = rx+w/2, ry+h/2
+		radius = w / 2
+	case "circle":
+		var errX, errY, errR error
+		x, errX = strconv.ParseFloat(n.attr("cx"), 64)
+		y, errY = strconv.ParseFloat(n.attr("cy"), 64)
+		radius, errR = strconv.ParseFloat(n.attr("r"), 64)
+		if errX != nil || errY != nil || errR != nil {
+			return Element{}, fmt.Errorf("slddoc: pole %s: invalid cx/cy/r", n.attr("id"))
+		}
+	default:
+		return Element{}, fmt.Errorf("slddoc: pole %s: expected <rect> or <circle>, got <%s>", n.attr("id"), n.Tag)
+	}
+
+	orient := 0
+	if angle, _, ok := parseRotate(n.attr("transform")); ok {
+		orient = angle
+	}
+
+	style := n.attr("style")
+	return Element{
+		ID:     id,
+		Class:  ClassPostPole,
+		Shape:  "292",
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      x,
+		Y:      y,
+		Orient: orient,
+		Radius: radius,
+		Fill:   styleProp(style, "fill"),
+		Stroke: styleProp(style, "stroke"),
+		Square: square,
+	}, nil
+}
+
 // firstCircleChild returns n itself when it's already a <circle> (the
 // older, bare-element real xsde2svg export style several shapes still use —
 // Lamp, Junction point, ...), or its first <circle> child/descendant when
