@@ -24,6 +24,12 @@ SVG: `Extract` builds a fresh object model from the SVG's geometry, and
 `Render` re-renders it from scratch, so exact original formatting is never
 preserved.
 
+## XML format
+
+The diagram XML format (every section, attribute, id rule, the topology
+model and the element/connector code tables) is described in
+[`FORMAT.md`](FORMAT.md).
+
 ## Install
 
 ```

@@ -350,3 +350,15 @@ func TestExtract_PowerTransformerLeadBeforeCircle(t *testing.T) {
 		t.Errorf("third winding's own port = %v, want {340 120} (its real lead tip, grid-snapped — not a discarded glyph check)", redPort)
 	}
 }
+
+func TestObjectTypeName(t *testing.T) {
+	if got := ObjectTypeName("310"); got != "Container" {
+		t.Errorf(`ObjectTypeName("310") = %q, want "Container"`, got)
+	}
+	if got := ObjectTypeName("41"); got == "" {
+		t.Error(`ObjectTypeName("41") = "", want a rendered shape's own name`)
+	}
+	if got := ObjectTypeName("no-such-code"); got != "" {
+		t.Errorf("ObjectTypeName(unknown) = %q, want empty", got)
+	}
+}

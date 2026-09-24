@@ -103,6 +103,19 @@ var unrecognizedShapeName = map[string]string{
 	"3206": "RZD connection/disconnector (arc-extinguishing contacts)",
 }
 
+// ObjectTypeName returns a human-readable English name for an xsde2svg
+// ObjectType (data-type) code — whether one this package renders
+// (shapeName) or one Extract only reports in Report.Skipped
+// (unrecognizedShapeName) — or "" when neither table knows it. Lets a
+// caller presenting a Report (e.g. an editor's import log) say
+// "Container" instead of a bare "310".
+func ObjectTypeName(code string) string {
+	if known, ok := shapeName[code]; ok {
+		return known
+	}
+	return unrecognizedShapeName[code]
+}
+
 // missingElementAnchor makes a best-effort attempt at a diagram-space
 // position for a top-level node Extract couldn't otherwise parse, so
 // addMissingLabel's own diagnostic Label lands close to where the real
@@ -177,9 +190,7 @@ func addMissingLabel(d *Diagram, n *rawNode, dt string) {
 		return
 	}
 	name := dt
-	if known, ok := shapeName[dt]; ok {
-		name = fmt.Sprintf("%s (%s)", known, dt)
-	} else if known, ok := unrecognizedShapeName[dt]; ok {
+	if known := ObjectTypeName(dt); known != "" {
 		name = fmt.Sprintf("%s (%s)", known, dt)
 	}
 	d.Labels = append(d.Labels, Label{
