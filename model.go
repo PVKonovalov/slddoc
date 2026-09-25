@@ -35,8 +35,10 @@ type Diagram struct {
 
 	// Editor holds this editor's own per-diagram preferences (grid
 	// spacing/snap/background). Absent (nil) for a diagram that has never
-	// been saved by this editor, or one produced by sld-svg's own tooling;
-	// callers fall back to the server's configured defaults in that case.
+	// been saved by this editor, or one produced by sld-svg's own tooling
+	// from an SVG without a root background-color (Extract sets only
+	// Background, from that style); callers fall back to the server's
+	// configured defaults for anything unset.
 	Editor *EditorSettings `xml:"editor,omitempty" json:"editor,omitempty"`
 
 	Layers         []Layer         `xml:"layers>layer" json:"layers"`
@@ -129,25 +131,41 @@ const (
 	// ground), Open pivots the rod away at the top, same pivot-circle
 	// convention as ClassSectionalizer. Only two real states exist (no
 	// Intermediate), same as ClassSectionalizer.
-	ClassShortCircuiter     Class = "ShortCircuiter"
-	ClassGround             Class = "Ground"
-	ClassPowerTransformer   Class = "PowerTransformer"
-	ClassCurrentTransformer Class = "CurrentTransformer"
-	ClassVoltageTransformer Class = "VoltageTransformer"
-	ClassChokeCoil          Class = "ChokeCoil"
-	ClassReactor            Class = "Reactor"
-	ClassReactorShunt       Class = "ReactorShunt"
-	ClassSurgeArrester      Class = "SurgeArrester"
-	ClassFuse               Class = "Fuse"
-	ClassCapacitor          Class = "Capacitor"
-	ClassCapacitorBank      Class = "CapacitorBank"
-	ClassHalfChassis        Class = "HalfChassis"
-	ClassChassis            Class = "Chassis"
-	ClassStarter            Class = "Starter"
-	ClassGenerator          Class = "Generator"
-	ClassBusBarSection      Class = "BusBarSection"
-	ClassJunctionPoint      Class = "JunctionPoint"
-	ClassNonIntersection    Class = "NonIntersection"
+	ClassShortCircuiter Class = "ShortCircuiter"
+	// ClassPowerCircuitBreaker (shape 399, Автомат силовой) is a
+	// two-terminal low-voltage automatic circuit breaker, drawn like a
+	// Disconnector (two fixed contact bars plus a state-driven blade) with
+	// a small filled square beside the blade that moves with it. Only two
+	// real states exist (Closed/Open, no Intermediate), same as
+	// ClassSectionalizer.
+	ClassPowerCircuitBreaker Class = "PowerCircuitBreaker"
+	ClassGround              Class = "Ground"
+	ClassPowerTransformer    Class = "PowerTransformer"
+	ClassCurrentTransformer  Class = "CurrentTransformer"
+	ClassVoltageTransformer  Class = "VoltageTransformer"
+	ClassChokeCoil           Class = "ChokeCoil"
+	ClassReactor             Class = "Reactor"
+	ClassReactorShunt        Class = "ReactorShunt"
+	ClassSurgeArrester       Class = "SurgeArrester"
+	ClassFuse                Class = "Fuse"
+	ClassCapacitor           Class = "Capacitor"
+	ClassCapacitorBank       Class = "CapacitorBank"
+	ClassHalfChassis         Class = "HalfChassis"
+	ClassChassis             Class = "Chassis"
+	ClassStarter             Class = "Starter"
+	ClassGenerator           Class = "Generator"
+	ClassBusBarSection       Class = "BusBarSection"
+	ClassJunctionPoint       Class = "JunctionPoint"
+	// ClassFork (shape 26, "Развилка"/Fork) is a real three-terminal
+	// wiring element: a "V" whose vertex (at X/Y) and two arm tips are each
+	// a real electrical terminal — one wire in at the vertex, one out at
+	// each tip. Radius holds its arm length (0 = forkArmLength, 10): the
+	// real source scales it per element (10 * sqrt(2)^scale, so 4/7/10/14/
+	// 20/28 for scale -2..3), the first shape this schema models a
+	// per-element size for. Mirror is visually inert (the "V" is symmetric
+	// and the real source has no mirror branch for it); no Name or State.
+	ClassFork            Class = "Fork"
+	ClassNonIntersection Class = "NonIntersection"
 	// ClassCableConnector (shape 56) is a real two-terminal electrical
 	// device — a cable termination/splice symbol, not a decorative
 	// annotation — drawn from a plain fixed local-coordinate template
@@ -284,6 +302,30 @@ const (
 	// LineStyleDotted, has no real source counterpart for this shape and
 	// is never produced by Extract, only reachable by hand-editing).
 	ClassLine Class = "Line"
+	// ClassPolygon (shape 16, "Многоугольник"/Polygon) is a purely
+	// decorative closed shape — not real electrical equipment (no Ports/
+	// Voltage/State, never a connectElements/routing endpoint, same status
+	// as ClassLine). Its geometry is an arbitrary Points vertex list (at
+	// least 3; the real source closes it implicitly), the same convention
+	// ClassLine uses. Reuses Fill (the real source's own background color,
+	// "none" when unset), Stroke/StrokeWidth, and LineStyle — only
+	// LineStyleDotted/LineStyleDashDot have a real counterpart for this
+	// shape (see polygonDashPatterns); LineStyleDashed draws solid.
+	ClassPolygon Class = "Polygon"
+	// ClassArc (shape 9, "Дуга"/Arc) is a purely decorative elliptical
+	// arc — not real electrical equipment (no Ports/Voltage/State, never a
+	// connectElements/routing endpoint, same status as ClassLine). It is
+	// stored the way an SVG arc command itself is: Points holds exactly
+	// its start and end point, plus RadiusX/RadiusY/LargeArc/Sweep. The
+	// real source (internal/modus/element_9.go) derives these from a
+	// bounding box and two direction points and always emits
+	// large-arc=1/sweep=0 with a fixed 1° x-axis rotation; an extracted
+	// arc keeps exactly what the real path carried, while one drawn in
+	// this editor gets whichever flags match its own bulge (so it may be
+	// a shallow arc the real source itself could never produce). Reuses
+	// Stroke/StrokeWidth, the latter being the drawn width (the real
+	// source draws Width/4, 0.25 for every real corpus instance).
+	ClassArc Class = "Arc"
 	// ClassPowerflowIndicator (shape 320001, "Направление перетока"/
 	// Powerflow direction) is a purely decorative annotation glyph — not
 	// real electrical equipment (no Ports/Voltage, never a connectElements/
@@ -588,6 +630,14 @@ type Element struct {
 	// corpus shows both a plain and a bold real instance. Unused by every
 	// other class.
 	Bold bool `xml:"bold,attr,omitempty" json:"bold,omitempty"`
+	// RadiusX/RadiusY/LargeArc/Sweep are an Arc's (shape 9, see
+	// ClassArc) own SVG elliptical-arc parameters, stored exactly as the
+	// arc's own "A rx,ry rotation large-arc sweep x,y" command carries them
+	// — Points holds its start and end point.
+	RadiusX  float64 `xml:"rx,attr,omitempty" json:"rx,omitempty"`
+	RadiusY  float64 `xml:"ry,attr,omitempty" json:"ry,omitempty"`
+	LargeArc bool    `xml:"largeArc,attr,omitempty" json:"largeArc,omitempty"`
+	Sweep    bool    `xml:"sweep,attr,omitempty" json:"sweep,omitempty"`
 
 	Ports []Port `xml:"port,omitempty" json:"ports,omitempty"`
 	// Points holds a BusBarSection's (shape 24), Road's (shape 335), or

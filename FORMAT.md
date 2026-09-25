@@ -1,12 +1,12 @@
-# slddoc XML format
+# slddoc XSLD format
 
-This document describes the XML format of a single-line diagram (SLD) as read by
+This document describes the XSLD format of a single-line diagram (SLD) as read by
 `slddoc.Load` and written by `(*Diagram).Save`. The authoritative definition is
 the `xml` struct tags in [`model.go`](model.go); this document explains them.
 
 ## 1. Overview
 
-A `.xml` diagram file is the **source of truth** for one SLD. It records:
+A `.xsld` diagram file is the **source of truth** for one SLD. It records:
 
 - what equipment is on the diagram, where, and how it is drawn;
 - the **electrical topology** — which terminals are connected to which;
@@ -91,7 +91,9 @@ Child sections always appear in this order when written; each one is optional.
 
 The editor's per-diagram preferences. Only `background` affects rendering (the
 SVG background color); everything else is editor UI state. Absent for diagrams
-never saved by sld-editor — readers fall back to their own defaults.
+never saved by sld-editor — readers fall back to their own defaults. `svg-sld
+extract` writes an `<editor>` carrying only `background`, taken from the source
+SVG root's `background-color` style, when that style is present.
 
 | Attribute | Type | Meaning |
 |---|---|---|
@@ -174,7 +176,7 @@ decorative shape (rectangle, line, table, ...).
 | `name` | string | Terminal name: `"1"`, `"2"`, ... in order |
 | `node` | id → `node` | The node this terminal is connected to |
 
-Decorative shapes (Rectangle, Arrow, Circle, Line, Road, Button, PostPole,
+Decorative shapes (Rectangle, Arrow, Circle, Line, Polygon, Arc, Road, Button, PostPole,
 Table, Table2, PowerflowIndicator) never have ports. See §5 for how ports
 form the topology and §6 for per-class attributes.
 
@@ -276,7 +278,7 @@ classes; elsewhere they are ignored.
 
 | Attribute | Classes | Values |
 |---|---|---|
-| `state` | Breaker, Disconnector, LoadBreakSwitch, GroundSwitch, Sectionalizer, ShortCircuiter | `0` Open, `1` Closed, `2` Intermediate (Sectionalizer/ShortCircuiter: 0/1 only). Absent = unknown |
+| `state` | Breaker, Disconnector, LoadBreakSwitch, GroundSwitch, Sectionalizer, ShortCircuiter, PowerCircuitBreaker | `0` Open, `1` Closed, `2` Intermediate (Sectionalizer/ShortCircuiter/PowerCircuitBreaker: 0/1 only). Absent = unknown |
 | `state` | FaultPassageIndicator | `0` not triggered, `1` triggered |
 | `state` | Lamp | `0` off, `1` on |
 | `state` | PowerflowIndicator | `0`/absent draws `→`, any other value draws `←` |
@@ -294,6 +296,8 @@ instead of a symbol template around `x`/`y`:
 |---|---|
 | BusBarSection (24) | 2+ vertices, polyline |
 | Line (1), Road (335) | 2+ vertices, polyline |
+| Polygon (16) | 3+ vertices, closed polygon |
+| Arc (9) | exactly 2: start, end (see `rx`/`ry`/`largeArc`/`sweep`) |
 | Rectangle (3), Circle (4), Button (113), Table (312) | 2 opposite corners of the bounding box, any order |
 | Arrow (2) | start, end — order matters, the arrowhead is at the second point |
 
@@ -301,13 +305,15 @@ instead of a symbol template around `x`/`y`:
 
 | Attribute | Type | Used by | Meaning |
 |---|---|---|---|
-| `fill` | color | Rectangle, Circle, JunctionPoint, PostPole, PackageSubstation (inner box), Table, Table2 (default cell fill) | Interior color; empty = `none` |
-| `stroke` | color | Rectangle, Circle, Arrow, Line, Road, Button, PostPole, Table, Table2 | Border / line color |
-| `strokeWidth` | number | Rectangle, Circle, Arrow, Line, Road, Button, Table, Table2 | Line width; 0 = default (1, or a thick default for Road) |
-| `lineStyle` | enum | Line, Table, Table2 | `solid` (default), `dashed`, `dashDot` |
+| `fill` | color | Rectangle, Circle, Polygon, JunctionPoint, PostPole, PackageSubstation (inner box), Table, Table2 (default cell fill) | Interior color; empty = `none` |
+| `stroke` | color | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, PostPole, Table, Table2 | Border / line color |
+| `strokeWidth` | number | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, Table, Table2 | Line width; 0 = default (1, or a thick default for Road) |
+| `lineStyle` | enum | Line, Polygon, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`) |
 | `doubleHeaded` | bool | Arrow | Arrowhead at both ends |
+| `rx`, `ry` | number | Arc | The SVG arc's own radii |
+| `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
-| `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole | Circle radius (PostPole square: half-width) |
+| `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10) | Circle radius (PostPole square: half-width) |
 | `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), Button, Table | Centered overlay text |
 | `textColor` | color | Button (default white), PowerflowIndicator, Table (default black) | Text / glyph color |
 | `bold` | bool | Button | Bold overlay text |
@@ -365,7 +371,7 @@ instead of a symbol template around `x`/`y`:
 ### 7.1 Element classes and shapes
 
 `shape` is the xsde2svg ObjectType code. The shapes available for rendering
-come from the element library (`sld-editor/backend/assets/elements/base.xml`,
+come from the element library (`sld-editor/backend/assets/elements/base.xsld`,
 extendable per site); this is the default set.
 
 | Class | Shape(s) | Ports | Notes |
@@ -374,9 +380,11 @@ extendable per site); this is the default set.
 | Disconnector | 162, 49 (withdrawable) | 2 | `state`; 49 also `position` |
 | LoadBreakSwitch | 42 | 2 | `state` |
 | Sectionalizer | 164 | 2 | `state` (0/1) |
+| PowerCircuitBreaker | 399 | 2 | `state` (0/1) |
 | GroundSwitch | 54 | 1 | `state` |
 | ShortCircuiter | 398 | 1 | `state` (0/1) |
 | Fuse | 203, 154 (withdrawable) | 2 | |
+| Fork | 26 | 3 | vertex + both arm tips; `radius` = arm length (default 10) |
 | Chassis / HalfChassis | 51 / 52 | 2 / 1 | |
 | Starter | 76 | 2 | |
 | PowerTransformer | 47 | 2–4 | `<windings>` (§6.4) |
@@ -396,6 +404,8 @@ extendable per site); this is the default set.
 | FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText` |
 | PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor` |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |
+| Polygon | 16 | — | decorative; `<geometry>` |
+| Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
 | Rectangle / Circle / Arrow | 3 / 4 / 2 | — | decorative; `<geometry>` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText` |
 | PostPole | 292 | — | decorative; `radius`, `square` |

@@ -208,6 +208,7 @@ var shapeName = map[string]string{
 	"49":     "Disconnector (withdrawable)",
 	"54":     "Ground switch",
 	"398":    "Short-circuiter",
+	"399":    "Power circuit breaker",
 	"71":     "Disconnector",
 	"76":     "Starter",
 	"106":    "Lamp",
@@ -227,6 +228,9 @@ var shapeName = map[string]string{
 	"335":    "Road",
 	"292":    "Post-type pole",
 	"1":      "Line",
+	"16":     "Polygon",
+	"26":     "Fork",
+	"9":      "Arc",
 	"320001": "Powerflow direction",
 	"312":    "Table",
 	"313":    "Table 2",
@@ -497,6 +501,18 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		writeLine(w, e, mode)
 		return
 	}
+	if e.Class == ClassArc {
+		// Same reasoning as ClassLine just above — a decorative arc drawn
+		// straight from its own stored SVG arc parameters.
+		writeArc(w, e, mode)
+		return
+	}
+	if e.Class == ClassPolygon {
+		// Same reasoning as ClassLine just above — a decorative closed
+		// shape drawn straight from its own Points.
+		writePolygon(w, e, mode)
+		return
+	}
 	if e.Class == ClassPowerflowIndicator {
 		// Same reasoning as ClassPostPole just above — a decorative,
 		// single-anchor marker (here, a rotated arrow glyph rather than a
@@ -543,7 +559,7 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 	body = strings.NewReplacer(
 		"{color}", esc(color),
 		"{fill}", stateColors.fill(e.State),
-		"{radius}", fmtNum(e.Radius),
+		"{radius}", fmtNum(templateRadius(e)),
 		"{fillAttr}", stateColors.fillAttr,
 		"{stateAttr}", stateAttr(e.State),
 		"{positionAttr}", positionAttr(e.Position),
@@ -573,6 +589,21 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 	}
 	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n%s\n</g>\n",
 		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror), body)
+}
+
+// forkArmLength is a Fork's (shape 26) own default arm length, the real
+// source's own Scale(scaleChosed, 10) at scale 0.
+const forkArmLength = 10
+
+// templateRadius is the value a symbol template's own {radius} placeholder
+// draws with: an element's own Radius, except that a Fork with none
+// falls back to forkArmLength (every other shape using {radius} draws a
+// literal 0 when unset, as it always has).
+func templateRadius(e Element) float64 {
+	if e.Class == ClassFork && e.Radius <= 0 {
+		return forkArmLength
+	}
+	return e.Radius
 }
 
 // mirrorScale is a Mirror'd element's own extra transform component — a
@@ -1279,6 +1310,107 @@ func writeLine(w io.Writer, e Element, mode RenderMode) {
 	}
 	fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;%sstroke-width:%s\" data-voltage=\"%s\" data-type=\"1\"%s%s />\n",
 		esc(sb.String()), esc(stroke), dash, fmtNum(strokeWidth), esc(stroke), idAttr, editorAttr)
+}
+
+// polygonDashPatterns maps a Polygon's (shape 16) own LineStyle to its real
+// stroke-dasharray value, matching xsde2svg's own line-style switch
+// (internal/modus/element_16.go's own "пунктирная"/"штрихпунктирная"
+// cases) exactly — different values than Line's (lineDashPatterns). The
+// real source has no plain dashed style for this shape, so
+// LineStyleDashed draws solid, the same as unset.
+var polygonDashPatterns = map[ConnectorLineStyle]string{
+	LineStyleSolid:   "",
+	LineStyleDotted:  "stroke-dasharray: 10,20;",
+	LineStyleDashDot: "stroke-dasharray: 70 20 25 20;",
+}
+
+// writePolygon draws a Polygon (shape 16) as a single flat <polygon>,
+// matching a real xsde2svg-exported one (internal/modus/element_16.go's
+// own canvas.Polygon call): no wrapping <g>, no data-name, data-voltage
+// carrying its own stroke color the same way writeLine's does. Fill falls
+// back to "none", Stroke to "black" and StrokeWidth to 1. A Polygon with
+// fewer than 3 Points draws nothing.
+func writePolygon(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 3 {
+		return
+	}
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "black"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+	dash := polygonDashPatterns[e.LineStyle]
+	var sb strings.Builder
+	for i, p := range e.Points {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(fmtNum(p.X))
+		sb.WriteByte(',')
+		sb.WriteString(fmtNum(p.Y))
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	idAttr := ""
+	if e.ID != 0 {
+		idAttr = fmt.Sprintf(" id=\"%d\"", e.ID)
+	}
+	fmt.Fprintf(w, "<polygon points=\"%s\" style=\"fill:%s;stroke:%s;%sstroke-width:%s\"%s data-type=\"16\" data-voltage=\"%s\"%s />\n",
+		esc(sb.String()), esc(fill), esc(stroke), dash, fmtNum(strokeWidth), idAttr, esc(stroke), editorAttr)
+}
+
+// arcRotation is the fixed x-axis rotation (degrees) the real source
+// writes into every arc command (element_9.go passes a constant 1).
+const arcRotation = 1
+
+// writeArc draws an Arc (shape 9) as a single flat <path d="M x,y A rx,ry
+// 1 large sweep x,y">, matching a real xsde2svg-exported one
+// (internal/modus/element_9.go's own canvas.Arc call): no wrapping <g>, no
+// data-name. Stroke falls back to "black" and StrokeWidth to 0.25 (the real
+// source's own default Width of 1, drawn at a quarter). Unlike the real
+// source, which never gives an arc an id, this writes one whenever the
+// element has one, so it stays individually selectable. An Arc with fewer
+// than 2 Points draws nothing.
+func writeArc(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "black"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 0.25
+	}
+	flag := func(b bool) string {
+		if b {
+			return "1"
+		}
+		return "0"
+	}
+	s, t := e.Points[0], e.Points[1]
+	d := fmt.Sprintf("M%s,%s A%s,%s %d %s %s %s,%s", fmtNum(s.X), fmtNum(s.Y), fmtNum(e.RadiusX), fmtNum(e.RadiusY),
+		arcRotation, flag(e.LargeArc), flag(e.Sweep), fmtNum(t.X), fmtNum(t.Y))
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	idAttr := ""
+	if e.ID != 0 {
+		idAttr = fmt.Sprintf(" id=\"%d\"", e.ID)
+	}
+	fmt.Fprintf(w, "<path d=\"%s\" style=\"fill:none;stroke:%s;stroke-width:%s\"%s data-type=\"9\" data-voltage=\"%s\"%s />\n",
+		esc(d), esc(stroke), fmtNum(strokeWidth), idAttr, esc(stroke), editorAttr)
 }
 
 // polePostRadius is the drawn radius/half-width a PostPole (shape 292)

@@ -80,3 +80,14 @@ func TestRotateZero(t *testing.T) {
 		t.Errorf("rotate by 0 changed the point: got %v, want %v", got, p)
 	}
 }
+
+func TestParseSubpaths_TrailingBareCommand(t *testing.T) {
+	// A real xsde2svg Power circuit breaker's (399) closed blade.
+	got, err := parseSubpaths("M 240 916 v -12 m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0]) != 2 || got[0][1] != (Point{240, 904}) {
+		t.Errorf("got %v, want one subpath [(240,916) (240,904)]", got)
+	}
+}

@@ -21,7 +21,10 @@ import (
 //     the withdrawable variant — its own Position/data-trolley isn't
 //     extracted, same as the withdrawable Breaker/Disconnector: it's a
 //     purely render-side, this-editor-only concern); Capacitor: 388;
-//     Reactor: 37; Starter: 76; NonIntersection: 14, a purely decorative
+//     Reactor: 37; Starter: 76; PowerCircuitBreaker: 399 (via
+//     parsePowerCircuitBreaker, which also recovers Mirror; its own closed
+//     blade path ends in a bare, argument-less "m", which parseSubpaths
+//     tolerates); NonIntersection: 14, a purely decorative
 //     "hop" mark drawn where two crossing wires visually pass without
 //     connecting, modeled with two ports anyway — one on each side — since
 //     each one is still a real electrical node a wire's own end can land
@@ -191,6 +194,45 @@ func parseState(n *rawNode) *int {
 		}
 	}
 	return nil
+}
+
+// parsePowerCircuitBreaker handles shape 399 (Автомат силовой): its
+// ports/anchor/state come from parseTwoPortDevice like any other
+// two-terminal device, plus Mirror, which (unlike every other shape) is
+// recovered from the drawing itself. element_399.go draws the small filled
+// square beside the blade on one of two sides depending on its own xMirror
+// flag; base.xml's own template uses the xMirror==1 geometry as its default
+// (the more common one in real corpora), so an instance drawn with the
+// xMirror==0 geometry is extracted as Mirror=true. Both paths are compared
+// in their own unrotated coordinates (a rotate() only ever wraps them), so
+// this needs no knowledge of the element's own orientation.
+func parsePowerCircuitBreaker(n *rawNode) (Element, []Point, string, error) {
+	el, ports, voltage, err := parseTwoPortDevice(n, ClassPowerCircuitBreaker, "399")
+	if err != nil {
+		return el, ports, voltage, err
+	}
+	paths := elementPaths(n)
+	if len(paths) < 2 {
+		return el, ports, voltage, nil
+	}
+	blade, err1 := parseSubpaths(paths[0].attr("d"))
+	square, err2 := parseSubpaths(paths[1].attr("d"))
+	if err1 != nil || err2 != nil || len(blade) == 0 || len(square) == 0 ||
+		len(blade[0]) < 2 || len(square[0]) < 2 {
+		return el, ports, voltage, nil
+	}
+	b0, b1 := blade[0][0], blade[0][1]
+	q0, q1 := square[0][0], square[0][1]
+	if b0.X == b1.X {
+		// Closed (vertical blade): the xMirror==1 square starts drawing
+		// rightward from the blade, the xMirror==0 one leftward.
+		el.Mirror = q1.X < q0.X
+	} else {
+		// Open (horizontal blade): the xMirror==1 square sits right of the
+		// blade's own center, the xMirror==0 one left of it.
+		el.Mirror = q0.X < (b0.X+b1.X)/2
+	}
+	return el, ports, voltage, nil
 }
 
 // parseDataFill reads a data-fill="0:off,1:on" attribute (as written by
@@ -1745,6 +1787,88 @@ func parseLine(n *rawNode) (Element, error) {
 	}, nil
 }
 
+// arcPathRe matches a real Arc's (shape 9) own single-command path,
+// "M x,y A rx,ry rotation large-arc sweep x,y" (commas or spaces).
+var arcPathRe = regexp.MustCompile(`^\s*M\s*(-?[\d.]+)[\s,]+(-?[\d.]+)\s*A\s*(-?[\d.]+)[\s,]+(-?[\d.]+)[\s,]+(-?[\d.]+)[\s,]+([01])[\s,]+([01])[\s,]+(-?[\d.]+)[\s,]+(-?[\d.]+)\s*$`)
+
+// parseArc handles shape 9 (Дуга/Arc): a purely decorative elliptical arc
+// (see ClassArc's own doc comment) — no Ports are ever created for one.
+// A real instance is a bare <path> carrying a single arc command, read
+// back exactly (start/end into Points, radii and both flags into their own
+// fields; the real source's own fixed 1° rotation isn't stored — writeArc
+// always writes it back). The real source never gives an arc an id, so id
+// is what Extract passes in: the path's own id when present, a freshly
+// synthesized one otherwise.
+func parseArc(n *rawNode, id int) (Element, error) {
+	m := arcPathRe.FindStringSubmatch(n.attr("d"))
+	if m == nil {
+		return Element{}, fmt.Errorf("slddoc: arc %q: not a single arc command", n.attr("d"))
+	}
+	num := func(i int) float64 {
+		v, _ := strconv.ParseFloat(m[i], 64)
+		return v
+	}
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	start := Point{X: num(1), Y: num(2)}
+	end := Point{X: num(8), Y: num(9)}
+	return Element{
+		ID:          id,
+		Class:       ClassArc,
+		Shape:       "9",
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           (start.X + end.X) / 2,
+		Y:           (start.Y + end.Y) / 2,
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		Points:      []Point{start, end},
+		RadiusX:     num(3),
+		RadiusY:     num(4),
+		LargeArc:    m[6] == "1",
+		Sweep:       m[7] == "1",
+	}, nil
+}
+
+// polygonDashStyles is the reverse of render.go's own polygonDashPatterns.
+var polygonDashStyles = map[string]ConnectorLineStyle{
+	"10,20":       LineStyleDotted,
+	"70 20 25 20": LineStyleDashDot,
+}
+
+// parsePolygon handles shape 16 (Многоугольник/Polygon): a purely
+// decorative closed shape (see ClassPolygon's own doc comment) — no Ports
+// are ever created for one. A real instance is a bare <polygon points
+// style>, no wrapping <g> and no data-name, read the same way parseLine
+// reads a Line, plus its own Fill; the anchor is its first vertex.
+func parsePolygon(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	pts, err := parsePointList(n.attr("points"))
+	if err != nil {
+		return Element{}, err
+	}
+	if len(pts) < 3 {
+		return Element{}, fmt.Errorf("slddoc: polygon %d: %d points, want at least 3", id, len(pts))
+	}
+	style := n.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
+	return Element{
+		ID:          id,
+		Class:       ClassPolygon,
+		Shape:       "16",
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           pts[0].X,
+		Y:           pts[0].Y,
+		Fill:        styleProp(style, "fill"),
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		LineStyle:   polygonDashStyles[styleProp(style, "stroke-dasharray")],
+		Points:      pts,
+	}, nil
+}
+
 // firstCircleChild returns n itself when it's already a <circle> (the
 // older, bare-element real xsde2svg export style several shapes still use —
 // Lamp, Junction point, ...), or its first <circle> child/descendant when
@@ -1811,6 +1935,61 @@ func parseJunctionPoint(n *rawNode) (Element, string, error) {
 		Fill:   styleProp(style, "fill"),
 		Ports:  []Port{{Name: "1"}},
 	}, styleProp(style, "stroke"), nil
+}
+
+// forkPathRe matches a real Fork's (shape 26) own path, "M x y l h -h m
+// -h h l -h -h" (element_26.go), capturing its anchor and arm length.
+var forkPathRe = regexp.MustCompile(`^\s*M\s*(-?[\d.]+)[\s,]+(-?[\d.]+)\s*l\s*(-?[\d.]+)[\s,]+-?[\d.]+\s*m`)
+
+// normalizeOrient folds any rotate() angle (the real source writes e.g.
+// -270, 270 and -180) into the 0/90/180/-90 set Properties offers.
+func normalizeOrient(angle int) int {
+	a := ((angle % 360) + 360) % 360
+	if a == 270 {
+		return -90
+	}
+	return a
+}
+
+// parseFork handles shape 26 (Развилка/Fork): a bare <path> "V" whose
+// vertex is its anchor, optionally carrying its own rotate(angle,x,y)
+// transform (see ClassFork's own doc comment). Its three ports are the
+// vertex and both arm tips, rotated through that transform. The real
+// source never gives it an id, so id is what Extract passes in (the path's
+// own when present, a synthesized one otherwise). Radius is only set for
+// an arm length other than the default, so a default-size fork looks the
+// same as a freshly placed one.
+func parseFork(n *rawNode, id int) (Element, []Point, string, error) {
+	m := forkPathRe.FindStringSubmatch(n.attr("d"))
+	if m == nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: fork %q: unrecognized path", n.attr("d"))
+	}
+	x, _ := strconv.ParseFloat(m[1], 64)
+	y, _ := strconv.ParseFloat(m[2], 64)
+	h, _ := strconv.ParseFloat(m[3], 64)
+	anchor := Point{X: x, Y: y}
+	angle := 0
+	if a, _, ok := parseRotate(n.attr("transform")); ok {
+		angle = a
+	}
+	ports := []Point{anchor, {X: x + h, Y: y - h}, {X: x - h, Y: y - h}}
+	for i := range ports {
+		ports[i] = rotate(ports[i], anchor, float64(angle))
+	}
+	el := Element{
+		ID:     id,
+		Class:  ClassFork,
+		Shape:  "26",
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      x,
+		Y:      y,
+		Orient: normalizeOrient(angle),
+		Ports:  []Port{{Name: "1"}, {Name: "2"}, {Name: "3"}},
+	}
+	if h != forkArmLength {
+		el.Radius = h
+	}
+	return el, ports, n.attr("data-voltage"), nil
 }
 
 // parseLamp handles shape 106 (лампа/lamp): a standalone status-indicator

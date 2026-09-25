@@ -3,6 +3,7 @@ package slddoc
 import (
 	"bytes"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -674,5 +675,209 @@ func TestParseConnector_Kind(t *testing.T) {
 				t.Errorf("data-type=%q: Kind = %q, want %q", c.dataType, conn.Kind, c.want)
 			}
 		})
+	}
+}
+
+func TestParsePowerCircuitBreaker(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantState  int
+		wantMirror bool
+		wantPorts  []Point
+	}{
+		{
+			// Closed, drawn with element_399.go's xMirror==0 geometry.
+			name: "closed",
+			svg: `<g id="1250" data-name="АВТСН1-0,4" data-type="399" >
+<path d="M 240 916 v -12 m" data-state="1" style="fill:none;stroke:#555555;stroke-width:1" data-voltage="#555555" />
+<path d="M 240 908 h -2 v -2 h 2 z " style="fill:#555555;stroke:#555555;stroke-width:1" data-voltage="#555555" />
+<path d="M 236 901 h 8 m 0 18 h -8" style="fill:none;stroke:#555555;stroke-width:1" data-voltage="#555555" />
+<path d="M 240 901 v -11 M 240 919 v 11" style="fill:none;stroke:#555555;stroke-width:1" data-voltage="#555555" />
+</g>`,
+			wantX: 240, wantY: 910, wantState: 1, wantMirror: true,
+			wantPorts: []Point{{240, 890}, {240, 930}},
+		},
+		{
+			// Open, drawn with the xMirror==1 geometry (base.xml's default).
+			name: "open",
+			svg: `<g id="148812638" data-type="399" >
+<path d="M 444 160 h 12" data-state="0" style="fill:none;stroke:#FF5555;stroke-width:1" data-voltage="#FF5555" />
+<path d="M 452 160 h 2 v 2 h -2 z " style="fill:#FF5555;stroke:#FF5555;stroke-width:1" data-voltage="#FF5555" />
+<path d="M 446 151 h 8 m 0 18 h -8" style="fill:none;stroke:#FF5555;stroke-width:1" data-voltage="#FF5555" />
+<path d="M 450 151 v -1 M 450 169 v 1" style="fill:none;stroke:#FF5555;stroke-width:1" data-voltage="#FF5555" />
+</g>`,
+			wantX: 450, wantY: 160, wantState: 0, wantMirror: false,
+			wantPorts: []Point{{450, 150}, {450, 170}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, _, err := parsePowerCircuitBreaker(parseFirst(t, c.svg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassPowerCircuitBreaker || el.Shape != "399" {
+				t.Errorf("class/shape = %s/%s", el.Class, el.Shape)
+			}
+			if el.X != c.wantX || el.Y != c.wantY {
+				t.Errorf("anchor = (%v,%v), want (%v,%v)", el.X, el.Y, c.wantX, c.wantY)
+			}
+			if el.State == nil || *el.State != c.wantState {
+				t.Errorf("state = %v, want %d", el.State, c.wantState)
+			}
+			if el.Mirror != c.wantMirror {
+				t.Errorf("mirror = %v, want %v", el.Mirror, c.wantMirror)
+			}
+			if len(ports) != 2 || ports[0] != c.wantPorts[0] || ports[1] != c.wantPorts[1] {
+				t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+			}
+		})
+	}
+}
+
+func TestParsePolygon(t *testing.T) {
+	n := parseFirst(t, `<polygon points="108,55 115,62 117,59 117,30 108,30" style="fill:#663300;stroke:white;stroke-dasharray: 70 20 25 20;stroke-width:2 " id="148796057" data-type="16" data-voltage="white" />`)
+	el, err := parsePolygon(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.ID != 148796057 || el.Class != ClassPolygon || el.Shape != "16" {
+		t.Errorf("unexpected element: %+v", el)
+	}
+	if el.Fill != "#663300" || el.Stroke != "white" || el.StrokeWidth != 2 || el.LineStyle != LineStyleDashDot {
+		t.Errorf("style = fill %q stroke %q width %v lineStyle %q", el.Fill, el.Stroke, el.StrokeWidth, el.LineStyle)
+	}
+	if len(el.Points) != 5 || el.Points[4] != (Point{108, 30}) || el.X != 108 || el.Y != 55 {
+		t.Errorf("points = %v, anchor (%v,%v)", el.Points, el.X, el.Y)
+	}
+
+	if _, err := parsePolygon(parseFirst(t, `<polygon points="1,1 2,2" id="1" data-type="16" />`)); err == nil {
+		t.Error("want an error for a 2-point polygon")
+	}
+}
+
+func TestParseArc(t *testing.T) {
+	n := parseFirst(t, `<path d="M399,2705 A65,15 1 1 0 490,2684" style="fill:none;stroke:#12161d;stroke-width:0.25" data-type="9" data-voltage="#12161d" />`)
+	el, err := parseArc(n, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.ID != 42 || el.Class != ClassArc || el.Shape != "9" {
+		t.Errorf("unexpected element: %+v", el)
+	}
+	if len(el.Points) != 2 || el.Points[0] != (Point{399, 2705}) || el.Points[1] != (Point{490, 2684}) {
+		t.Errorf("points = %v", el.Points)
+	}
+	if el.RadiusX != 65 || el.RadiusY != 15 || !el.LargeArc || el.Sweep {
+		t.Errorf("arc params = rx %v ry %v large %v sweep %v", el.RadiusX, el.RadiusY, el.LargeArc, el.Sweep)
+	}
+	if el.Stroke != "#12161d" || el.StrokeWidth != 0.25 {
+		t.Errorf("style = %q %v", el.Stroke, el.StrokeWidth)
+	}
+
+	var buf bytes.Buffer
+	writeArc(&buf, el, Static)
+	want := `<path d="M399,2705 A65,15 1 1 0 490,2684" style="fill:none;stroke:#12161d;stroke-width:0.25" id="42" data-type="9" data-voltage="#12161d" />`
+	if got := strings.TrimSpace(buf.String()); got != want {
+		t.Errorf("writeArc =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestExtract_ArcWithoutIDGetsSynthesizedID(t *testing.T) {
+	svg := `<svg width="100" height="100"><polygon points="0,0 1,0 1,1" style="fill:none;stroke:white;stroke-width:1" id="7" data-type="16" data-voltage="white" />` +
+		`<path d="M10,10 A5,5 1 1 0 20,10" style="fill:none;stroke:white;stroke-width:0.25" data-type="9" data-voltage="white" />` +
+		`<path d="M30,10 A5,5 1 1 0 40,10" style="fill:none;stroke:white;stroke-width:0.25" data-type="9" data-voltage="white" /></svg>`
+	d, rep, err := Extract([]byte(svg), "t", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int
+	for _, e := range d.Elements {
+		if e.Class == ClassArc {
+			ids = append(ids, e.ID)
+		}
+	}
+	if len(ids) != 2 || ids[0] != 8 || ids[1] != 9 || len(rep.Failed) != 0 {
+		t.Errorf("arc ids = %v, failed = %v, want [8 9] and none failed", ids, rep.Failed)
+	}
+	if d.LastID < 9 {
+		t.Errorf("lastId = %d, want >= 9", d.LastID)
+	}
+}
+
+func TestParseFork(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantOrient int
+		wantRadius float64
+		wantPorts  []Point
+	}{
+		{
+			name:      "unrotated",
+			svg:       `<path d="M 240 80 l 10 -10 m -10 10 l -10 -10" style="fill:none;stroke:#7F7F7F;stroke-width:1"  data-type="26" data-voltage="#7F7F7F" />`,
+			wantPorts: []Point{{240, 80}, {250, 70}, {230, 70}},
+		},
+		{
+			name:       "rotated -270 (normalized to 90)",
+			svg:        `<path d="M 400 750 l 10 -10 m -10 10 l -10 -10" style="fill:none;stroke:#7F7F7F;stroke-width:1" transform="rotate(-270,400,750)" data-type="26" data-voltage="#7F7F7F" />`,
+			wantOrient: 90,
+			wantPorts:  []Point{{400, 750}, {410, 760}, {410, 740}},
+		},
+		{
+			name:       "scaled",
+			svg:        `<path d="M 153 657 l 7 -7 m -7 7 l -7 -7" style="fill:none;stroke:purple;stroke-width:1" transform="rotate(-180,153,657)" data-type="26" data-voltage="purple" />`,
+			wantOrient: 180,
+			wantRadius: 7,
+			wantPorts:  []Point{{153, 657}, {146, 664}, {160, 664}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseFork(parseFirst(t, c.svg), 5)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.ID != 5 || el.Class != ClassFork || el.Shape != "26" || len(el.Ports) != 3 || voltage == "" {
+				t.Errorf("unexpected element: %+v (voltage %q)", el, voltage)
+			}
+			if el.Orient != c.wantOrient || el.Radius != c.wantRadius {
+				t.Errorf("orient/radius = %d/%v, want %d/%v", el.Orient, el.Radius, c.wantOrient, c.wantRadius)
+			}
+			for i := range c.wantPorts {
+				if ports[i] != c.wantPorts[i] {
+					t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestExtract_ForkConnectsAtItsVertex(t *testing.T) {
+	svg := `<svg width="400" height="1000">` +
+		`<polyline points="153,776 153,931" style="fill:none;stroke:purple;stroke-width:1 " data-type="21" id="56876" data-voltage="purple" />` +
+		`<path d="M 153 776 l 7 -7 m -7 7 l -7 -7" style="fill:none;stroke:purple;stroke-width:1" data-type="26" data-voltage="purple" /></svg>`
+	d, rep, err := Extract([]byte(svg), "t", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fork *Element
+	for i := range d.Elements {
+		if d.Elements[i].Class == ClassFork {
+			fork = &d.Elements[i]
+		}
+	}
+	if fork == nil || len(rep.Failed) != 0 {
+		t.Fatalf("no fork extracted (failed %v)", rep.Failed)
+	}
+	if fork.ID != 56877 {
+		t.Errorf("id = %d, want synthesized 56877", fork.ID)
+	}
+	if len(d.Connectors) != 1 || fork.Ports[0].Node == 0 || fork.Ports[0].Node != d.Connectors[0].From {
+		t.Errorf("vertex port node %d, connector %+v: want the wire to start at the fork's vertex", fork.Ports[0].Node, d.Connectors)
 	}
 }

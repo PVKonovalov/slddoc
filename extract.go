@@ -34,9 +34,10 @@ var elementDataTypes = map[string]bool{
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
 	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
-	"385": true, "386": true, "32": true, "113": true, "335": true, "292": true, "1": true,
+	"385": true, "386": true, "32": true, "113": true, "335": true, "292": true, "1": true, "16": true, "9": true, "26": true,
 	"320001": true,
 	"312":    true, "313": true,
+	"399": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -69,12 +70,9 @@ var twoPortShapes = map[string]Class{
 // anything in this package.
 var unrecognizedShapeName = map[string]string{
 	"6":    "Booster/voltage regulator (single-winding power transformer)",
-	"9":    "Arc",
 	"10":   "Connector",
 	"11":   "Backdrop/image file",
-	"16":   "Polygon",
 	"19":   "Metal anchor/angle pole",
-	"26":   "Fork/branch point",
 	"38":   "Thermal power plant",
 	"39":   "Synchronous motor",
 	"44":   "Knife switch",
@@ -99,7 +97,6 @@ var unrecognizedShapeName = map[string]string{
 	"360":  "Substation",
 	"389":  "Blocking filter",
 	"391":  "RTF text",
-	"399":  "Power circuit breaker",
 	"3206": "RZD connection/disconnector (arc-extinguishing contacts)",
 }
 
@@ -240,6 +237,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	nextSynthID := maxNumericID(root) + 1
 
 	d := &Diagram{Width: width, Height: height, Source: source}
+	// xsde2svg writes the canvas color as the root's own style
+	// "background-color"; carry it into Editor.Background (the one editor
+	// setting Render honors) so the diagram keeps it. Editor stays nil when
+	// absent, leaving every setting to the reader's own defaults.
+	if bg := styleProp(root.attr("style"), "background-color"); bg != "" {
+		d.Editor = &EditorSettings{Background: bg}
+	}
 	report := Report{Skipped: map[string]int{}}
 
 	// colors accumulates every raw data-voltage color seen (elements and
@@ -394,6 +398,48 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
+		case "26":
+			// Same id situation as an Arc just below (element_26.go
+			// passes no rtId either).
+			id, idErr := parseElementID(n)
+			el, ports, voltage, err := parseFork(n, id)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			if idErr != nil || id == 0 {
+				el.ID = nextSynthID
+				nextSynthID++
+			}
+			addElement(el, ports, voltage)
+
+		case "9":
+			// The real source never gives an arc an id (element_9.go
+			// passes no rtId), so synthesize one, same as a DigitalDevice's
+			// own background rect above; keep a real one if present.
+			id, idErr := parseElementID(n)
+			el, err := parseArc(n, id)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			if idErr != nil || id == 0 {
+				el.ID = nextSynthID
+				nextSynthID++
+			}
+			addElement(el, nil, "")
+
+		case "16":
+			el, err := parsePolygon(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
 		case "21", "22", "23", "28":
 			c, voltage, err := parseConnector(n)
 			if err != nil {
@@ -475,6 +521,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "399":
+			el, ports, voltage, err := parsePowerCircuitBreaker(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

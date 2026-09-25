@@ -1131,3 +1131,41 @@ func TestRender_Table2NoGeometryDrawsNothing(t *testing.T) {
 		t.Errorf("a table2 with no RowHeights/ColumnWidths should draw nothing: %s", buf.String())
 	}
 }
+
+func TestRender_Polygon(t *testing.T) {
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{{
+			ID: 7, Class: ClassPolygon, Shape: "16", Fill: "#663300", Stroke: "white", StrokeWidth: 1,
+			LineStyle: LineStyleDotted, Points: []Point{{X: 10, Y: 10}, {X: 20, Y: 30}, {X: 0, Y: 30}},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	want := `<polygon points="10,10 20,30 0,30" style="fill:#663300;stroke:white;stroke-dasharray: 10,20;stroke-width:1" id="7" data-type="16" data-voltage="white" />`
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("render output missing %s:\n%s", want, buf.String())
+	}
+}
+
+func TestRender_ForkArmLength(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"26": `<path d="M 0 0 l {radius} -{radius} m -{radius} {radius} l -{radius} -{radius}" />`})
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{
+			{ID: 1, Class: ClassFork, Shape: "26", X: 10, Y: 10},
+			{ID: 2, Class: ClassFork, Shape: "26", X: 50, Y: 50, Radius: 7},
+		},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`d="M 0 0 l 10 -10 m -10 10 l -10 -10"`, `d="M 0 0 l 7 -7 m -7 7 l -7 -7"`} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("render output missing %s:\n%s", want, buf.String())
+		}
+	}
+}

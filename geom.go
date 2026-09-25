@@ -60,6 +60,13 @@ func parseSubpaths(d string) ([][]Point, error) {
 	for i < len(toks) {
 		cmd := toks[i]
 		i++
+		// A command letter with no parameters at the very end of the
+		// string (a real xsde2svg Power circuit breaker's, shape 399, own
+		// closed blade path ends "... v -12 m") is ignored, the same way a
+		// browser renders a path up to its first incomplete command.
+		if i >= len(toks) && cmd != "Z" && cmd != "z" {
+			break
+		}
 		switch cmd {
 		case "M", "m":
 			dx, err := next()

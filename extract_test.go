@@ -133,6 +133,26 @@ const testDigitalDeviceBackgroundSVG = `<?xml version="1.0"?>
 </svg>
 `
 
+func TestExtract_Background(t *testing.T) {
+	d, _, err := Extract([]byte(`<svg width="530" height="550"
+     style='stroke-width: 0px; background-color: #f5ebeb;'
+     xmlns="http://www.w3.org/2000/svg"></svg>`), "test.svg", nil)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if d.Editor == nil || d.Editor.Background != "#f5ebeb" {
+		t.Errorf("Editor = %+v, want Background #f5ebeb", d.Editor)
+	}
+
+	d, _, err = Extract([]byte(`<svg width="530" height="550" style="stroke-width: 0px;" xmlns="http://www.w3.org/2000/svg"></svg>`), "test.svg", nil)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if d.Editor != nil {
+		t.Errorf("Editor = %+v, want nil without a background-color", d.Editor)
+	}
+}
+
 func TestExtract_DigitalDeviceBackgroundRect(t *testing.T) {
 	d, report, err := Extract([]byte(testDigitalDeviceBackgroundSVG), "test.svg", nil)
 	if err != nil {
