@@ -829,21 +829,29 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 // typeComment — that only makes sense in the context of a full, ordered
 // document, not a standalone fragment, so callers that want one (Render)
 // still write it themselves just before calling this.
+//
+// A connector with no (or an unknown) voltage class is drawn gray, the same
+// visible neutral an element falls back to — not black, which disappears
+// against the usual dark diagram background.
 func renderConnector(w io.Writer, c Connector, voltageColor map[int]string, mode RenderMode) {
+	color := voltageColor[c.Voltage]
+	if color == "" {
+		color = "gray"
+	}
 	code := connectorTypeCode[c.Kind]
 	if c.Kind == KindOverheadLine || c.Kind == KindCableLine {
-		writeNamedLine(w, c, voltageColor[c.Voltage], code, mode)
+		writeNamedLine(w, c, color, code, mode)
 		return
 	}
 	if c.Kind == KindLinkToObject {
-		writeObjectLink(w, c, voltageColor[c.Voltage], code, mode)
+		writeObjectLink(w, c, color, code, mode)
 		return
 	}
 	dataAttrs := ""
 	if code != "" {
 		dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
 	}
-	writePolyline(w, c.ID, "connector", c.Points, voltageColor[c.Voltage], c.Dashed, 1, dataAttrs, mode)
+	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, 1, dataAttrs, mode)
 }
 
 // writePolyline draws a busbar's or connector's geometry as a single flat
@@ -2149,10 +2157,7 @@ func writeAutotransformerTap(w io.Writer, cx, cy float64, color string) (float64
 // this editor's own version rotating together is more useful to a diagram
 // author and was a deliberate deviation, not an oversight).
 func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, fallbackColor string, mode RenderMode) {
-	count := len(e.Windings)
-	if count < 2 {
-		count = 2
-	}
+	count := max(len(e.Windings), 2)
 
 	editorAttr := ""
 	if mode == Interactive {

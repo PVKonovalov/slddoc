@@ -1169,3 +1169,24 @@ func TestRender_ForkArmLength(t *testing.T) {
 		}
 	}
 }
+
+func TestRender_ConnectorWithoutVoltageIsGray(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	pts := []Point{{X: 0, Y: 0}, {X: 0, Y: 20}}
+	for _, kind := range []ConnectorKind{KindBusWork, KindOverheadLine, KindCableLine, KindLinkToObject} {
+		t.Run(string(kind), func(t *testing.T) {
+			d := &Diagram{Width: 50, Height: 50, Connectors: []Connector{{ID: 1, Kind: kind, Points: pts}}}
+			var buf bytes.Buffer
+			if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			out := buf.String()
+			if !strings.Contains(out, "stroke:gray") {
+				t.Errorf("want stroke:gray, got %s", out)
+			}
+			if strings.Contains(out, "stroke:black") {
+				t.Errorf("unexpected black stroke: %s", out)
+			}
+		})
+	}
+}

@@ -204,10 +204,7 @@ func TestExtract_DigitalDeviceBackgroundRect(t *testing.T) {
 	if synthesized[0].ID == synthesized[1].ID {
 		t.Errorf("two synthesized background Rectangles must not collide on the same id, both got %d", synthesized[0].ID)
 	}
-	wantLastID := synthesized[0].ID
-	if synthesized[1].ID > wantLastID {
-		wantLastID = synthesized[1].ID
-	}
+	wantLastID := max(synthesized[1].ID, synthesized[0].ID)
 	if d.LastID != wantLastID {
 		t.Errorf("d.LastID = %d, want %d (the highest synthesized id)", d.LastID, wantLastID)
 	}
