@@ -28,7 +28,7 @@ preserved.
 
 The diagram XML format (every section, attribute, id rule, the topology
 model and the element/connector code tables) is described in
-[`FORMAT.md`](FORMAT.md).
+[`XSLD_FORMAT.md`](XSLD_FORMAT.md).
 
 ## Install
 
@@ -39,7 +39,7 @@ go get github.com/PVKonovalov/slddoc
 ## Layout
 
 A single flat package at the module root — `Diagram`/`Element`/`Connector`/
-`Node`/`Label`/... in `model.go`, XML `Load`/`Save` alongside them,
+`Node`/`Label`/... in `model.go`, XML/XSLD `Load`/`Save` alongside them,
 `Extract` and its shape-specific parsers in `extract.go`/`elements.go`/
 `topology.go`/`layers.go`/`voltage.go`/`labels.go`, SVG `Render` in
 `render.go`, and the `SymbolLibrary` it draws from in `symbols.go`. Every
