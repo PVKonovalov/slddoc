@@ -38,11 +38,14 @@ func parseVAlign(style string) string {
 	}
 }
 
-// firstTextChild returns n's own first <text> child, or its first <text>
-// descendant if it has none directly (a real xsde2svg export's own nesting
-// depth for this varies by data-type/version) — nil if there's no <text>
-// anywhere in n's subtree.
+// firstTextChild returns n itself when n is a <text>, else n's own first
+// <text> child, or its first <text> descendant if it has none directly (a
+// real xsde2svg export's own nesting depth for this varies by
+// data-type/version) — nil if there's no <text> anywhere in n's subtree.
 func firstTextChild(n *rawNode) *rawNode {
+	if n.Tag == "text" {
+		return n
+	}
 	texts := n.childrenTagged("text")
 	if len(texts) == 0 {
 		texts = n.descendants("text")

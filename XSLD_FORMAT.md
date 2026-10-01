@@ -380,6 +380,9 @@ extendable per site); this is the default set.
 | Disconnector | 162, 49 (withdrawable) | 2 | `state`; 49 also `position` |
 | LoadBreakSwitch | 42 | 2 | `state` |
 | Sectionalizer | 164 | 2 | `state` (0/1) |
+| ShortCircuiterNoGround | 163 | 2 | `state` (0/1) |
+| DisconnectorFuse | 166 | 2 | `state` (0/1) |
+| KnifeSwitch3 | 175 | 3 | `state`: 1/unset middle, 0 left, 2 right |
 | PowerCircuitBreaker | 399 | 2 | `state` (0/1) |
 | GroundSwitch | 54 | 1 | `state` |
 | ShortCircuiter | 398 | 1 | `state` (0/1) |
@@ -388,12 +391,16 @@ extendable per site); this is the default set.
 | Chassis / HalfChassis | 51 / 52 | 2 / 1 | |
 | Starter | 76 | 2 | |
 | PowerTransformer | 47 | 2–4 | `<windings>` (§6.4) |
+| Booster (voltage regulator) | 6 | 2 | `tapChanger` (bool) draws the regulation arrow |
 | CurrentTransformer | 34 | 2 | |
 | VoltageTransformer | 55 | 1 | |
 | ChokeCoil / Reactor / ReactorShunt | 33 / 37 / 397 | 2 / 2 / 1 | |
 | SurgeArrester | 35, 29, 168 (grounded) | 1–2 | |
 | Capacitor / CapacitorBank | 388 / 172 | 2 / 1 | |
+| Resistor | 156 | 2 | |
+| Thyristor | 157 | 3 | anode, cathode, gate |
 | Generator | 173 | 1 | |
+| SynchronousCompensator | 174 | 1 | |
 | Ground | 31 | 1 | |
 | CableConnector / CableJoint | 56 / 32 | 2 | |
 | JunctionPoint | 7 | 1 | `radius`, `fill` |

@@ -132,6 +132,30 @@ const (
 	// convention as ClassSectionalizer. Only two real states exist (no
 	// Intermediate), same as ClassSectionalizer.
 	ClassShortCircuiter Class = "ShortCircuiter"
+	// ClassShortCircuiterNoGround (shape 163, Короткозамыкатель без
+	// земли) is a two-terminal short-circuiter drawn like ClassSectionalizer
+	// (contact bars, a rod pivoting at the bottom terminal when Open, an
+	// arm), except its arrowhead points in toward the rod. Only two real
+	// states, Closed(1)/Open(0).
+	ClassShortCircuiterNoGround Class = "ShortCircuiterNoGround"
+	// ClassDisconnectorFuse (shape 166, Разъединитель-предохранитель) is a
+	// two-terminal disconnector whose blade is a fuse: Closed draws the
+	// fuse body between two contact bars, Open swings it about a bottom
+	// pivot. Only two real states, Closed(1)/Open(0).
+	ClassDisconnectorFuse Class = "DisconnectorFuse"
+	// ClassKnifeSwitch3 (shape 175, Рубильник 3-позиционный) is a
+	// three-position knife switch: a blade pivoting at its bottom
+	// terminal ("1") between two contact terminals, left ("2") and right
+	// ("3"). State picks the blade's position: 1 or unset is the middle
+	// (off, the only position the real source draws), 0 the left contact,
+	// 2 the right one.
+	ClassKnifeSwitch3 Class = "KnifeSwitch3"
+	// ClassBooster (shape 6, Бустер/ВДТ) is a booster/voltage regulator
+	// drawn as a single-winding power transformer: one circle with a lead
+	// on each side, two real terminals, a single Voltage. TapChanger adds
+	// the diagonal regulation arrow; the arrow and the winding-connection
+	// mark stay upright whatever the Orient, as in the real source.
+	ClassBooster Class = "Booster"
 	// ClassPowerCircuitBreaker (shape 399, Автомат силовой) is a
 	// two-terminal low-voltage automatic circuit breaker, drawn like a
 	// Disconnector (two fixed contact bars plus a state-driven blade) with
@@ -149,13 +173,24 @@ const (
 	ClassSurgeArrester       Class = "SurgeArrester"
 	ClassFuse                Class = "Fuse"
 	ClassCapacitor           Class = "Capacitor"
-	ClassCapacitorBank       Class = "CapacitorBank"
-	ClassHalfChassis         Class = "HalfChassis"
-	ClassChassis             Class = "Chassis"
-	ClassStarter             Class = "Starter"
-	ClassGenerator           Class = "Generator"
-	ClassBusBarSection       Class = "BusBarSection"
-	ClassJunctionPoint       Class = "JunctionPoint"
+	// ClassResistor (shape 156, Резистор) is a two-terminal resistor: a
+	// 40x16 box with a lead on each side.
+	ClassResistor Class = "Resistor"
+	// ClassThyristor (shape 157, Тиристор) is a two-terminal thyristor: a
+	// diode triangle (anode left, cathode bar right) with a gate stub off
+	// the cathode bar: three terminals, anode "1", cathode "2", gate "3".
+	ClassThyristor     Class = "Thyristor"
+	ClassCapacitorBank Class = "CapacitorBank"
+	ClassHalfChassis   Class = "HalfChassis"
+	ClassChassis       Class = "Chassis"
+	ClassStarter       Class = "Starter"
+	ClassGenerator     Class = "Generator"
+	// ClassSynchronousCompensator (shape 174, Синхронный компенсатор) is a
+	// single-terminal rotating machine drawn like ClassGenerator (a circle
+	// hanging from its terminal's stem) with an upright "=" mark inside.
+	ClassSynchronousCompensator Class = "SynchronousCompensator"
+	ClassBusBarSection          Class = "BusBarSection"
+	ClassJunctionPoint          Class = "JunctionPoint"
 	// ClassFork (shape 26, "Развилка"/Fork) is a real three-terminal
 	// wiring element: a "V" whose vertex (at X/Y) and two arm tips are each
 	// a real electrical terminal — one wire in at the vertex, one out at
@@ -556,6 +591,11 @@ type Element struct {
 	// at both Points, not just the second one — matching the real
 	// xsde2svg source's own FDouble flag. Unused by every other class.
 	DoubleHeaded bool `xml:"doubleHeaded,attr,omitempty" json:"doubleHeaded,omitempty"`
+	// TapChanger draws a Booster's (shape 6) own regulation arrow — the
+	// real source's own FArrowType flag. A PowerTransformer marks its
+	// regulated winding with TransformerWinding.TapChanger instead. Unused
+	// by every other class.
+	TapChanger bool `xml:"tapChanger,attr,omitempty" json:"tapChanger,omitempty"`
 	// Square draws a PostPole's (shape 292) own square marker instead of
 	// its default round one — matching the real source's own StyleTow
 	// "sqware" value (see ClassPostPole's own doc comment). Unused by

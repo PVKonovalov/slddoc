@@ -38,6 +38,13 @@ var elementDataTypes = map[string]bool{
 	"320001": true,
 	"312":    true, "313": true,
 	"399": true,
+	"6":   true,
+	"156": true,
+	"157": true,
+	"163": true,
+	"166": true,
+	"174": true,
+	"175": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -59,6 +66,7 @@ var twoPortShapes = map[string]Class{
 	"51":  ClassChassis,
 	"56":  ClassCableConnector,
 	"32":  ClassCableJoint,
+	"156": ClassResistor,
 }
 
 // unrecognizedShapeName gives a human-readable name for an xsde2svg
@@ -69,7 +77,6 @@ var twoPortShapes = map[string]Class{
 // from the xsde2svg catalog's own object-type list, not derived from
 // anything in this package.
 var unrecognizedShapeName = map[string]string{
-	"6":    "Booster/voltage regulator (single-winding power transformer)",
 	"10":   "Connector",
 	"11":   "Backdrop/image file",
 	"19":   "Metal anchor/angle pole",
@@ -84,12 +91,6 @@ var unrecognizedShapeName = map[string]string{
 	"103":  "Automation device",
 	"130":  "Device",
 	"146":  "Power pole",
-	"156":  "Resistor",
-	"157":  "Thyristor",
-	"163":  "Short-circuiter without ground",
-	"166":  "Disconnector-fuse",
-	"174":  "Synchronous compensator",
-	"175":  "3-position knife switch",
 	"302":  "Window icon",
 	"310":  "Container",
 	"319":  "Small window",
@@ -291,7 +292,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		dt := n.attr("data-type")
 		if dt == "" {
-			continue // <defs>, style helpers, and other untyped nodes
+			// A bare top-level <text> is a free caption (Render's own
+			// writeLabel, and xsde2svg's plain text); every other untyped
+			// node is <defs>, a style helper, or similar.
+			if n.Tag == "text" {
+				labelNodes = append(labelNodes, n)
+			}
+			continue
 		}
 		if dt == "5" {
 			labelNodes = append(labelNodes, n)
@@ -519,7 +526,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32":
+		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "156":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
@@ -573,8 +580,62 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, ports, voltage)
 
+		case "166":
+			el, ports, voltage, err := parseDisconnectorFuse(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "163":
+			el, ports, voltage, err := parseShortCircuiterNoGround(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "157":
+			el, ports, voltage, err := parseThyristor(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "6":
+			el, ports, voltage, err := parseBooster(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
 		case "55":
 			el, ports, voltage, err := parseVoltageTransformer(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "175":
+			el, ports, voltage, err := parseKnifeSwitch3(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "174":
+			el, ports, voltage, err := parseOnePortDevice(n, ClassSynchronousCompensator, "174")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

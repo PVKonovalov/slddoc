@@ -881,3 +881,390 @@ func TestExtract_ForkConnectsAtItsVertex(t *testing.T) {
 		t.Errorf("vertex port node %d, connector %+v: want the wire to start at the fork's vertex", fork.Ports[0].Node, d.Connectors)
 	}
 }
+
+// TestParseBooster uses real xsde2svg markup (ctrlroom sld1 corpus, shape
+// 6 at export scale r=14): an unrotated instance with its regulation
+// arrow, and a rotated one without it. The arrow and the winding mark are
+// never rotated by the real source, so only the first path's own rotate()
+// counts.
+func TestParseBooster(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantTap    bool
+		wantPorts  []Point
+	}{
+		{
+			name: "unrotated with arrow",
+			svg: `<g id="25956" data-voltage="purple" data-type="6"  >
+<path d="M 2152 1130 h 4 a 14 14 0 0 1 28 0 a 14 14 0 0 1 -28 0 m 32 0 h -4" style="fill:none;stroke:purple;stroke-width:2"  />
+<path d="M 2156 1144 l 42 -42 m 0 0 l -5 3 l 2 2 z" style="fill:#12161d;stroke:#12161d;stroke-width:1" />
+<path d="M 2170 1126 v 4 l 5 5" style="fill:none;stroke:#12161d;stroke-width:1" />
+</g>`,
+			wantX: 2170, wantY: 1130, wantOrient: 0, wantTap: true,
+			wantPorts: []Point{{2152, 1130}, {2188, 1130}},
+		},
+		{
+			name: "rotated without arrow",
+			svg: `<g id="30381" data-voltage="purple" data-type="6"  >
+<path d="M 2182 1540 h 4 a 14 14 0 0 1 28 0 a 14 14 0 0 1 -28 0 m 32 0 h -4" style="fill:none;stroke:purple;stroke-width:2" transform="rotate(90,2200,1540)" />
+<path d="M 2200 1536 v 4 l 5 5" style="fill:none;stroke:#12161d;stroke-width:1" />
+</g>`,
+			wantX: 2200, wantY: 1540, wantOrient: 90, wantTap: false,
+			wantPorts: []Point{{2200, 1522}, {2200, 1558}},
+		},
+		{
+			name: "rotated -270",
+			svg: `<g id="1" data-voltage="purple" data-type="6"  >
+<path d="M 72 100 h 7 a 21 21 0 0 1 42 0 a 21 21 0 0 1 -42 0 m 49 0 h -7" style="fill:none;stroke:purple;stroke-width:2" transform="rotate(-270,100,100)" />
+</g>`,
+			wantX: 100, wantY: 100, wantOrient: 90, wantTap: false,
+			wantPorts: []Point{{100, 72}, {100, 128}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseBooster(parseFirst(t, c.svg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassBooster || el.Shape != "6" || voltage != "purple" {
+				t.Errorf("class/shape/voltage = %s/%s/%s", el.Class, el.Shape, voltage)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient {
+				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
+			}
+			if el.TapChanger != c.wantTap {
+				t.Errorf("tapChanger = %v, want %v", el.TapChanger, c.wantTap)
+			}
+			if len(ports) != 2 || ports[0] != c.wantPorts[0] || ports[1] != c.wantPorts[1] {
+				t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+			}
+			if len(el.Ports) != 2 {
+				t.Errorf("element ports = %v, want 2", el.Ports)
+			}
+		})
+	}
+}
+
+// TestParseResistor uses real xsde2svg markup (ctrlroom corpus, shape 156,
+// a bare <path>): an unrotated instance, whose anchor falls back to the
+// midpoint of its lead ends (1px off the real one, the source itself being
+// asymmetric), and a rotated one, whose anchor is the rotate() center.
+func TestParseResistor(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantPorts  []Point
+	}{
+		{
+			name:  "unrotated",
+			svg:   `<path d="M 734 920 h 15 m 0 8 v -16 h 40 v 16 z m 40 -8 h 15" style="fill:none;stroke:#C9A0DC;stroke-width:1"  id="8448" data-voltage="#C9A0DC" data-type="156" />`,
+			wantX: 769, wantY: 920, wantOrient: 0,
+			wantPorts: []Point{{734, 920}, {804, 920}},
+		},
+		{
+			name:  "rotated",
+			svg:   `<path d="M 2084 930 h 15 m 0 8 v -16 h 40 v 16 z m 40 -8 h 15" style="fill:none;stroke:#C9A0DC;stroke-width:1" transform="rotate(90,2120,930)" id="4306" data-voltage="#C9A0DC" data-type="156" />`,
+			wantX: 2120, wantY: 930, wantOrient: 90,
+			wantPorts: []Point{{2120, 894}, {2120, 964}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseTwoPortDevice(parseFirst(t, c.svg), twoPortShapes["156"], "156")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassResistor || el.Shape != "156" || voltage != "#C9A0DC" {
+				t.Errorf("class/shape/voltage = %s/%s/%s", el.Class, el.Shape, voltage)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient {
+				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
+			}
+			if len(ports) != 2 || ports[0] != c.wantPorts[0] || ports[1] != c.wantPorts[1] {
+				t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+			}
+		})
+	}
+}
+
+// TestParseThyristor uses real xsde2svg markup (ctrlroom corpus, shape 157,
+// "Нива" hydro plants): an unrotated instance, whose anchor falls back to
+// the midpoint of its lead ends (1px off the real one, the source itself
+// being asymmetric), and one rotated by 180, whose anchor is the rotate()
+// center. The gate stub's free end is the third port.
+func TestParseThyristor(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantPorts  []Point
+	}{
+		{
+			name: "unrotated",
+			svg: `<g id="36186" data-type="157"  data-voltage="#6600CC" >
+<path d="M 1460 1380 l -8 0 l -20 10 l 0 -20 l 20 10 m -20 0 l -10 0 m 30 10 l 0 -20 l 5 -5 l 0 -4" style="fill:#12161d;stroke:#6600CC;stroke-width:1" />
+</g>`,
+			wantX: 1441, wantY: 1380, wantOrient: 0,
+			wantPorts: []Point{{1422, 1380}, {1460, 1380}, {1457, 1361}},
+		},
+		{
+			name: "rotated 180",
+			svg: `<g id="33372" data-type="157" transform="rotate(180,270,1660)" data-voltage="#6600CC" >
+<path d="M 290 1660 l -8 0 l -20 10 l 0 -20 l 20 10 m -20 0 l -10 0 m 30 10 l 0 -20 l 5 -5 l 0 -4" style="fill:#12161d;stroke:#6600CC;stroke-width:1" />
+</g>`,
+			wantX: 270, wantY: 1660, wantOrient: 180,
+			wantPorts: []Point{{288, 1660}, {250, 1660}, {253, 1679}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseThyristor(parseFirst(t, c.svg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassThyristor || el.Shape != "157" || voltage != "#6600CC" {
+				t.Errorf("class/shape/voltage = %s/%s/%s", el.Class, el.Shape, voltage)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient {
+				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
+			}
+			if len(ports) != 3 || ports[0] != c.wantPorts[0] || ports[1] != c.wantPorts[1] || ports[2] != c.wantPorts[2] {
+				t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+			}
+			if len(el.Ports) != 3 || el.Ports[2].Name != "3" {
+				t.Errorf("element ports = %v, want 1, 2, 3", el.Ports)
+			}
+		})
+	}
+}
+
+// TestParseShortCircuiterNoGround uses real xsde2svg markup (ctrlroom fixed
+// corpus, shape 163): an unrotated Closed instance (anchor from the
+// geometry), a rotated, mirrored Open one, and one with bus-spacing legs,
+// whose ports are the legs' outer ends (export scale 1.4, so ±28).
+func TestParseShortCircuiterNoGround(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantMirror bool
+		wantState  int
+		wantPorts  []Point
+	}{
+		{
+			name: "unrotated closed",
+			svg: `<g id="803" data-voltage="deepskyblue" data-type="163" data-name="ОДТ-1-110"  >
+<path d="M 505 590 h 10 M 505 570 h 10 M 510 571 v 18 M 510 580 h -11 " data-state="1" style="fill:none;stroke:deepskyblue;stroke-width:1" />
+<path d="M 510 580 l -8 3 v -6 z" style="fill:deepskyblue;stroke:deepskyblue;stroke-width:1" />
+</g>`,
+			wantX: 510, wantY: 580, wantOrient: 0, wantMirror: false, wantState: 1,
+			wantPorts: []Point{{510, 570}, {510, 590}},
+		},
+		{
+			name: "rotated mirrored open",
+			svg: `<g id="120954787" data-voltage="deepskyblue" data-type="163" data-name="КЗТ-2-110(А)" transform="rotate(-90,870,950)" >
+<path d="M 870 959 a 2 2 0 1 1 0 4 a 2 2 0 0 1 0 -4" style="fill:#12161d;stroke:deepskyblue;stroke-width:1" />
+<path d="M 866 940 h 8 M 874 950 h 11 M 876 945 l -6 14" data-state="0" style="fill:none;stroke:deepskyblue;stroke-width:1" />
+<path d="M 874 950 l 8 3 v -6 z " style="fill:deepskyblue;stroke:deepskyblue;stroke-width:1" />
+</g>`,
+			wantX: 870, wantY: 950, wantOrient: -90, wantMirror: true, wantState: 0,
+			wantPorts: []Point{{860, 950}, {880, 950}},
+		},
+		{
+			name: "legs",
+			svg: `<g id="34160" data-voltage="deepskyblue" data-type="163"  transform="rotate(-90,1453,500)" >
+<path d="M 1453 472 v 14 M 1453 528 v -14" style="fill:none;stroke:deepskyblue;stroke-width:1" />
+<path d="M 1453 512 a 2 2 0 1 1 0 4 a 2 2 0 0 1 0 -4" style="fill:#12161d;stroke:deepskyblue;stroke-width:1" />
+<path d="M 1449 486 h 11 M 1449 500 h -15 M 1445 493 l 8 19" data-state="0" style="fill:none;stroke:deepskyblue;stroke-width:1" />
+<path d="M 1448 500 l -11 4 v -8 z " style="fill:deepskyblue;stroke:deepskyblue;stroke-width:1" />
+</g>`,
+			wantX: 1453, wantY: 500, wantOrient: -90, wantMirror: false, wantState: 0,
+			wantPorts: []Point{{1425, 500}, {1481, 500}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseShortCircuiterNoGround(parseFirst(t, c.svg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassShortCircuiterNoGround || el.Shape != "163" || voltage != "deepskyblue" {
+				t.Errorf("class/shape/voltage = %s/%s/%s", el.Class, el.Shape, voltage)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient || el.Mirror != c.wantMirror {
+				t.Errorf("anchor/orient/mirror = (%v,%v,%d,%v), want (%v,%v,%d,%v)", el.X, el.Y, el.Orient, el.Mirror, c.wantX, c.wantY, c.wantOrient, c.wantMirror)
+			}
+			if el.State == nil || *el.State != c.wantState {
+				t.Errorf("state = %v, want %d", el.State, c.wantState)
+			}
+			if len(ports) != 2 || math.Abs(ports[0].X-c.wantPorts[0].X) > 1e-9 || math.Abs(ports[0].Y-c.wantPorts[0].Y) > 1e-9 ||
+				math.Abs(ports[1].X-c.wantPorts[1].X) > 1e-9 || math.Abs(ports[1].Y-c.wantPorts[1].Y) > 1e-9 {
+				t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+			}
+		})
+	}
+}
+
+// TestParseDisconnectorFuse uses real xsde2svg markup (ctrlroom fixed
+// corpus, shape 166): an unrotated Closed instance at export scale 2 (legs
+// 3 long, so ports ±21), an unrotated Open one (anchor from the top bar
+// and the blade's pivot), and an Open one rotated by an inner <g>.
+func TestParseDisconnectorFuse(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantState  int
+		wantPorts  []Point
+	}{
+		{
+			name: "unrotated closed",
+			svg: `<g id="120954436" data-type="166" >
+<path d="M 240 1648 v 24 m 0 -24 h 4 v 24 h -8 v -24 h 4" data-state="1" style="fill:none;stroke:purple;stroke-width:1" data-voltage="purple" data-name="РПТСН1-10" />
+<path d="M 232 1642 h 16 m 0 36 h -16" style="fill:none;stroke:purple;stroke-width:1" />
+<path d="M 240 1642 v -3 M 240 1678 v 3" style="fill:none;stroke:purple;stroke-width:1" />
+</g>`,
+			wantX: 240, wantY: 1660, wantOrient: 0, wantState: 1,
+			wantPorts: []Point{{240, 1639}, {240, 1681}},
+		},
+		{
+			name: "unrotated open",
+			svg: `<g id="120952948" data-type="166" >
+<path d="M 590 1929 l -8 -16 m -1 3 l 4 -2 l 5 10 l -4 2 z" data-state="0" style="fill:none;stroke:purple;stroke-width:1" data-voltage="purple" data-name="ПМ1" />
+<path d="M 590 1926 a 2 2 0 1 1 0 4 a 2 2 0 0 1 0 -4" style="fill:#12161d;stroke:purple;stroke-width:1" />
+<path d="M 586 1911 h 8" style="fill:none;stroke:purple;stroke-width:1" />
+<path d="M 590 1911 v -1 M 590 1929 v 1" style="fill:none;stroke:purple;stroke-width:1" />
+</g>`,
+			wantX: 590, wantY: 1920, wantOrient: 0, wantState: 0,
+			wantPorts: []Point{{590, 1910}, {590, 1930}},
+		},
+		{
+			name: "rotated open",
+			svg: `<g id="1360" data-type="166" >
+<g transform="rotate(90,740,1430)" >
+<path d="M 740 1439 l -8 -16 m -1 3 l 4 -2 l 5 10 l -4 2 z" data-state="0" style="fill:none;stroke:purple;stroke-width:1" data-voltage="purple" data-name="ПМ-2" />
+<path d="M 740 1436 a 2 2 0 1 1 0 4 a 2 2 0 0 1 0 -4" style="fill:#12161d;stroke:purple;stroke-width:1" />
+<path d="M 736 1421 h 8" style="fill:none;stroke:purple;stroke-width:1" />
+<path d="M 740 1421 v -1 M 740 1439 v 1" style="fill:none;stroke:purple;stroke-width:1" />
+</g>
+</g>`,
+			wantX: 740, wantY: 1430, wantOrient: 90, wantState: 0,
+			wantPorts: []Point{{750, 1430}, {730, 1430}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseDisconnectorFuse(parseFirst(t, c.svg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassDisconnectorFuse || el.Shape != "166" || voltage != "purple" || el.Name == "" {
+				t.Errorf("class/shape/voltage/name = %s/%s/%s/%q", el.Class, el.Shape, voltage, el.Name)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient || el.Mirror {
+				t.Errorf("anchor/orient/mirror = (%v,%v,%d,%v), want (%v,%v,%d,false)", el.X, el.Y, el.Orient, el.Mirror, c.wantX, c.wantY, c.wantOrient)
+			}
+			if el.State == nil || *el.State != c.wantState {
+				t.Errorf("state = %v, want %d", el.State, c.wantState)
+			}
+			if len(ports) != 2 || math.Abs(ports[0].X-c.wantPorts[0].X) > 1e-9 || math.Abs(ports[0].Y-c.wantPorts[0].Y) > 1e-9 ||
+				math.Abs(ports[1].X-c.wantPorts[1].X) > 1e-9 || math.Abs(ports[1].Y-c.wantPorts[1].Y) > 1e-9 {
+				t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+			}
+		})
+	}
+}
+
+// TestParseSynchronousCompensator uses real xsde2svg markup (ctrlroom
+// fixed corpus, shape 174): the anchor and only port are the stem's tip,
+// the circle path's first point, like Generator (173).
+func TestParseSynchronousCompensator(t *testing.T) {
+	svg := `<g id="33352" data-voltage="purple" data-type="174" >
+<path d="M 1040 2699 v 5 m -16 16 a 16 16 0 0 1 32 0 a 16 16 0 0 1 -32 0" style="fill:none;stroke:purple;stroke-width:2"  />
+<path d="M 1033 2723 h 14 m -14 -6 h 14" style="fill:none;stroke:purple;stroke-width:2" />
+</g>`
+	el, ports, voltage, err := parseOnePortDevice(parseFirst(t, svg), ClassSynchronousCompensator, "174")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.Class != ClassSynchronousCompensator || el.Shape != "174" || voltage != "purple" {
+		t.Errorf("class/shape/voltage = %s/%s/%s", el.Class, el.Shape, voltage)
+	}
+	if el.X != 1040 || el.Y != 2699 || el.Orient != 0 {
+		t.Errorf("anchor/orient = (%v,%v,%d), want (1040,2699,0)", el.X, el.Y, el.Orient)
+	}
+	if len(ports) != 1 || ports[0] != (Point{1040, 2699}) {
+		t.Errorf("ports = %v, want [(1040,2699)]", ports)
+	}
+}
+
+// TestParseKnifeSwitch3 has no real corpus instance to use (none exist), so
+// its markup is element_175.go's own output format at two positions: the
+// ports are the circles' centers (pivot, left, right) and State stays
+// unset (the source's only, middle, position).
+func TestParseKnifeSwitch3(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantPorts  []Point
+	}{
+		{
+			name: "unrotated",
+			svg: `<g id="7" data-type="175" data-voltage="purple" >
+<path d="M 100 190 v 15" style="fill:purple;stroke:purple;stroke-width:4" />
+<path d="M 98 205 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m 10 -15 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m -20 0 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0" style="fill:#12161d;stroke:purple;stroke-width:2" />
+</g>`,
+			wantX: 100, wantY: 200, wantOrient: 0,
+			wantPorts: []Point{{100, 205}, {90, 190}, {110, 190}},
+		},
+		{
+			name: "rotated 180",
+			svg: `<g id="7" data-type="175" transform="rotate(180,100,200)" data-voltage="purple" >
+<path d="M 100 190 v 15" style="fill:purple;stroke:purple;stroke-width:4" />
+<path d="M 98 205 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m 10 -15 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m -20 0 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0" style="fill:#12161d;stroke:purple;stroke-width:2" />
+</g>`,
+			wantX: 100, wantY: 200, wantOrient: 180,
+			wantPorts: []Point{{100, 195}, {110, 210}, {90, 210}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseKnifeSwitch3(parseFirst(t, c.svg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassKnifeSwitch3 || el.Shape != "175" || voltage != "purple" || el.State != nil {
+				t.Errorf("class/shape/voltage/state = %s/%s/%s/%v", el.Class, el.Shape, voltage, el.State)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient {
+				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
+			}
+			if len(ports) != 3 || len(el.Ports) != 3 {
+				t.Fatalf("ports = %v / %v, want 3", ports, el.Ports)
+			}
+			for i := range ports {
+				if math.Abs(ports[i].X-c.wantPorts[i].X) > 1e-9 || math.Abs(ports[i].Y-c.wantPorts[i].Y) > 1e-9 {
+					t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+					break
+				}
+			}
+		})
+	}
+}

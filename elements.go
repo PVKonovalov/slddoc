@@ -87,6 +87,13 @@ import (
 //     into Scheme/Grounding/TapChanger — importing a real xsde2svg
 //     transformer gets its winding count and lead positions back, not its
 //     full nameplate configuration.
+//   - Booster (6) is a two-port device whose own first <path> is the
+//     circle plus both leads ("M a y h v a ... m ... h -v"): its two ports
+//     are that path's two subpaths' own first points, rotated through the
+//     path's own rotate() when present. The arrow and the winding mark
+//     are never rotated by the real source, so only the first path is
+//     read for geometry; a filled (closed, "z") second path is the
+//     regulation arrow, read back as TapChanger.
 //   - BusBarSection (24) and generic wires (21/22/23/28) are plain
 //     polylines; their points are kept as drawn.
 //   - JunctionPoint (7) is a circle marking an explicit graph node.
@@ -276,8 +283,13 @@ func parseElementID(n *rawNode) (int, error) {
 	return id, nil
 }
 
+// horizontalTwoPortShapes are the two-port shapes whose xsde2svg formula
+// draws them horizontally before any rotation (Resistor, Thyristor), unlike the rest,
+// so an unrotated instance's own Orient is 0, not orientFromPorts' 90.
+var horizontalTwoPortShapes = map[string]bool{"156": true, "157": true}
+
 // parseTwoPortDevice handles every two-terminal shape documented at the top
-// of this file: 41, 43, 42, 162, 71, 49, 33, 34, 35, 203, 388. voltage is
+// of this file: 41, 43, 42, 162, 71, 49, 33, 34, 35, 203, 388, 156. voltage is
 // the element's own raw data-voltage color, returned alongside rather than
 // stored on Element (whose own Voltage field holds a resolved VoltageClass
 // id, not yet known at parse time) — see Extract's own two-pass resolution.
@@ -303,12 +315,15 @@ func parseTwoPortDevice(n *rawNode, class Class, shape string) (Element, []Point
 	var orient int
 	ports := []Point{p1, p2}
 	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
-		anchor, orient = center, angle
+		anchor, orient = center, normalizeOrient(angle)
 		ports[0] = rotate(p1, center, float64(angle))
 		ports[1] = rotate(p2, center, float64(angle))
 	} else {
 		anchor = midpoint(p1, p2)
 		orient = orientFromPorts(p1, p2)
+		if horizontalTwoPortShapes[shape] {
+			orient = 90 - orient
+		}
 	}
 
 	voltage := firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage"))
@@ -327,6 +342,255 @@ func parseTwoPortDevice(n *rawNode, class Class, shape string) (Element, []Point
 			{Name: "2"},
 		},
 	}, ports, voltage, nil
+}
+
+// parseKnifeSwitch3 handles shape 175 (Рубильник 3-позиционный). The real
+// source draws three r=2 circles in one path — the pivot, then the right
+// and the left contact — whose relative moves are fixed numbers, not
+// scaled, so each circle's center is its subpath's start plus (2, 0). The
+// anchor is the rotate() center, or when unrotated, the pivot's x and the
+// contacts' y + 10 (the source's origin). The source has no state and
+// always draws the blade in the middle, so State is left unset (middle).
+func parseKnifeSwitch3(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	var circles *rawNode
+	for _, p := range elementPaths(n) {
+		if strings.ContainsAny(p.attr("d"), "aA") {
+			circles = p
+			break
+		}
+	}
+	if circles == nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: knife switch %s: no circles path", n.attr("id"))
+	}
+	subs, err := parseSubpaths(circles.attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(subs) != 3 || len(subs[0]) == 0 || len(subs[1]) == 0 || len(subs[2]) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: knife switch %s: expected three circles", n.attr("id"))
+	}
+	center := func(sp []Point) Point { return Point{X: sp[0].X + 2, Y: sp[0].Y} }
+	pivot, right, left := center(subs[0]), center(subs[1]), center(subs[2])
+
+	anchor := Point{X: pivot.X, Y: right.Y + 10}
+	angle, c, rotated := parseRotate(n.attr("transform"))
+	if rotated {
+		anchor = c
+	}
+	ports := []Point{
+		rotate(pivot, anchor, float64(angle)),
+		rotate(left, anchor, float64(angle)),
+		rotate(right, anchor, float64(angle)),
+	}
+	return Element{
+		ID:     id,
+		Class:  ClassKnifeSwitch3,
+		Shape:  "175",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: normalizeOrient(angle),
+		Ports: []Port{
+			{Name: "1"},
+			{Name: "2"},
+			{Name: "3"},
+		},
+	}, ports, n.attr("data-voltage"), nil
+}
+
+// parseDisconnectorFuse handles shape 166 (Разъединитель-предохранитель).
+// Its real markup nests an optional rotate() <g> inside the element's own
+// <g>; the blade path carries data-state, data-voltage and data-name, the
+// contact-bar path is drawn with h only (both bars when Closed, the top one
+// plus the pivot circle when Open), and the legs path with v only. The
+// anchor is the rotate() center, or when unrotated, the top bar's midpoint
+// x and the y halfway between the top bar and the bottom bar (Closed) or
+// the blade's pivot (Open, the blade path's first point) — both sit the
+// same distance from the anchor at any export scale. The ports are the
+// legs' outer ends when present, else the top bar and its mirror image
+// below the anchor. Mirror is read from which way the Open blade swings.
+func parseDisconnectorFuse(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	var blade, bars, legs *rawNode
+	for _, p := range elementPaths(n) {
+		d := p.attr("d")
+		switch {
+		case p.attr("data-state") != "":
+			blade = p
+		case strings.ContainsAny(d, "hH"):
+			bars = p
+		case strings.ContainsAny(d, "vV"):
+			legs = p
+		}
+	}
+	if blade == nil || bars == nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: disconnector-fuse %s: no blade or contact-bar path", n.attr("id"))
+	}
+	bladeSubs, err := parseSubpaths(blade.attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	barSubs, err := parseSubpaths(bars.attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(bladeSubs) == 0 || len(bladeSubs[0]) < 2 || len(barSubs) == 0 || len(barSubs[0]) < 2 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: disconnector-fuse %s: unexpected geometry", n.attr("id"))
+	}
+	state := parseState(n)
+	open := state != nil && *state == 0
+
+	top := barSubs[0][0]
+	bottomY := bladeSubs[0][0].Y
+	if !open && len(barSubs) > 1 {
+		bottomY = barSubs[1][0].Y
+	}
+	anchor := Point{X: (barSubs[0][0].X + barSubs[0][1].X) / 2, Y: (top.Y + bottomY) / 2}
+	angle, center, rotated := parseRotate(n.firstAttrDescendant("transform"))
+	if rotated {
+		anchor = center
+	}
+
+	half := math.Abs(top.Y - anchor.Y)
+	if legs != nil {
+		if legSubs, err := parseSubpaths(legs.attr("d")); err == nil && len(legSubs) > 0 && len(legSubs[0]) > 1 {
+			half = math.Abs(legSubs[0][len(legSubs[0])-1].Y - anchor.Y)
+		}
+	}
+	mirror := open && bladeSubs[0][1].X > bladeSubs[0][0].X
+
+	ports := []Point{
+		rotate(Point{X: anchor.X, Y: anchor.Y - half}, anchor, float64(angle)),
+		rotate(Point{X: anchor.X, Y: anchor.Y + half}, anchor, float64(angle)),
+	}
+	return Element{
+		ID:     id,
+		Class:  ClassDisconnectorFuse,
+		Shape:  "166",
+		Name:   firstNonEmpty(n.attr("data-name"), n.firstAttrDescendant("data-name")),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: normalizeOrient(angle),
+		Mirror: mirror,
+		State:  state,
+		Ports: []Port{
+			{Name: "1"},
+			{Name: "2"},
+		},
+	}, ports, firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage")), nil
+}
+
+// parseShortCircuiterNoGround handles shape 163 (Короткозамыкатель без
+// земли). Unlike Sectionalizer (164) its real markup is a single <g> whose
+// rod/arm path carries a plain data-state, beside a filled arrowhead path
+// (the only one closed with z), a pivot circle when Open, and, when the
+// source's bus spacing (sde.Distance) exceeds the body, a separate path of
+// two vertical legs. The anchor is the rotate() center, or when unrotated,
+// the first contact bar's midpoint x and the arrowhead tip's y (the arm's
+// own line). The ports are the legs' outer ends when present (the real
+// connection points), else the contact bars' ends along the rod axis.
+// Mirror is read from the arm's direction (xMirror draws it rightward).
+func parseShortCircuiterNoGround(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	var body, arrow, legs *rawNode
+	for _, p := range elementPaths(n) {
+		d := p.attr("d")
+		switch {
+		case p.attr("data-state") != "":
+			body = p
+		case strings.ContainsAny(d, "zZ"):
+			arrow = p
+		case !strings.ContainsAny(d, "aA"):
+			legs = p
+		}
+	}
+	if body == nil || arrow == nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: no rod or arrowhead path", n.attr("id"))
+	}
+	bodySubs, err := parseSubpaths(body.attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	arrowSubs, err := parseSubpaths(arrow.attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(bodySubs) == 0 || len(bodySubs[0]) < 2 || len(arrowSubs) == 0 || len(arrowSubs[0]) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: unexpected geometry", n.attr("id"))
+	}
+
+	angle, anchor, rotated := parseRotate(n.attr("transform"))
+	if !rotated {
+		anchor = Point{X: (bodySubs[0][0].X + bodySubs[0][1].X) / 2, Y: arrowSubs[0][0].Y}
+	}
+
+	half := math.Abs(bodySubs[0][0].Y - anchor.Y)
+	if legs != nil {
+		if legSubs, err := parseSubpaths(legs.attr("d")); err == nil && len(legSubs) > 0 && len(legSubs[0]) > 0 {
+			half = math.Abs(legSubs[0][0].Y - anchor.Y)
+		}
+	}
+
+	mirror := false
+	for _, sp := range bodySubs {
+		if len(sp) == 2 && math.Abs(sp[0].Y-anchor.Y) < 0.5 && math.Abs(sp[1].Y-anchor.Y) < 0.5 {
+			mirror = sp[1].X > sp[0].X
+			break
+		}
+	}
+
+	ports := []Point{
+		rotate(Point{X: anchor.X, Y: anchor.Y - half}, anchor, float64(angle)),
+		rotate(Point{X: anchor.X, Y: anchor.Y + half}, anchor, float64(angle)),
+	}
+	return Element{
+		ID:     id,
+		Class:  ClassShortCircuiterNoGround,
+		Shape:  "163",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: normalizeOrient(angle),
+		Mirror: mirror,
+		State:  parseState(n),
+		Ports: []Port{
+			{Name: "1"},
+			{Name: "2"},
+		},
+	}, ports, n.attr("data-voltage"), nil
+}
+
+// parseThyristor handles shape 157 (Тиристор): anode and cathode are found
+// like any horizontal two-port device (parseTwoPortDevice), and the gate,
+// port "3", is the drawn path's own last point, the gate stub's free end.
+func parseThyristor(n *rawNode) (Element, []Point, string, error) {
+	el, ports, voltage, err := parseTwoPortDevice(n, ClassThyristor, "157")
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	pts, err := allPathPoints(elementPaths(n))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	gate := pts[len(pts)-1]
+	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		gate = rotate(gate, center, float64(angle))
+	}
+	el.Ports = append(el.Ports, Port{Name: "3"})
+	return el, append(ports, gate), voltage, nil
 }
 
 // parseGround handles shape 31 (ground/earth terminal): a single electrical port.
@@ -798,7 +1062,8 @@ func parseSectionalizer(n *rawNode) (Element, []Point, string, error) {
 // parseOnePortDevice handles a single-electrical-port device whose real
 // connection point is its combined path's own first point, *in the path's
 // own local/pre-rotation coordinates* — ReactorShunt (397), SurgeArrester
-// (168, the grounded variant), CapacitorBank (172), Generator (173). Real
+// (168, the grounded variant), CapacitorBank (172), Generator (173),
+// SynchronousCompensator (174). Real
 // instances appear both with and without a rotate() transform; when
 // absent, the anchor is exactly that first point (the element's formula
 // always starts drawing there). When present, the first point is *not*
@@ -849,6 +1114,60 @@ func parseOnePortDevice(n *rawNode, class Class, shape string) (Element, []Point
 		Orient: orient,
 		Ports:  []Port{{Name: "1"}},
 	}, []Point{anchor}, voltage, nil
+}
+
+// parseBooster handles shape 6 (Booster/voltage regulator, see the list
+// at the top of this file). The anchor is the midpoint of the two drawn
+// lead ends, which is also the circle's center and the real source's own
+// rotate() center, so it works for unrotated instances too and at any
+// export scale.
+func parseBooster(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: booster %s: no <path> geometry", n.attr("id"))
+	}
+	subpaths, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(subpaths) != 2 || len(subpaths[0]) == 0 || len(subpaths[1]) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: booster %s: expected a circle with two leads", n.attr("id"))
+	}
+	p1, p2 := subpaths[0][0], subpaths[1][0]
+	anchor := midpoint(p1, p2)
+	orient := 0
+	if angle, center, ok := parseRotate(paths[0].attr("transform")); ok {
+		p1 = rotate(p1, center, float64(angle))
+		p2 = rotate(p2, center, float64(angle))
+		anchor = center
+		orient = normalizeOrient(angle)
+	}
+	tapChanger := false
+	for _, p := range paths[1:] {
+		if strings.ContainsAny(p.attr("d"), "zZ") {
+			tapChanger = true
+		}
+	}
+	voltage := firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage"))
+	return Element{
+		ID:         id,
+		Class:      ClassBooster,
+		Shape:      "6",
+		Name:       n.attr("data-name"),
+		Layer:      resolveLayer(n.attr("data-layer")),
+		X:          anchor.X,
+		Y:          anchor.Y,
+		Orient:     orient,
+		TapChanger: tapChanger,
+		Ports: []Port{
+			{Name: "1"},
+			{Name: "2"},
+		},
+	}, []Point{p1, p2}, voltage, nil
 }
 
 // parseVoltageTransformer handles shape 55 (voltage transformer) — the same
@@ -2158,13 +2477,24 @@ var connectorKindByType = map[string]ConnectorKind{
 }
 
 // parseConnector handles the generic wire shapes (21, 22, 23, 28): a plain
-// polyline whose two ends are the electrical connection points.
+// polyline whose two ends are the electrical connection points. An overhead
+// or cable line (22/23) is instead a named <g id data-type data-name
+// data-voltage> wrapping that polyline (see writeNamedLine), so a <g> takes
+// its geometry from its first <polyline> child and its Name from data-name.
 func parseConnector(n *rawNode) (Connector, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return Connector{}, "", err
 	}
-	pts, err := parsePointList(n.attr("points"))
+	geom := n
+	if n.Tag == "g" {
+		polys := n.childrenTagged("polyline")
+		if len(polys) == 0 {
+			return Connector{}, "", fmt.Errorf("slddoc: connector %s: no <polyline> geometry", n.attr("id"))
+		}
+		geom = polys[0]
+	}
+	pts, err := parsePointList(geom.attr("points"))
 	if err != nil {
 		return Connector{}, "", err
 	}
@@ -2172,8 +2502,9 @@ func parseConnector(n *rawNode) (Connector, string, error) {
 	return Connector{
 		ID:     id,
 		Kind:   kind,
+		Name:   n.attr("data-name"),
 		Layer:  resolveLayer(n.attr("data-layer")),
-		Dashed: styleProp(n.attr("style"), "stroke-dasharray") != "",
+		Dashed: styleProp(geom.attr("style"), "stroke-dasharray") != "",
 		Points: pts,
 	}, n.attr("data-voltage"), nil
 }

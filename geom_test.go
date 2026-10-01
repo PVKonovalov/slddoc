@@ -38,9 +38,28 @@ func TestParseSubpaths_Box(t *testing.T) {
 	}
 }
 
-func TestParseSubpaths_UnsupportedCommand(t *testing.T) {
-	if _, err := parseSubpaths("M 0 0 C 1 1 2 2 3 3"); err == nil {
-		t.Fatal("expected an error for an unsupported cubic-bezier command")
+func TestParseSubpaths_Curves(t *testing.T) {
+	// Only each curve's endpoint is tracked; control points are consumed.
+	// The second path is the real Generator (173) template.
+	subpaths, err := parseSubpaths("M 0 0 C 1 1 2 2 3 3 c 1 1 2 2 3 3 S 5 5 10 10 q 1 1 2 2 T 20 20 t 1 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Point{{0, 0}, {3, 3}, {6, 6}, {10, 10}, {12, 12}, {20, 20}, {21, 20}}
+	if len(subpaths) != 1 || len(subpaths[0]) != len(want) {
+		t.Fatalf("got %v, want one subpath %v", subpaths, want)
+	}
+	for i := range want {
+		if subpaths[0][i] != want[i] {
+			t.Errorf("point %d: got %v, want %v", i, subpaths[0][i], want[i])
+		}
+	}
+	gen, err := parseSubpaths("M 0 0 v 9 m -16 16 a 16 16 0 0 1 32 0 a 16 16 0 0 1 -32 0 M -9 25 c 3 -3 6 -3 9 0 s 6 3 9 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := gen[len(gen)-1]; last[len(last)-1] != (Point{9, 25}) {
+		t.Errorf("generator path end: got %v, want {9 25}", last[len(last)-1])
 	}
 }
 

@@ -379,3 +379,39 @@ func TestObjectTypeName(t *testing.T) {
 		t.Errorf("ObjectTypeName(unknown) = %q, want empty", got)
 	}
 }
+
+// TestExtract_GeneratorNamedLineAndCaption covers three shapes Render
+// writes that Extract used to reject: a Generator (173) whose symbol path
+// has c/s curves, an overhead line (22) wrapped in a named <g>, and a bare
+// top-level <text> caption with no data-type.
+func TestExtract_GeneratorNamedLineAndCaption(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+<g id="10" data-name="G1" data-voltage="#00A0F0" data-type="173">
+<path d="M 100 50 v 9 m -16 16 a 16 16 0 0 1 32 0 a 16 16 0 0 1 -32 0 M 91 75 c 3 -3 6 -3 9 0 s 6 3 9 0" style="fill:none;stroke:#00A0F0;stroke-width:2" />
+</g>
+<g id="20" data-type="22" data-name="Line 1" data-voltage="#00A0F0">
+<polyline points="100,50 100,20 300,20" style="fill:none;stroke:#00A0F0;stroke-width:1.5" />
+</g>
+<text id="30" x="120" y="60" style="fill:#c8ced8;text-anchor:start;font-size:12px;font-family:Arial;white-space: pre;">G1 caption</text>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 {
+		t.Fatalf("failed=%v skipped=%v", report.Failed, report.Skipped)
+	}
+	if len(d.Elements) != 1 || d.Elements[0].Class != ClassGenerator || d.Elements[0].X != 100 || d.Elements[0].Y != 50 {
+		t.Errorf("elements = %+v, want one Generator at (100,50)", d.Elements)
+	}
+	if len(d.Connectors) != 1 || d.Connectors[0].Kind != KindOverheadLine || d.Connectors[0].Name != "Line 1" || len(d.Connectors[0].Points) != 3 {
+		t.Errorf("connectors = %+v, want one 3-point OverheadLine named Line 1", d.Connectors)
+	}
+	if len(d.Labels) != 1 || d.Labels[0].Text != "G1 caption" || d.Labels[0].ID != 30 || d.Labels[0].Size != 12 {
+		t.Errorf("labels = %+v, want one 12px caption id 30", d.Labels)
+	}
+	if len(d.Elements) == 1 && len(d.Connectors) == 1 && d.Elements[0].Ports[0].Node != d.Connectors[0].From {
+		t.Errorf("generator port node %d not joined to line start node %d", d.Elements[0].Ports[0].Node, d.Connectors[0].From)
+	}
+}

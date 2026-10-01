@@ -7,29 +7,21 @@ import (
 	"strconv"
 )
 
-// pathTokenRe also matches every curve command letter (C/S/Q/T and their
-// lowercase forms), even though parseSubpaths itself doesn't implement any
-// of them — so that one shows up as a real, recognizable token hitting the
-// "unsupported command" case below, rather than silently vanishing from
-// the token stream the way an unmatched letter would, which would leave
-// its own numeric arguments looking like more of whatever command
-// preceded it (an easy, silent misparse once moreArgs' shorthand-repeat
-// convention was added, since a stray number no longer reliably ends a
-// command the way it used to).
+// pathTokenRe matches every path command letter parseSubpaths handles,
+// curves (C/S/Q/T) included, plus plain decimal numbers.
 var pathTokenRe = regexp.MustCompile(`[MmLlHhVvZzAaCcSsQqTt]|-?\d+(?:\.\d+)?`)
 
 // parseSubpaths interprets a minimal subset of SVG path data — M/m, L/l,
-// H/h, V/v, Z/z, A/a — sufficient for the symbol shapes xsde2svg draws for
+// H/h, V/v, Z/z, A/a, C/c, S/s, Q/q, T/t — sufficient for the symbol shapes xsde2svg draws for
 // the element classes this package understands, including its own
 // shorthand-repeated-coordinate-group convention (e.g. "h -15 0" is two
 // horizontal linetos, "M x y x2 y2" is a moveto followed by an implicit
 // lineto) — every command below repeats for as long as another parameter
 // group follows without a fresh command letter. It returns each subpath
 // (one per M/m command) as its full sequence of points, in order. It is
-// not a general SVG path parser: a curve command (C/S/Q/T) is reported as
-// an error rather than silently mishandled, and an arc's own true
-// elliptical shape isn't reconstructed — only its endpoint is tracked (see
-// the "A", "a" case below).
+// not a general SVG path parser: neither an arc's nor a curve's true shape
+// is reconstructed — only its endpoint is tracked (see the "A", "a" and
+// curve cases below).
 func parseSubpaths(d string) ([][]Point, error) {
 	toks := pathTokenRe.FindAllString(d, -1)
 
@@ -193,6 +185,33 @@ func parseSubpaths(d string) ([][]Point, error) {
 					break
 				}
 			}
+		case "C", "c", "S", "s", "Q", "q", "T", "t":
+			// Like an arc, a curve only contributes its endpoint: its
+			// control points come first, then the final x,y pair.
+			for {
+				for range curveControlArgs[cmd] {
+					if _, err := next(); err != nil {
+						return nil, err
+					}
+				}
+				dx, err := next()
+				if err != nil {
+					return nil, err
+				}
+				dy, err := next()
+				if err != nil {
+					return nil, err
+				}
+				if cmd == "c" || cmd == "s" || cmd == "q" || cmd == "t" {
+					x, y = x+dx, y+dy
+				} else {
+					x, y = dx, dy
+				}
+				cur = append(cur, Point{X: x, Y: y})
+				if !moreArgs() {
+					break
+				}
+			}
 		default:
 			return nil, fmt.Errorf("slddoc: path %q: unsupported command %q", d, cmd)
 		}
@@ -201,6 +220,12 @@ func parseSubpaths(d string) ([][]Point, error) {
 		subpaths = append(subpaths, cur)
 	}
 	return subpaths, nil
+}
+
+// curveControlArgs is how many control-point numbers each curve command
+// takes before its endpoint pair.
+var curveControlArgs = map[string]int{
+	"C": 4, "c": 4, "S": 2, "s": 2, "Q": 2, "q": 2, "T": 0, "t": 0,
 }
 
 func isCommandLetter(tok string) bool {

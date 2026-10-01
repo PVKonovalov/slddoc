@@ -81,8 +81,8 @@ func TestRender_ProducesWellFormedSVG(t *testing.T) {
 	if !strings.Contains(out, `fill:lawngreen`) {
 		t.Errorf("state 1 should render lawngreen fill: %s", out)
 	}
-	if !strings.Contains(out, `translate(50,50) rotate(0)`) {
-		t.Errorf("element not placed at its anchor: %s", out)
+	if !strings.Contains(out, `<path d="M 43 43 h 14 v 14 h -14 z"`) || strings.Contains(out, "translate(") {
+		t.Errorf("element not drawn in absolute coordinates at its anchor: %s", out)
 	}
 	if !strings.Contains(out, "<tspan") {
 		t.Errorf("multi-line label should emit a tspan: %s", out)
@@ -383,8 +383,7 @@ func TestRender_BusbarsAndConnectorsAreSelectable(t *testing.T) {
 	if !strings.Contains(out, `id="2" data-editor-kind="connector"`) {
 		t.Errorf("connector should carry its bare id and a connector data-editor-kind marker: %s", out)
 	}
-	if !strings.Contains(out, `id="3" x="5" y="5" style="` /* label's own <text> attribute order */) ||
-		!strings.Contains(out, `data-editor-kind="label"`) {
+	if !strings.Contains(out, `<text id="3" data-type="5" data-editor-kind="label" x="5" y="5" style="`) {
 		t.Errorf("label should carry its bare id and a label data-editor-kind marker: %s", out)
 	}
 }
@@ -451,24 +450,15 @@ func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
 	}
 }
 
-// TestRender_ObjectLinkMatchesXsde2svgFormat uses the exact real xsde2svg
-// markup (a real instance's own polyline plus its own separate arrowhead
-// <path>) that this shape's own geometry/rotation-angle formula were
-// reverse-engineered from: <polyline points="1980,300 1980,252"
+// TestRender_ObjectLinkMatchesXsde2svgFormat checks Static output against a
+// real xsde2svg instance exactly: <polyline points="1980,300 1980,252"
 // style="fill:none;stroke:#00A0F0;;stroke-width:2" data-type="28"
-// id="2120" data-voltage="#00A0F0" /> plus <path d="M 1987 252 l -7 12
-// l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2"
-// transform="rotate(180,1980,252)" />. The arrowhead's own real on-screen
-// position (the point that actually matters — its own d/transform strings
-// are otherwise free to differ from the real instance's, since this
-// package places it via the translate-then-rotate convention every symbol
-// template already uses rather than that real instance's own single
-// rotate(angle,cx,cy) around an absolute-coordinate path, and those two
-// aren't interchangeable for a local-origin path — see writeObjectLink's
-// own doc comment) is independently recomputed here from first principles
-// (a real 2D rotation) and checked against the real instance's own known
-// screen position, base corner (1973,252) and apex (1980,240), rather than
-// trusting the rendered transform string to be correct by construction.
+// id="2120" data-voltage="#00A0F0" /> plus its separate arrowhead <path
+// d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2"
+// transform="rotate(180,1980,252)" /> — absolute coordinates, rotated
+// around the connector's final point. Interactive keeps the local
+// translate(x,y) rotate(angle) placement the canvas drags by, checked here
+// by mapping the local arrowhead back to the same real screen position.
 func TestRender_ObjectLinkMatchesXsde2svgFormat(t *testing.T) {
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{
@@ -485,30 +475,29 @@ func TestRender_ObjectLinkMatchesXsde2svgFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-
 	for _, want := range []string{
-		`data-type="28"`,
-		`id="2120"`,
-		`points="1980,300 1980,252"`,
-		`stroke:#00A0F0;stroke-width:2`,
+		`<polyline points="1980,300 1980,252" style="fill:none;stroke:#00A0F0;stroke-width:2" data-type="28" data-voltage="#00A0F0" id="2120" />`,
+		`<path d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2" transform="rotate(180,1980,252)" />`,
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("rendered object link missing %q: %s", want, out)
+			t.Errorf("Static object link missing %q:\n%s", want, out)
 		}
 	}
 
-	var pathD string
-	var tx, ty, angle float64
+	buf.Reset()
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out = buf.String()
 	m := regexp.MustCompile(`<path d="([^"]+)" style="[^"]*" transform="translate\(([\d.-]+),([\d.-]+)\) rotate\(([\d.-]+)\)" />`).
 		FindStringSubmatch(out)
 	if m == nil {
-		t.Fatalf("no arrowhead <path translate(...) rotate(...)> found: %s", out)
+		t.Fatalf("no Interactive arrowhead <path translate(...) rotate(...)> found: %s", out)
 	}
-	pathD, tx, ty, angle = m[1], mustParseFloat(t, m[2]), mustParseFloat(t, m[3]), mustParseFloat(t, m[4])
-	if pathD != "M 7 0 l -7 12 l -7 -12 z" {
-		t.Fatalf("arrowhead path d = %q, want the reverse-engineered local geometry", pathD)
+	if m[1] != "M 7 0 l -7 12 l -7 -12 z" {
+		t.Fatalf("arrowhead path d = %q, want the local geometry", m[1])
 	}
-
+	tx, ty, angle := mustParseFloat(t, m[2]), mustParseFloat(t, m[3]), mustParseFloat(t, m[4])
 	rad := angle * math.Pi / 180
 	cos, sin := math.Cos(rad), math.Sin(rad)
 	onScreen := func(lx, ly float64) (float64, float64) {
@@ -619,6 +608,8 @@ func TestRender_MissingStateOmitsDataState(t *testing.T) {
 // comparison against one specific real file would just be pinning that
 // file's own Size choice, not this package's own default geometry.
 func TestRender_PowerTransformer2Winding(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{
 		Width: 400, Height: 400,
@@ -633,14 +624,14 @@ func TestRender_PowerTransformer2Winding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
 
 	for _, want := range []string{
 		`<!-- Power transformer:47 -->`,
-		`<g id="7" data-name="T-1" data-voltage="gray" data-type="47" transform="translate(100,100) rotate(0)">`,
+		`<g id="7" data-name="T-1" data-voltage="gray" data-type="47" data-editor-kind="element" transform="translate(100,100) rotate(0)">`,
 		// Winding 0 (delta, #962896): circle at local (+18,0), leg to
 		// (+50,0) (circle edge 18+22=40, plus a 10-unit lead — chosen so
 		// the tip lands on the 10-unit grid; see transformerLegLength's
@@ -681,6 +672,8 @@ func TestRender_PowerTransformer2Winding(t *testing.T) {
 // decoration was purely cosmetic, with no real terminal a wire could
 // bind to at all.
 func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{
 		Width: 400, Height: 400,
@@ -692,7 +685,7 @@ func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -726,6 +719,8 @@ func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
 // convention — see writeAutotransformerTap's own doc comment) and the
 // regulation arrow, drawn once for whichever winding has TapChanger set.
 func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{
 		Width: 400, Height: 400,
@@ -741,7 +736,7 @@ func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -790,6 +785,8 @@ func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
 // (fractional-scale) 4-winding corpus instance whose proportions matched
 // these same constants once the scale factor was divided back out.
 func TestRender_PowerTransformer4Winding(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{
 		Width: 400, Height: 400,
@@ -801,7 +798,7 @@ func TestRender_PowerTransformer4Winding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -849,6 +846,8 @@ func TestRender_PowerTransformer4Winding(t *testing.T) {
 // plus the *original*, unrotated offset (-7,-7), confirming the glyph's
 // own on-screen shape truly doesn't rotate with the transformer.
 func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
 	lib := NewSymbolLibrary(map[string]string{})
 	d := &Diagram{
 		Width: 400, Height: 400,
@@ -860,7 +859,7 @@ func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -1151,6 +1150,8 @@ func TestRender_Polygon(t *testing.T) {
 }
 
 func TestRender_ForkArmLength(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
 	lib := NewSymbolLibrary(map[string]string{"26": `<path d="M 0 0 l {radius} -{radius} m -{radius} {radius} l -{radius} -{radius}" />`})
 	d := &Diagram{
 		Width: 100, Height: 100,
@@ -1160,7 +1161,7 @@ func TestRender_ForkArmLength(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`d="M 0 0 l 10 -10 m -10 10 l -10 -10"`, `d="M 0 0 l 7 -7 m -7 7 l -7 -7"`} {
@@ -1188,5 +1189,34 @@ func TestRender_ConnectorWithoutVoltageIsGray(t *testing.T) {
 				t.Errorf("unexpected black stroke: %s", out)
 			}
 		})
+	}
+}
+
+func TestRender_TapChangerFragment(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{
+		"6": `<path d="M 0 0 h 1" />{tapChanger:<path d="M 1 1 z" style="fill:{color};stroke:{color}" />}<path d="M 2 2" />`,
+	})
+	for _, tap := range []bool{false, true} {
+		d := &Diagram{
+			Width: 100, Height: 100,
+			VoltageClasses: []VoltageClass{{ID: 2, Name: "10 kV", Color: "red"}},
+			Elements:       []Element{{ID: 1, Class: ClassBooster, Shape: "6", X: 10, Y: 10, Voltage: 2, TapChanger: tap}},
+		}
+		var buf bytes.Buffer
+		if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		out := buf.String()
+		if strings.ContainsAny(out, "{}") {
+			t.Errorf("tapChanger=%v: placeholder left unexpanded: %s", tap, out)
+		}
+		if !strings.Contains(out, `<path d="M 2 2" />`) {
+			t.Errorf("tapChanger=%v: markup after the fragment lost: %s", tap, out)
+		}
+		if got := strings.Contains(out, `<path d="M 1 1 z" style="fill:red;stroke:red" />`); got != tap {
+			t.Errorf("tapChanger=%v: arrow drawn = %v: %s", tap, got, out)
+		}
 	}
 }

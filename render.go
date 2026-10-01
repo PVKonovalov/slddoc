@@ -152,6 +152,21 @@ func positionOffset(position *int) string {
 // state.
 var stateLineRe = regexp.MustCompile(`\{state:([^|}]*)\|([^|}]*)\|([^}]*)\}`)
 
+// tapChangerRe matches a template's {tapChanger:fragment} placeholder: the
+// fragment is kept only when the element's own TapChanger is set, and
+// dropped entirely otherwise (so a Static render carries no hidden
+// geometry). The fragment itself may use every other placeholder.
+var tapChangerRe = regexp.MustCompile(`\{tapChanger:([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}`)
+
+func applyTapChanger(tmpl string, on bool) string {
+	return tapChangerRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		if !on {
+			return ""
+		}
+		return tapChangerRe.FindStringSubmatch(m)[1]
+	})
+}
+
 func applyStateLine(tmpl string, state *int) string {
 	return stateLineRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		g := stateLineRe.FindStringSubmatch(m)
@@ -196,6 +211,7 @@ var shapeName = map[string]string{
 	"33":     "Choke coil",
 	"34":     "Current transformer",
 	"55":     "Voltage transformer",
+	"6":      "Booster",
 	"37":     "Reactor",
 	"397":    "Reactor (shunt)",
 	"35":     "Surge arrester",
@@ -216,12 +232,18 @@ var shapeName = map[string]string{
 	"154":    "Fuse (withdrawable)",
 	"162":    "Disconnector",
 	"164":    "Sectionalizer",
+	"163":    "Short-circuiter without ground",
+	"166":    "Disconnector-fuse",
 	"172":    "Capacitor bank",
 	"52":     "Half-chassis",
 	"51":     "Chassis",
 	"173":    "Generator",
+	"174":    "Synchronous compensator",
+	"175":    "3-position knife switch",
 	"203":    "Fuse",
 	"388":    "Capacitor",
+	"156":    "Resistor",
+	"157":    "Thyristor",
 	"320003": "Fault passage indicator",
 	"385":    "Package substation",
 	"386":    "Enclosed substation",
@@ -341,8 +363,31 @@ var elementZOrder = map[Class]int{
 // of a full, ordered document, not a standalone fragment, so a caller that
 // wants one (Render, across both of its own element passes) writes it
 // itself just before calling this, the same split renderConnector's own
-// doc comment describes for a connector's.
+// doc comment describes for a connector's. In Static mode the fragment is
+// rewritten into absolute coordinates (see absolutize).
 func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
+	if mode != Static {
+		renderElementLocal(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, missing, seenMissing, mode)
+		return
+	}
+	var buf bytes.Buffer
+	renderElementLocal(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, missing, seenMissing, mode)
+	writeAbsolute(w, buf.String())
+}
+
+// writeAbsolute writes a Static fragment in absolute coordinates (see
+// absolutize), or unchanged — still drawn correctly, just in the local
+// form — if it uses a transform absolutize can't carry over.
+func writeAbsolute(w io.Writer, frag string) {
+	if abs, err := absolutize(frag); err == nil {
+		frag = abs
+	}
+	io.WriteString(w, frag)
+}
+
+// renderElementLocal draws e in its own local frame, placed by
+// transform="translate(x,y) rotate(orient)" (see renderElement).
+func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
 
 	var color string
 	if e.Class == ClassLamp {
@@ -548,7 +593,7 @@ func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string,
 		}
 		return
 	}
-	body := applyStateLine(tmpl, e.State)
+	body := applyStateLine(applyTapChanger(tmpl, e.TapChanger), e.State)
 	// {counterRotate} is the negated Orient — wrapping a template fragment
 	// in <g transform="rotate({counterRotate})"> cancels the outer <g
 	// transform="...rotate(Orient)"> this function itself emits below, so
@@ -713,10 +758,16 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaul
 		}
 	}
 
+	if len(d.Labels) > 0 {
+		fmt.Fprintf(w, "<!-- Text:%s -->\n", labelTypeCode)
+	}
 	for _, l := range d.Labels {
 		writeLabel(w, l, mode)
 	}
 
+	if len(d.DigitalDevices) > 0 {
+		fmt.Fprintf(w, "<!-- Digital device2:%s -->\n", digitalDeviceTypeCode)
+	}
 	for _, dd := range d.DigitalDevices {
 		writeDigitalDevice(w, dd, mode)
 	}
@@ -834,6 +885,18 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 // visible neutral an element falls back to — not black, which disappears
 // against the usual dark diagram background.
 func renderConnector(w io.Writer, c Connector, voltageColor map[int]string, mode RenderMode) {
+	if mode != Static {
+		renderConnectorLocal(w, c, voltageColor, mode)
+		return
+	}
+	var buf bytes.Buffer
+	renderConnectorLocal(&buf, c, voltageColor, mode)
+	writeAbsolute(w, buf.String())
+}
+
+// renderConnectorLocal is renderConnector before the Static absolute pass
+// (only an object link's arrowhead is placed in a local frame).
+func renderConnectorLocal(w io.Writer, c Connector, voltageColor map[int]string, mode RenderMode) {
 	color := voltageColor[c.Voltage]
 	if color == "" {
 		color = "gray"
@@ -847,11 +910,22 @@ func renderConnector(w io.Writer, c Connector, voltageColor map[int]string, mode
 		writeObjectLink(w, c, color, code, mode)
 		return
 	}
-	dataAttrs := ""
-	if code != "" {
-		dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
+	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, 1, wireDataAttrs(c, color, code), mode)
+}
+
+// wireDataAttrs is a bare wire polyline's (buswork 21, object link 28)
+// data attributes, as real xsde2svg writes them: data-name when named,
+// data-type, and the resolved data-voltage color.
+func wireDataAttrs(c Connector, color, code string) string {
+	var sb strings.Builder
+	if c.Name != "" {
+		fmt.Fprintf(&sb, " data-name=\"%s\"", esc(c.Name))
 	}
-	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, 1, dataAttrs, mode)
+	if code != "" {
+		fmt.Fprintf(&sb, " data-type=\"%s\"", esc(code))
+	}
+	fmt.Fprintf(&sb, " data-voltage=\"%s\"", esc(color))
+	return sb.String()
 }
 
 // writePolyline draws a busbar's or connector's geometry as a single flat
@@ -1808,11 +1882,7 @@ const objectLinkStrokeWidth = 2
 // instance's own effective 180° for a straight-up final segment) was also
 // reverse-engineered from that same real instance.
 func writeObjectLink(w io.Writer, c Connector, color, code string, mode RenderMode) {
-	dataAttrs := ""
-	if code != "" {
-		dataAttrs = fmt.Sprintf(" data-type=\"%s\"", esc(code))
-	}
-	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, objectLinkStrokeWidth, dataAttrs, mode)
+	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, objectLinkStrokeWidth, wireDataAttrs(c, color, code), mode)
 
 	if len(c.Points) < 2 {
 		return
@@ -2159,12 +2229,16 @@ func writeAutotransformerTap(w io.Writer, cx, cy float64, color string) (float64
 func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, fallbackColor string, mode RenderMode) {
 	count := max(len(e.Windings), 2)
 
-	editorAttr := ""
+	// Static leaves data-voltage off the outer <g>, as real xsde2svg does:
+	// each winding's own circle and lead carry their own.
+	attrs := fmt.Sprintf(" data-voltage=\"%s\"", esc(fallbackColor))
 	if mode == Interactive {
-		editorAttr = " data-editor-kind=\"element\""
+		attrs += " data-type=\"47\" data-editor-kind=\"element\""
+	} else {
+		attrs = " data-type=\"47\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"47\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n",
-		e.ID, esc(e.Name), esc(fallbackColor), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n",
+		e.ID, esc(e.Name), attrs, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
 
 	for i := 0; i < count; i++ {
 		var winding TransformerWinding
@@ -2196,15 +2270,16 @@ func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, 
 		// (cx,cy) — while (cx,cy) itself, being the pivot, is untouched by
 		// its own rotation and still moves with the winding exactly as
 		// before.
-		if e.Orient != 0 {
-			fmt.Fprintf(w, "<g transform=\"rotate(%d,%s,%s)\">\n", -e.Orient, fmtNum(cx), fmtNum(cy))
-		}
-		writeWindingGlyph(w, cx, cy, winding.Scheme, color)
+		// A winding with no glyph (no Scheme) writes no empty group.
+		var glyph bytes.Buffer
+		writeWindingGlyph(&glyph, cx, cy, winding.Scheme, color)
 		if winding.Scheme == SchemeWyeN {
-			writeGroundingMark(w, cx, cy, winding.Grounding, color)
+			writeGroundingMark(&glyph, cx, cy, winding.Grounding, color)
 		}
-		if e.Orient != 0 {
-			fmt.Fprint(w, "</g>\n")
+		if glyph.Len() > 0 && e.Orient != 0 {
+			fmt.Fprintf(w, "<g transform=\"rotate(%d,%s,%s)\">\n%s</g>\n", -e.Orient, fmtNum(cx), fmtNum(cy), glyph.String())
+		} else {
+			w.Write(glyph.Bytes())
 		}
 		if e.Autotransformer && i == 0 {
 			_, _ = writeAutotransformerTap(w, cx, cy, color)
@@ -2244,6 +2319,15 @@ func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, 
 	fmt.Fprint(w, "</g>\n")
 }
 
+// labelTypeCode is a free caption's (Label's) xsde2svg catalog code.
+const labelTypeCode = "5"
+
+// writeLabel draws a Label. Static writes real xsde2svg's own form, a
+// <g data-type="5" data-name="…" id="…"> wrapping the <text>, where
+// data-name is the caption's own text (lines joined by spaces) — Extract
+// links it back to the element of that name. Interactive keeps the bare
+// <text>, typed with data-type="5" too, since the canvas drags a label by
+// setting x/y on the node carrying data-editor-kind="label".
 func writeLabel(w io.Writer, l Label, mode RenderMode) {
 	anchor := l.Anchor
 	if anchor == "" {
@@ -2275,18 +2359,23 @@ func writeLabel(w io.Writer, l Label, mode RenderMode) {
 	}
 	style := fmt.Sprintf("fill:%s;text-anchor:%s;%sfont-size:%spx;font-family:%s;%swhite-space: pre;",
 		color, anchor, baseline, fmtNum(l.Size), font, weight)
-	editorAttr := ""
-	if mode == Interactive {
-		editorAttr = " data-editor-kind=\"label\""
-	}
-
 	lines := strings.Split(l.Text, "\n")
-	fmt.Fprintf(w, "<text id=\"%d\" x=\"%s\" y=\"%s\" style=\"%s\"%s>%s", l.ID, fmtNum(l.X), fmtNum(l.Y), esc(style), editorAttr, esc(lines[0]))
+	textAttrs := fmt.Sprintf(" id=\"%d\" data-type=\"%s\"", l.ID, labelTypeCode)
+	if mode == Interactive {
+		textAttrs += " data-editor-kind=\"label\""
+	} else {
+		fmt.Fprintf(w, "<g data-type=\"%s\" data-name=\"%s\" id=\"%d\">\n", labelTypeCode, esc(strings.Join(lines, " ")), l.ID)
+		textAttrs = ""
+	}
+	fmt.Fprintf(w, "<text%s x=\"%s\" y=\"%s\" style=\"%s\">%s", textAttrs, fmtNum(l.X), fmtNum(l.Y), esc(style), esc(lines[0]))
 	for _, ln := range lines[1:] {
 		fmt.Fprintf(w, "<tspan x=\"%s\" dy=\"%s\" style=\"%s\">%s</tspan>",
 			fmtNum(l.X), fmtNum(l.Size*1.4), esc(style), esc(ln))
 	}
 	fmt.Fprint(w, "</text>\n")
+	if mode != Interactive {
+		fmt.Fprint(w, "</g>\n")
+	}
 }
 
 // digitalDeviceTypeCode is shape 134's own xsde2svg catalog code, written as
