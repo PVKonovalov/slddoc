@@ -176,7 +176,7 @@ decorative shape (rectangle, line, table, ...).
 | `name` | string | Terminal name: `"1"`, `"2"`, ... in order |
 | `node` | id → `node` | The node this terminal is connected to |
 
-Decorative shapes (Rectangle, Arrow, Circle, Line, Polygon, Arc, Road, Button, PostPole,
+Decorative shapes (Rectangle, Arrow, Circle, Line, Polygon, Arc, Road, Button, WindowIcon, PostPole,
 Table, Table2, PowerflowIndicator) never have ports. See §5 for how ports
 form the topology and §6 for per-class attributes.
 
@@ -296,30 +296,33 @@ instead of a symbol template around `x`/`y`:
 |---|---|
 | BusBarSection (24) | 2+ vertices, polyline |
 | Line (1), Road (335) | 2+ vertices, polyline |
-| Polygon (16) | 3+ vertices, closed polygon |
+| Polygon (16), Container (310) | 3+ vertices, closed polygon |
 | Arc (9) | exactly 2: start, end (see `rx`/`ry`/`largeArc`/`sweep`) |
-| Rectangle (3), Circle (4), Button (113), Table (312) | 2 opposite corners of the bounding box, any order |
+| Rectangle (3), SmallWindow (319), Circle (4), Button (113), WindowIcon (302), Table (312) | 2 opposite corners of the bounding box, any order |
 | Arrow (2) | start, end — order matters, the arrowhead is at the second point |
 
 ### 6.3 Decorative styling
 
 | Attribute | Type | Used by | Meaning |
 |---|---|---|---|
-| `fill` | color | Rectangle, Circle, Polygon, JunctionPoint, PostPole, PackageSubstation (inner box), Table, Table2 (default cell fill) | Interior color; empty = `none` |
-| `stroke` | color | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, PostPole, Table, Table2 | Border / line color |
-| `strokeWidth` | number | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, Table, Table2 | Line width; 0 = default (1, or a thick default for Road) |
-| `lineStyle` | enum | Line, Polygon, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`) |
+| `fill` | color | Rectangle, SmallWindow, Circle, Polygon, Container, JunctionPoint, PostPole, PackageSubstation (inner box), Table, Table2 (default cell fill) | Interior color; empty = `none` |
+| `stroke` | color | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, WindowIcon (default black), SmallWindow (default gray), Container (default gray), LampOnPole (default gray), ConnectorPoint (default magenta), PostPole, Table, Table2 | Border / line color |
+| `strokeWidth` | number | Rectangle, Circle, Arrow, Line, Polygon, Container, Arc, Road, Button, Table, Table2 | Line width; 0 = default (1, or a thick default for Road) |
+| `lineStyle` | enum | Line, Polygon, Container, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`; Container: `solid`, `dotted` (3,2), `dashed` (6,5)) |
 | `doubleHeaded` | bool | Arrow | Arrowhead at both ends |
 | `rx`, `ry` | number | Arc | The SVG arc's own radii |
 | `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
 | `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10) | Circle radius (PostPole square: half-width) |
-| `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), Button, Table | Centered overlay text |
-| `textColor` | color | Button (default white), PowerflowIndicator, Table (default black) | Text / glyph color |
-| `bold` | bool | Button | Bold overlay text |
+| `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), Button, WindowIcon, Table, Container (caption) | Centered overlay text |
+| `textColor` | color | Button (default white), WindowIcon (default black), Container (default white; `none` is an invisible caption), PowerflowIndicator, Table (default black) | Text / glyph color |
+| `bold` | bool | Button, WindowIcon | Bold overlay text |
 | `fillOff`, `fillOn` | color | Lamp | Colors for `state` 0 / 1 |
 | `nType` | int | PackageSubstation | Appearance: `0` box-in-box (default), `1` triangle |
-| `orient` | int | Table | Rotates only the overlay text, not the box |
+| `orient` | int | Table, Container | Rotates only the overlay text, not the box |
+| `textSize` | number | Container | Caption font size; 0 = 14 |
+| `textDx`, `textDy` | number | Container | Caption anchor offset from the outline's top-left (min x/y of its vertices) |
+| `textAnchor`, `textBaseline` | string | Container | Caption `text-anchor` / `dominant-baseline`; empty = `middle` |
 
 ### 6.4 PowerTransformer (47) — `<windings>`
 
@@ -403,18 +406,25 @@ extendable per site); this is the default set.
 | SynchronousCompensator | 174 | 1 | |
 | Ground | 31 | 1 | |
 | CableConnector / CableJoint | 56 / 32 | 2 | |
+| PowerPole | 146 | 2 | a pole on an overhead line; terminals at the lead tips (0,±10) |
 | JunctionPoint | 7 | 1 | `radius`, `fill` |
 | NonIntersection (wire jump) | 14 | 2 | |
 | BusBarSection | 24 | 0+ | `<geometry>`; see §5 |
 | PackageSubstation / EnclosedSubstation | 385 / 386 | 1 | `propertyText`; 385 also `nType`, `fill` |
 | Lamp | 106 | 0 | `state`, `fillOff`, `fillOn`, `radius`; no voltage |
+| LampOnPole | 320002 | 0 | `stroke` (its color, default gray), `orient`; no voltage |
+| ConnectorPoint | 10 | 1 | a connection point (a 10x10 square), its port at the center; `stroke` (its color, default magenta); no voltage |
+| ConnectorArrow | 83 | 1 | port at its tail (the anchor); `orient` (any angle, 0 = right), `length` (default 30), `stroke` (line, default coral), `headStroke`/`fill` (arrowhead, default dimgray/white); no voltage |
 | FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText` |
 | PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor` |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |
 | Polygon | 16 | — | decorative; `<geometry>` |
+| Container | 310 | — | decorative; `<geometry>`, caption `propertyText` + `text*` |
 | Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
 | Rectangle / Circle / Arrow | 3 / 4 / 2 | — | decorative; `<geometry>` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText` |
+| WindowIcon | 302 | — | decorative; `<geometry>`, `propertyText`; fixed 1px border |
+| SmallWindow | 319 | — | decorative; `<geometry>`, `fill`, `stroke` (default gray); fixed 1px border |
 | PostPole | 292 | — | decorative; `radius`, `square` |
 | Table / Table2 | 312 / 313 | — | decorative; §6.2, §6.5 |
 

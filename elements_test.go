@@ -1268,3 +1268,431 @@ func TestParseKnifeSwitch3(t *testing.T) {
 		})
 	}
 }
+
+// TestWindowIcon_RealCorpusRoundTrip extracts a real xsde2svg Window icon
+// (shape 302, ПС 35 кВ 49С Валаам.svg, id 120957326) and renders it back:
+// the same box, and the label at the same 12px position, with its empty
+// "fill:" written as the black a browser draws it in.
+func TestWindowIcon_RealCorpusRoundTrip(t *testing.T) {
+	const real = `<?xml version="1.0"?>
+<svg width="3910" height="1900" xmlns="http://www.w3.org/2000/svg">
+<!-- иконка_окна:302 -->
+<g id="120957326" data-type="302" >
+<rect x="2210" y="950" width="40" height="30" style="fill:orange;stroke:black;stroke-width:1" />
+<text x="2230" y="967" style="fill:;text-anchor:middle;dominant-baseline:middle;font-size:12px;font-family:Arial " >Окно</text>
+</g>
+</svg>`
+	d, report, err := Extract([]byte(real), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 1 {
+		t.Fatalf("failed=%v skipped=%v elements=%+v", report.Failed, report.Skipped, d.Elements)
+	}
+	e := d.Elements[0]
+	want := Element{ID: 120957326, Class: ClassWindowIcon, Shape: "302", X: 2230, Y: 965, Fill: "orange", Stroke: "black",
+		PropertyText: "Окно", Points: []Point{{X: 2210, Y: 950}, {X: 2250, Y: 980}}}
+	if e.ID != want.ID || e.Class != want.Class || e.Shape != want.Shape || e.X != want.X || e.Y != want.Y ||
+		e.Fill != want.Fill || e.Stroke != want.Stroke || e.StrokeWidth != 0 || e.TextColor != "" ||
+		e.PropertyText != want.PropertyText || len(e.Points) != 2 || e.Points[0] != want.Points[0] || e.Points[1] != want.Points[1] {
+		t.Fatalf("extracted %+v, want %+v", e, want)
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, s := range []string{
+		`<!-- Window icon:302 -->`,
+		`<g id="120957326" data-type="302" data-name="" data-voltage="black">`,
+		`<rect x="2210" y="950" width="40" height="30" style="fill:orange;stroke:black;stroke-width:1" />`,
+		`<text x="2230" y="967" style="fill:black;text-anchor:middle;dominant-baseline:middle;font-size:12px;font-family:Arial">Окно</text>`,
+	} {
+		if !strings.Contains(out, s) {
+			t.Errorf("render missing %q:\n%s", s, out)
+		}
+	}
+}
+
+// TestContainer_RealCorpus reads real xsde2svg Containers (shape 310) in
+// both export forms: the older one (caption alone in the group, the
+// outline as the bare <path> after it; ПС 110 Демянск.svg and a rotated
+// caption from another real file) and the patched one (outline and
+// caption in one group, from Test_310_conteyner.xsde), captioned or not.
+// Each renders back in the patched form at the same geometry.
+func TestContainer_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="10000" height="5000" xmlns="http://www.w3.org/2000/svg">
+<!-- контейнер:310 -->
+<g data-type="310" data-name="ПС 110 кВ Демянск" data-event="dc" data-layer="10" id="120996397" >
+<text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial"  >ПС 110 кВ Демянск</text>
+</g>
+<path d="M 670 440 L300 440 L300 130 L670 130 z" style="fill:none;stroke:dimgray;stroke-dasharray: 3,2;stroke-width:1 " />
+<g data-type="310" data-name="ПС Сельхозкомплекс" data-event="dc" data-layer="10" id="120991010" >
+<text x="9409" y="3554" style="fill:white;text-anchor:end;dominant-baseline:baseline;font-size:39px;font-family:Arial" transform="rotate(-90,9409,3554)" >ПС Сельхозкомплекс</text>
+</g>
+<path d="M 9320 3360 L9320 3540 L9470 3540 L9470 3360 z" style="fill:none;stroke:gray;stroke-dasharray: 3,2;stroke-width:1 " />
+<g data-type="310"   data-layer="10" id="148694366" data-voltage="dimgray" >
+<path d="M 620 80 L410 80 L410 40 L620 40 z" style="fill:none;stroke:dimgray;stroke-width:1 " />
+</g>
+<g data-type="310" data-name="Бор" data-event="dc" data-layer="10" id="148701673" data-voltage="gray" >
+<path d="M 1130 150 L1130 100 L910 100 L910 150 z" style="fill:none;stroke:gray;stroke-dasharray: 3,2;stroke-width:1 " />
+<text x="1020" y="150" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:39px;font-family:Arial Narrow"  >Бор</text>
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 4 {
+		t.Fatalf("failed=%v skipped=%v elements=%d", report.Failed, report.Skipped, len(d.Elements))
+	}
+	byID := map[int]Element{}
+	for _, e := range d.Elements {
+		if e.Class != ClassContainer || e.Shape != "310" {
+			t.Errorf("element %d: class %s shape %s", e.ID, e.Class, e.Shape)
+		}
+		byID[e.ID] = e
+	}
+	dem := byID[120996397]
+	if len(dem.Points) != 4 || dem.Points[0] != (Point{670, 440}) || dem.Stroke != "dimgray" || dem.LineStyle != LineStyleDotted ||
+		dem.PropertyText != "ПС 110 кВ Демянск" || dem.TextColor != "none" || dem.TextSize != 28 ||
+		dem.TextAnchor != "middle" || dem.TextBaseline != "text-before-edge" || dem.TextDx != 185 || dem.TextDy != 310 || dem.Layer != 10 {
+		t.Errorf("Демянск = %+v", dem)
+	}
+	rot := byID[120991010]
+	if rot.Orient != -90 || rot.TextDx != 89 || rot.TextDy != 194 || rot.TextAnchor != "end" || rot.TextBaseline != "baseline" {
+		t.Errorf("rotated caption = %+v", rot)
+	}
+	plain := byID[148694366]
+	if plain.PropertyText != "" || len(plain.Points) != 4 || plain.LineStyle != "" {
+		t.Errorf("uncaptioned = %+v", plain)
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, s := range []string{
+		`<!-- Container:310 -->`,
+		`<g id="120996397" data-type="310" data-name="ПС 110 кВ Демянск" data-voltage="dimgray">
+<path d="M 670 440 L300 440 L300 130 L670 130 z" style="fill:none;stroke:dimgray;stroke-dasharray: 3,2;stroke-width:1" />
+<text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial">ПС 110 кВ Демянск</text>
+</g>`,
+		`<text x="9409" y="3554" style="fill:white;text-anchor:end;dominant-baseline:baseline;font-size:39px;font-family:Arial" transform="rotate(-90,9409,3554)">ПС Сельхозкомплекс</text>`,
+		`<g id="148694366" data-type="310" data-voltage="dimgray">
+<path d="M 620 80 L410 80 L410 40 L620 40 z" style="fill:none;stroke:dimgray;stroke-width:1" />
+</g>`,
+	} {
+		if !strings.Contains(out, s) {
+			t.Errorf("render missing %q:\n%s", s, out)
+		}
+	}
+	again, report, err := Extract(buf.Bytes(), "", nil)
+	if err != nil || len(report.Failed) != 0 || len(again.Elements) != 4 {
+		t.Fatalf("re-extract: err=%v failed=%v n=%d", err, report.Failed, len(again.Elements))
+	}
+}
+
+// TestPowerPole_RealCorpus extracts real xsde2svg Power poles (shape 146:
+// ПС 110 кВ Крутая.svg rotated 180, Поопорная схема ТП Кувизино rotated
+// 90, and an unrotated one) as two-terminal devices anchored at the
+// circle's center with ports at the lead tips, and renders one back to the
+// same path.
+func TestPowerPole_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="4000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<!-- электроопора:146 -->
+<path d="M 340 1030 v 2 a 8 8 0 1 0 0 16 v 2 v -2 a 8 8 0 1 0 0 -16 z" style="fill:none;stroke:purple;stroke-width:1" transform="rotate(180,340,1040)" id="120959254" data-type="146"  data-voltage="purple" />
+<path d="M 758 1290 v 2 a 8 8 0 1 0 0 16 v 2 v -2 a 8 8 0 1 0 0 -16 z" style="fill:none;stroke:#962896;stroke-width:1" transform="rotate(90,758,1300)" id="148703450" data-type="146"  data-voltage="#962896" />
+<path d="M 3100 556 v 2 a 8 8 0 1 0 0 16 v 2 v -2 a 8 8 0 1 0 0 -16 z" style="fill:none;stroke:#C9A0DC;stroke-width:1"  id="120960230" data-type="146"  data-voltage="#C9A0DC" />
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 3 {
+		t.Fatalf("failed=%v skipped=%v elements=%d", report.Failed, report.Skipped, len(d.Elements))
+	}
+	nodeAt := map[int]Point{}
+	for _, n := range d.Nodes {
+		nodeAt[n.ID] = Point{n.X, n.Y}
+	}
+	want := map[int]struct {
+		x, y   float64
+		orient int
+		tips   [2]Point
+	}{
+		120959254: {340, 1040, 180, [2]Point{{340, 1030}, {340, 1050}}},
+		148703450: {758, 1300, 90, [2]Point{{748, 1300}, {768, 1300}}},
+		120960230: {3100, 566, 0, [2]Point{{3100, 556}, {3100, 576}}},
+	}
+	for _, e := range d.Elements {
+		w := want[e.ID]
+		if e.Class != ClassPowerPole || e.Shape != "146" || e.X != w.x || e.Y != w.y || e.Orient != w.orient || e.Voltage == 0 || len(e.Ports) != 2 {
+			t.Errorf("pole %d = %+v, want (%v,%v) orient %d", e.ID, e, w.x, w.y, w.orient)
+			continue
+		}
+		got := map[Point]bool{nodeAt[e.Ports[0].Node]: true, nodeAt[e.Ports[1].Node]: true}
+		if !got[w.tips[0]] || !got[w.tips[1]] {
+			t.Errorf("pole %d ports at %v, want %v", e.ID, got, w.tips)
+		}
+	}
+
+	lib := NewSymbolLibrary(map[string]string{
+		"146": `<path d="M 0 -10 v 2 a 8 8 0 1 0 0 16 v 2 v -2 a 8 8 0 1 0 0 -16 z" style="fill:none;stroke:{color};stroke-width:1" />`,
+	})
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`<!-- Power pole:146 -->`,
+		`data-type="146" transform="rotate(180,340,1040)">
+<path d="M 340 1030 v 2 a 8 8 0 1 0 0 16 v 2 v -2 a 8 8 0 1 0 0 -16 z" style="fill:none;stroke:purple;stroke-width:1" />`,
+	} {
+		if !strings.Contains(buf.String(), s) {
+			t.Errorf("render missing %q:\n%s", s, buf.String())
+		}
+	}
+	again, report, err := Extract(buf.Bytes(), "", nil)
+	if err != nil || len(report.Failed) != 0 || len(again.Elements) != 3 {
+		t.Fatalf("re-extract: err=%v failed=%v n=%d", err, report.Failed, len(again.Elements))
+	}
+}
+
+// TestLampOnPole_RealCorpus reads real xsde2svg Lamps on pole (shape
+// 320002, Поопорная схема ТП ул.Энергетиков д.20 Л-3 ПС Валдай.svg and a
+// rotated one), plus the old source's duplicated data-voltage, and renders
+// one back to the same circle and diagonals.
+func TestLampOnPole_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<g id="148706395"  data-type="320002" >
+<circle cx="671" cy="983" r="6" style="fill:none;stroke:gray;stroke-width:1" />
+<path d="M 667 979 l 8 8 " style="fill:none;stroke:gray;stroke-width:1" />
+<path d="M 675 979 l -8 8 " style="fill:none;stroke:gray;stroke-width:1" />
+</g>
+<g id="148706607" transform="rotate(-180,917,1025)" data-type="320002" >
+<circle cx="917" cy="1025" r="6" style="fill:none;stroke:gray;stroke-width:1" />
+<path d="M 913 1021 l 8 8 " style="fill:none;stroke:gray;stroke-width:1" />
+<path d="M 921 1021 l -8 8 " style="fill:none;stroke:gray;stroke-width:1" />
+</g>
+<g id="7" data-type="320002" data-voltage="coral" data-voltage="coral">
+<circle cx="100" cy="100" r="6" style="fill:none;stroke:coral;stroke-width:1" />
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 3 || len(d.VoltageClasses) != 0 {
+		t.Fatalf("failed=%v skipped=%v elements=%d voltage classes=%v", report.Failed, report.Skipped, len(d.Elements), d.VoltageClasses)
+	}
+	want := map[int]Element{
+		148706395: {X: 671, Y: 983, Stroke: "gray"},
+		148706607: {X: 917, Y: 1025, Stroke: "gray", Orient: 180},
+		7:         {X: 100, Y: 100, Stroke: "coral"},
+	}
+	for _, e := range d.Elements {
+		w := want[e.ID]
+		if e.Class != ClassLampOnPole || e.Shape != "320002" || e.X != w.X || e.Y != w.Y || e.Stroke != w.Stroke || e.Orient != w.Orient || len(e.Ports) != 0 {
+			t.Errorf("lamp %d = %+v, want %+v", e.ID, e, w)
+		}
+	}
+
+	lib := NewSymbolLibrary(map[string]string{"320002": `<circle cx="0" cy="0" r="6" style="fill:none;stroke:{color};stroke-width:1" />
+<path d="M -4 -4 l 8 8" style="fill:none;stroke:{color};stroke-width:1" />
+<path d="M 4 -4 l -8 8" style="fill:none;stroke:{color};stroke-width:1" />`})
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`<!-- Lamp on pole:320002 -->`,
+		`<g id="148706395" data-name="" data-voltage="gray" data-type="320002">
+<circle cx="671" cy="983" r="6" style="fill:none;stroke:gray;stroke-width:1" />
+<path d="M 667 979 l 8 8" style="fill:none;stroke:gray;stroke-width:1" />
+<path d="M 675 979 l -8 8" style="fill:none;stroke:gray;stroke-width:1" />`,
+		`data-type="320002" transform="rotate(180,917,1025)">`,
+	} {
+		if !strings.Contains(buf.String(), s) {
+			t.Errorf("render missing %q:\n%s", s, buf.String())
+		}
+	}
+}
+
+// TestConnectorArrow_RealCorpus reads real xsde2svg Connector arrows
+// (shape 83) in both of element_83.go's forms — an axis-aligned one
+// (Поопорная схема ТП ул.Энергетиков д.20 Л-3 ПС Валдай.svg, pointing left
+// from the end of its overhead line Л-1, here in the current named-<g>
+// line form) and a diagonal one under rotate(137) — and renders the first
+// back at the same geometry.
+func TestConnectorArrow_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<g id="148703890" data-type="22" data-name="Л-1" data-voltage="gray">
+<polyline points="45,145 115,145" style="fill:none;stroke:gray;stroke-width:1.5" />
+</g>
+<g id="148703877" data-type="83"  data-voltage="coral" >
+<path d="M 45 145 l -19 0" style="fill:none;stroke:coral;stroke-width:1" />
+<path d=" M 26 140 l -11 5 l 11 5 z " style="fill:white;stroke:dimgray;stroke-width:1" />
+</g>
+<g id="148705554" data-type="83" transform="rotate(137,1356,1437)" data-voltage="coral" >
+<path d="M 1356 1437 h 15.17" style="fill:none;stroke:coral;stroke-width:1" />
+<path d=" M 1371.17 1442 l 11 -5 l -11 -5 z " style="fill:white;stroke:dimgray;stroke-width:1" />
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 2 || len(d.Connectors) != 1 {
+		t.Fatalf("failed=%v skipped=%v elements=%d connectors=%d", report.Failed, report.Skipped, len(d.Elements), len(d.Connectors))
+	}
+	byID := map[int]Element{}
+	for _, e := range d.Elements {
+		byID[e.ID] = e
+	}
+	left := byID[148703877]
+	if left.Class != ClassConnectorArrow || left.X != 45 || left.Y != 145 || left.Orient != 180 || left.Length != 0 ||
+		left.Stroke != "coral" || left.HeadStroke != "dimgray" || left.Fill != "white" || len(left.Ports) != 1 {
+		t.Errorf("left arrow = %+v", left)
+	}
+	if left.Ports[0].Node != d.Connectors[0].From && left.Ports[0].Node != d.Connectors[0].To {
+		t.Errorf("arrow port node %d not joined to line Л-1 (%d-%d)", left.Ports[0].Node, d.Connectors[0].From, d.Connectors[0].To)
+	}
+	diag := byID[148705554]
+	if diag.X != 1356 || diag.Y != 1437 || diag.Orient != 137 || diag.Length != 26.17 {
+		t.Errorf("diagonal arrow = %+v", diag)
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`<!-- Connector arrow:83 -->`,
+		`<g id="148703877" data-name="" data-voltage="coral" data-type="83" transform="rotate(180,45,145)">
+<path d="M 45 145 h 19" style="fill:none;stroke:coral;stroke-width:1" />
+<path d="M 64 150 l 11 -5 l -11 -5 z" style="fill:white;stroke:dimgray;stroke-width:1" />`,
+		`transform="rotate(137,1356,1437)">
+<path d="M 1356 1437 h 15.17"`,
+	} {
+		if !strings.Contains(buf.String(), s) {
+			t.Errorf("render missing %q:\n%s", s, buf.String())
+		}
+	}
+	again, report, err := Extract(buf.Bytes(), "", nil)
+	if err != nil || len(report.Failed) != 0 || len(again.Elements) != 2 {
+		t.Fatalf("re-extract: err=%v failed=%v n=%d", err, report.Failed, len(again.Elements))
+	}
+	for _, e := range again.Elements {
+		w := byID[e.ID]
+		if e.X != w.X || e.Y != w.Y || e.Orient != w.Orient || e.Length != w.Length {
+			t.Errorf("round trip %d = %+v, want %+v", e.ID, e, w)
+		}
+	}
+}
+
+// TestSmallWindow_RealCorpus reads real xsde2svg Small windows (shape 319):
+// two from older exports without an id (PS_110kV_Gazovaya.svg,
+// PS_110kV_Demyansk.svg), which get fresh ids, and one from the patched
+// element_319.go with its id; none of their colors becomes a voltage class.
+// Each renders back as the same bare <rect>.
+func TestSmallWindow_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="3000" height="1000" xmlns="http://www.w3.org/2000/svg">
+<rect x="1242" y="263" width="30" height="30" style="fill:none;stroke:#00A0F0;stroke-width:1" data-type="319" data-voltage="#00A0F0" />
+<rect x="2828" y="250" width="27" height="24" style="fill:none;stroke:#00A0F0;stroke-width:1" data-type="319" data-voltage="#00A0F0" />
+<rect x="2164" y="276" width="30" height="30" style="fill:none;stroke:#00A0F0;stroke-width:1" id="3844" data-type="319" data-voltage="#00A0F0" />
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 3 || len(d.VoltageClasses) != 0 {
+		t.Fatalf("failed=%v skipped=%v elements=%d voltage classes=%v", report.Failed, report.Skipped, len(d.Elements), d.VoltageClasses)
+	}
+	ids := map[int]bool{}
+	for _, e := range d.Elements {
+		if e.Class != ClassSmallWindow || e.Shape != "319" || e.ID == 0 || e.Stroke != "#00A0F0" || e.Fill != "none" || e.StrokeWidth != 0 || len(e.Points) != 2 {
+			t.Errorf("small window = %+v", e)
+		}
+		ids[e.ID] = true
+	}
+	if len(ids) != 3 || !ids[3844] {
+		t.Errorf("ids = %v, want 3 distinct including 3844", ids)
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`<!-- Small window:319 -->`,
+		`<rect id="3844" x="2164" y="276" width="30" height="30" style="fill:none;stroke:#00A0F0;stroke-width:1" data-name="" data-voltage="#00A0F0" data-type="319" />`,
+		`x="2828" y="250" width="27" height="24" style="fill:none;stroke:#00A0F0;stroke-width:1"`,
+	} {
+		if !strings.Contains(buf.String(), s) {
+			t.Errorf("render missing %q:\n%s", s, buf.String())
+		}
+	}
+}
+
+// TestConnectorPoint_RealCorpus reads a real xsde2svg Connector (shape 10,
+// ПС 35 кВ 45С Тохма.svg id 1359) with the overhead line and object link
+// that end at its center: both wires and its one port share one node, and
+// its magenta doesn't become a voltage class. It renders back as the same
+// 10x10 square.
+func TestConnectorPoint_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="400,1280 400,1310" style="fill:none;stroke:purple;;stroke-width:3"  data-voltage="purple" data-type="22" id="1358" />
+<polyline points="400,1310 400,1330" style="fill:none;stroke:purple;;stroke-width:1" data-type="28" id="1357" data-voltage="purple" />
+<rect x="395" y="1305" width="10" height="10" style="fill:none;stroke:magenta;stroke-width:1"  id="1359" data-type="10" data-voltage="magenta" />
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 1 || len(d.Connectors) != 2 {
+		t.Fatalf("failed=%v skipped=%v elements=%d connectors=%d", report.Failed, report.Skipped, len(d.Elements), len(d.Connectors))
+	}
+	for _, vc := range d.VoltageClasses {
+		if strings.EqualFold(vc.Color, "magenta") {
+			t.Errorf("connector color became a voltage class: %+v", d.VoltageClasses)
+		}
+	}
+	e := d.Elements[0]
+	if e.Class != ClassConnectorPoint || e.Shape != "10" || e.X != 400 || e.Y != 1310 || e.Stroke != "magenta" || len(e.Ports) != 1 {
+		t.Fatalf("connector = %+v", e)
+	}
+	node := e.Ports[0].Node
+	for _, c := range d.Connectors {
+		if c.From != node && c.To != node {
+			t.Errorf("connector %d (%d-%d) doesn't end on the connector's node %d", c.ID, c.From, c.To, node)
+		}
+	}
+
+	lib := NewSymbolLibrary(map[string]string{"10": `<rect x="-5" y="-5" width="10" height="10" style="fill:none;stroke:{color};stroke-width:1" />`})
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{
+		`<!-- Connector:10 -->`,
+		`<g id="1359" data-name="" data-voltage="magenta" data-type="10">
+<rect x="395" y="1305" width="10" height="10" style="fill:none;stroke:magenta;stroke-width:1" />`,
+	} {
+		if !strings.Contains(buf.String(), s) {
+			t.Errorf("render missing %q:\n%s", s, buf.String())
+		}
+	}
+	again, report, err := Extract(buf.Bytes(), "", nil)
+	if err != nil || len(report.Failed) != 0 || len(again.Elements) != 1 || again.Elements[0].X != 400 || again.Elements[0].Y != 1310 {
+		t.Fatalf("re-extract: err=%v failed=%v elements=%+v", err, report.Failed, again.Elements)
+	}
+}

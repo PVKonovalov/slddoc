@@ -34,8 +34,11 @@ var elementDataTypes = map[string]bool{
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
 	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
-	"385": true, "386": true, "32": true, "113": true, "335": true, "292": true, "1": true, "16": true, "9": true, "26": true,
+	"385": true, "386": true, "32": true, "146": true, "113": true, "302": true, "310": true, "319": true, "335": true, "292": true, "1": true, "16": true, "9": true, "26": true,
 	"320001": true,
+	"320002": true,
+	"10":     true,
+	"83":     true,
 	"312":    true, "313": true,
 	"399": true,
 	"6":   true,
@@ -66,6 +69,7 @@ var twoPortShapes = map[string]Class{
 	"51":  ClassChassis,
 	"56":  ClassCableConnector,
 	"32":  ClassCableJoint,
+	"146": ClassPowerPole,
 	"156": ClassResistor,
 }
 
@@ -351,6 +355,20 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
+		case "319":
+			el, err := parseSmallWindow(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			if el.ID == 0 {
+				// An older export's Small window has no id.
+				el.ID = nextSynthID
+				nextSynthID++
+			}
+			addElement(el, nil, "")
+
 		case "4":
 			el, err := parseCircle(n)
 			if err != nil {
@@ -371,6 +389,30 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "113":
 			el, err := parseButton(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "310":
+			// An older export's outline is the bare <path> straight after
+			// the caption group (element_310.go's own write order).
+			var next *rawNode
+			if i+1 < len(root.Children) {
+				next = root.Children[i+1]
+			}
+			el, err := parseContainer(n, next)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "302":
+			el, err := parseWindowIcon(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
@@ -499,6 +541,33 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
+		case "83":
+			el, ports, err := parseConnectorArrow(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, "")
+
+		case "10":
+			el, ports, err := parseConnectorPoint(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, "")
+
+		case "320002":
+			el, err := parseLampOnPole(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
 		case "320001":
 			el, err := parsePowerflowIndicator(n)
 			if err != nil {
@@ -526,7 +595,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "156":
+		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "146", "156":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))

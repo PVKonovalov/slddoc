@@ -229,6 +229,10 @@ var shapeName = map[string]string{
 	"76":     "Starter",
 	"106":    "Lamp",
 	"113":    "Button",
+	"302":    "Window icon",
+	"319":    "Small window",
+	"310":    "Container",
+	"146":    "Power pole",
 	"154":    "Fuse (withdrawable)",
 	"162":    "Disconnector",
 	"164":    "Sectionalizer",
@@ -254,6 +258,9 @@ var shapeName = map[string]string{
 	"26":     "Fork",
 	"9":      "Arc",
 	"320001": "Powerflow direction",
+	"320002": "Lamp on pole",
+	"10":     "Connector",
+	"83":     "Connector arrow",
 	"312":    "Table",
 	"313":    "Table 2",
 }
@@ -394,6 +401,18 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		// A Lamp's colors are its own FillOff/FillOn pair, not a
 		// VoltageClass — it isn't part of the electrical network.
 		color = lampColor(e)
+	} else if e.Class == ClassLampOnPole {
+		// Same: its own Stroke, gray by default.
+		color = e.Stroke
+		if color == "" {
+			color = "gray"
+		}
+	} else if e.Class == ClassConnectorPoint {
+		// Same: its own Stroke, magenta by default.
+		color = e.Stroke
+		if color == "" {
+			color = "magenta"
+		}
 	} else if e.Class == ClassFaultPassageIndicator {
 		// {color} is only its own fixed background fill (the ring reads
 		// as hollow against the canvas) — it isn't part of the electrical
@@ -519,6 +538,21 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		writeButton(w, e, mode)
 		return
 	}
+	if e.Class == ClassContainer {
+		// A decorative outline with a caption (see writeContainer).
+		writeContainer(w, e, mode)
+		return
+	}
+	if e.Class == ClassSmallWindow {
+		// Rectangle's same bare <rect> (see writeSmallWindow).
+		writeSmallWindow(w, e, mode)
+		return
+	}
+	if e.Class == ClassWindowIcon {
+		// Button's smaller sibling (see writeWindowIcon).
+		writeWindowIcon(w, e, mode)
+		return
+	}
 	if e.Class == ClassRoad {
 		// Same reasoning as ClassRectangle just above — a decorative
 		// annotation whose own geometry varies per instance and isn't
@@ -527,6 +561,12 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		// not a fixed two-point shape, so it's drawn with writePolyline
 		// directly rather than its own bespoke writeX function.
 		writeRoad(w, e, mode)
+		return
+	}
+	if e.Class == ClassConnectorArrow {
+		// Its length varies per instance, which a static template can't
+		// express (see writeConnectorArrow).
+		writeConnectorArrow(w, e, mode)
 		return
 	}
 	if e.Class == ClassPostPole {
@@ -991,6 +1031,20 @@ func writePolyline(w io.Writer, id int, kind string, pts []Point, color string, 
 // but a hand-edited or corrupt file could carry one) draws nothing rather
 // than guessing a size.
 func writeRectangle(w io.Writer, e Element, mode RenderMode) {
+	writeRect(w, e, mode, "3", "white", e.StrokeWidth)
+}
+
+// writeSmallWindow draws a Small window (shape 319) as Rectangle's same bare
+// <rect>, with element_319.go's fixed 1px border and gray as the default
+// border color.
+func writeSmallWindow(w io.Writer, e Element, mode RenderMode) {
+	writeRect(w, e, mode, "319", "gray", 1)
+}
+
+// writeRect is writeRectangle/writeSmallWindow's shared writer: code is the
+// data-type, defaultStroke the unset-Stroke fallback, strokeWidth the
+// border width (0 = 1).
+func writeRect(w io.Writer, e Element, mode RenderMode, code, defaultStroke string, strokeWidth float64) {
 	if len(e.Points) < 2 {
 		return
 	}
@@ -1004,9 +1058,8 @@ func writeRectangle(w io.Writer, e Element, mode RenderMode) {
 	}
 	stroke := e.Stroke
 	if stroke == "" {
-		stroke = "white"
+		stroke = defaultStroke
 	}
-	strokeWidth := e.StrokeWidth
 	if strokeWidth <= 0 {
 		strokeWidth = 1
 	}
@@ -1015,8 +1068,8 @@ func writeRectangle(w io.Writer, e Element, mode RenderMode) {
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"3\"%s />\n",
-		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s />\n",
+		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), code, editorAttr)
 }
 
 // writeCircle draws a Circle (shape 4) as a single flat <ellipse>, the
@@ -1080,6 +1133,184 @@ const buttonFontSize = 23
 // matching the real source's own ParamText.FontStyle-driven "BOLD" branch.
 // A Button with fewer than 2 Points draws nothing, same as writeRectangle.
 func writeButton(w io.Writer, e Element, mode RenderMode) {
+	writeTextBox(w, e, mode, textBoxStyle{
+		code: "113", fontSize: buttonFontSize, stroke: "white", textColor: "white", strokeWidth: e.StrokeWidth,
+	})
+}
+
+// windowIconFontSize is a Window icon's (302) own label size: the source's
+// Scale(scaleChosed, 12), and 12px in every real corpus instance.
+const windowIconFontSize = 12
+
+// writeWindowIcon draws a Window icon (shape 302) the way
+// internal/modus/element_302.go does: Button's <g><rect/><text/></g>, but
+// with a 12px label 2 units below the box's center, a fixed 1px border, and
+// black as the default border and text color (the source leaves its text
+// fill empty, which a browser draws black; a real color is written instead).
+func writeWindowIcon(w io.Writer, e Element, mode RenderMode) {
+	writeTextBox(w, e, mode, textBoxStyle{
+		code: "302", fontSize: windowIconFontSize, textDY: 2, stroke: "black", textColor: "black", strokeWidth: 1,
+	})
+}
+
+// Connector arrow (83) geometry: the default total length and the
+// arrowhead's length/half-width, element_83.go's own fixed 11 and 5.
+const (
+	connectorArrowLength     = 30
+	connectorArrowHeadLength = 11
+	connectorArrowHeadHalf   = 5
+)
+
+// writeConnectorArrow draws a Connector arrow (shape 83) in its own local
+// frame — the line from its tail (the anchor, its terminal) along +x, then
+// the source's arrowhead triangle — placed by translate(x,y) rotate(Orient)
+// like any symbol; Static rewrites that into absolute coordinates with
+// rotate(Orient,x,y), the form element_83.go itself writes for a diagonal
+// arrow. Stroke falls back to coral, HeadStroke to dimgray, Fill to white.
+func writeConnectorArrow(w io.Writer, e Element, mode RenderMode) {
+	length := e.Length
+	if length <= 0 {
+		length = connectorArrowLength
+	}
+	// Rounded to the hundredths element_83.go itself writes ("%.2f").
+	shaft := math.Round((length-connectorArrowHeadLength)*100) / 100
+	if shaft < 0 {
+		shaft = 0
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "coral"
+	}
+	head := e.HeadStroke
+	if head == "" {
+		head = "dimgray"
+	}
+	fill := e.Fill
+	if fill == "" {
+		fill = "white"
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"83\"%s transform=\"translate(%s,%s) rotate(%d)\">\n",
+		e.ID, esc(e.Name), esc(stroke), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient)
+	fmt.Fprintf(w, "<path d=\"M 0 0 h %s\" style=\"fill:none;stroke:%s;stroke-width:1\" />\n", fmtNum(shaft), esc(stroke))
+	fmt.Fprintf(w, "<path d=\"M %s %d l %d %d l %d %d z\" style=\"fill:%s;stroke:%s;stroke-width:1\" />\n",
+		fmtNum(shaft), connectorArrowHeadHalf, connectorArrowHeadLength, -connectorArrowHeadHalf, -connectorArrowHeadLength, -connectorArrowHeadHalf, esc(fill), esc(head))
+	fmt.Fprint(w, "</g>\n")
+}
+
+// containerDashPatterns maps a Container's (310) LineStyle to its
+// stroke-dasharray, as internal/modus/element_310.go writes it
+// ("пунктирная"/"штриховая"). Any other style draws solid.
+var containerDashPatterns = map[ConnectorLineStyle]string{
+	LineStyleDotted: "stroke-dasharray: 3,2;",
+	LineStyleDashed: "stroke-dasharray: 6,5;",
+}
+
+// containerFontSize is a Container's caption size when TextSize is unset:
+// the source's Scale(textScale, 14).
+const containerFontSize = 14
+
+// containerTextAnchor returns a Container caption's on-canvas anchor: the
+// outline's top-left plus TextDx/TextDy.
+func containerTextAnchor(e Element) (float64, float64) {
+	minX, minY := e.Points[0].X, e.Points[0].Y
+	for _, p := range e.Points[1:] {
+		minX, minY = math.Min(minX, p.X), math.Min(minY, p.Y)
+	}
+	return minX + e.TextDx, minY + e.TextDy
+}
+
+// writeContainer draws a Container (shape 310) as one <g id data-type="310"
+// data-name="caption" data-voltage="stroke"> holding its closed outline
+// <path> and, when it has one, its caption <text> — the form the patched
+// xsde2svg element_310.go writes (an older export instead put the outline
+// in a bare <path> after the group; see parseContainer). Fill falls back
+// to "none", Stroke to "gray", StrokeWidth to 1, TextColor to white,
+// TextSize to 14 and TextAnchor/TextBaseline to middle. A Container with
+// fewer than 3 Points draws nothing.
+func writeContainer(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 3 {
+		return
+	}
+	fill := e.Fill
+	if fill == "" {
+		fill = "none"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "gray"
+	}
+	strokeWidth := e.StrokeWidth
+	if strokeWidth <= 0 {
+		strokeWidth = 1
+	}
+	var d strings.Builder
+	for i, p := range e.Points {
+		if i == 0 {
+			d.WriteString("M ")
+		} else {
+			d.WriteString(" L")
+		}
+		d.WriteString(fmtNum(p.X) + " " + fmtNum(p.Y))
+	}
+	d.WriteString(" z")
+
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	nameAttr := ""
+	if e.PropertyText != "" {
+		nameAttr = fmt.Sprintf(" data-name=\"%s\"", esc(e.PropertyText))
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"310\"%s data-voltage=\"%s\"%s>\n", e.ID, nameAttr, esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<path d=\"%s\" style=\"fill:%s;stroke:%s;%sstroke-width:%s\" />\n",
+		d.String(), esc(fill), esc(stroke), containerDashPatterns[e.LineStyle], fmtNum(strokeWidth))
+	if e.PropertyText != "" {
+		textColor := e.TextColor
+		if textColor == "" {
+			textColor = "white"
+		}
+		size := e.TextSize
+		if size <= 0 {
+			size = containerFontSize
+		}
+		anchor := e.TextAnchor
+		if anchor == "" {
+			anchor = "middle"
+		}
+		baseline := e.TextBaseline
+		if baseline == "" {
+			baseline = "middle"
+		}
+		x, y := containerTextAnchor(e)
+		rotate := ""
+		if e.Orient != 0 {
+			rotate = fmt.Sprintf(" transform=\"rotate(%d,%s,%s)\"", e.Orient, fmtNum(x), fmtNum(y))
+		}
+		style := fmt.Sprintf("fill:%s;text-anchor:%s;dominant-baseline:%s;font-size:%spx;font-family:Arial", textColor, anchor, baseline, fmtNum(size))
+		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\"%s>%s</text>\n", fmtNum(x), fmtNum(y), esc(style), rotate, esc(e.PropertyText))
+	}
+	fmt.Fprint(w, "</g>\n")
+}
+
+// textBoxStyle is what differs between Button and Window icon: their
+// data-type, label size and vertical offset, the default border and text
+// colors, and the border width.
+type textBoxStyle struct {
+	code        string
+	fontSize    int
+	textDY      float64
+	stroke      string
+	textColor   string
+	strokeWidth float64
+}
+
+// writeTextBox is writeButton/writeWindowIcon's shared writer.
+func writeTextBox(w io.Writer, e Element, mode RenderMode, st textBoxStyle) {
 	if len(e.Points) < 2 {
 		return
 	}
@@ -1093,15 +1324,15 @@ func writeButton(w io.Writer, e Element, mode RenderMode) {
 	}
 	stroke := e.Stroke
 	if stroke == "" {
-		stroke = "white"
+		stroke = st.stroke
 	}
-	strokeWidth := e.StrokeWidth
+	strokeWidth := st.strokeWidth
 	if strokeWidth <= 0 {
 		strokeWidth = 1
 	}
 	textColor := e.TextColor
 	if textColor == "" {
-		textColor = "white"
+		textColor = st.textColor
 	}
 	weight := ""
 	if e.Bold {
@@ -1112,12 +1343,12 @@ func writeButton(w io.Writer, e Element, mode RenderMode) {
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"113\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, esc(e.Name), esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"%s\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, st.code, esc(e.Name), esc(stroke), editorAttr)
 	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" />\n",
 		fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth))
 	if e.PropertyText != "" {
-		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial%s", textColor, buttonFontSize, weight)
-		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", fmtNum(x+width/2), fmtNum(y+height/2), esc(style), esc(e.PropertyText))
+		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial%s", textColor, st.fontSize, weight)
+		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", fmtNum(x+width/2), fmtNum(y+height/2+st.textDY), esc(style), esc(e.PropertyText))
 	}
 	fmt.Fprint(w, "</g>\n")
 }

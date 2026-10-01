@@ -230,6 +230,12 @@ const (
 	ClassCableJoint            Class = "CableJoint"
 	ClassLamp                  Class = "Lamp"
 	ClassFaultPassageIndicator Class = "FaultPassageIndicator"
+	// ClassPowerPole (shape 146, "Электроопора"/Power pole) is a pole on an
+	// overhead line, drawn by internal/modus/element_146.go as a
+	// voltage-colored r=8 circle on its anchor with 2-unit leads to
+	// (0,±10): two terminals there, the line passing through it. Real
+	// corpus always draws it over a line, usually rotated 180 (symmetric).
+	ClassPowerPole Class = "PowerPole"
 	// ClassRectangle (shape 3) is a purely decorative annotation box — not
 	// real electrical equipment, so unlike every class above it never has
 	// Ports/a Voltage/a State of its own and never takes part in the
@@ -285,6 +291,19 @@ const (
 	// EnclosedSubstation/FaultPassageIndicator's own fixed-style overlay
 	// text.
 	ClassButton Class = "Button"
+	// ClassWindowIcon (shape 302, "Иконка окна"/Window icon) is ClassButton's
+	// smaller sibling: the same decorative two-corner box with a centered
+	// PropertyText label (Fill/Stroke/TextColor/Bold as Button's), drawn by
+	// internal/modus/element_302.go with a 12px label 2 units below center,
+	// a fixed 1px border, and black border/text by default. Real corpus
+	// shows it as a small labeled tile ("Окно" on orange).
+	ClassWindowIcon Class = "WindowIcon"
+	// ClassSmallWindow (shape 319, "Окошко"/Small window) is a small
+	// decorative frame, drawn by internal/modus/element_319.go as a bare
+	// <rect> exactly like ClassRectangle's (two corner Points, Fill/Stroke),
+	// but always with a 1px border and gray by default. Real corpus shows
+	// it unfilled, usually in the 110 kV blue. Older exports carry no id.
+	ClassSmallWindow Class = "SmallWindow"
 	// ClassRoad (shape 335, "Дорога"/Road) is a purely decorative
 	// geographic background line — not real electrical equipment, same
 	// non-electrical status as ClassRectangle (no Ports/Voltage/State,
@@ -347,6 +366,17 @@ const (
 	// LineStyleDotted/LineStyleDashDot have a real counterpart for this
 	// shape (see polygonDashPatterns); LineStyleDashed draws solid.
 	ClassPolygon Class = "Polygon"
+	// ClassContainer (shape 310, "Контейнер"/Container) is a decorative
+	// closed outline around a group of equipment (a substation's own
+	// frame, usually dashed), with an optional caption: Points are its
+	// vertices (real corpus: mostly 4, up to 12), Fill/Stroke/StrokeWidth/
+	// LineStyle its outline (LineStyleDotted "3,2", LineStyleDashed "6,5",
+	// as internal/modus/element_310.go draws them), PropertyText/TextColor
+	// its caption ("none" is a real, invisible caption — most real ones
+	// are), TextSize/TextDx/TextDy/TextAnchor/TextBaseline where and how
+	// the caption sits, and Orient the caption's own rotation around its
+	// anchor. No Ports/Voltage/State.
+	ClassContainer Class = "Container"
 	// ClassArc (shape 9, "Дуга"/Arc) is a purely decorative elliptical
 	// arc — not real electrical equipment (no Ports/Voltage/State, never a
 	// connectElements/routing endpoint, same status as ClassLine). It is
@@ -379,6 +409,30 @@ const (
 	// factor rather than a genuine per-instance property, so
 	// writePowerflowIndicator draws it at one fixed size.
 	ClassPowerflowIndicator Class = "PowerflowIndicator"
+	// ClassLampOnPole (shape 320002, "Лампа на опоре"/Lamp on pole) is a
+	// street-light marker, not part of the electrical network: a r=6 circle
+	// on its anchor crossed by an × (internal/modus/element_320.go), drawn
+	// in its own Stroke color (the source's Color1; empty = gray). No
+	// Ports/Voltage/State. Orient rotates it, which only matters for an
+	// imported instance round-tripping (the symbol looks the same at every
+	// right angle).
+	ClassLampOnPole Class = "LampOnPole"
+	// ClassConnectorPoint (shape 10, "Коннектор"/Connector) is a connection
+	// point drawn as a 10x10 square on its anchor (internal/modus/
+	// element_10.go): one terminal at its center, which every wire ending
+	// there shares — Junction point's role, square. Its color is its own
+	// Stroke (the source's workplace "КОННЕКТОР" color; empty = magenta,
+	// every real instance), not a voltage. No Voltage/State.
+	ClassConnectorPoint Class = "ConnectorPoint"
+	// ClassConnectorArrow (shape 83, "Коннектор-стрелка"/Connector arrow)
+	// marks where a line leaves the sheet: an arrow from its anchor (its
+	// tail and one terminal, port "1", which real corpus puts on an overhead
+	// or cable line's end) Length units long (0 = 30) in direction Orient
+	// (0 = pointing right; any angle), as internal/modus/element_83.go draws
+	// it. Stroke is the line's color (default coral), HeadStroke/Fill the
+	// arrowhead's outline/fill (default dimgray/white). No Voltage: real
+	// colors are the arrow's own line style, not a voltage.
+	ClassConnectorArrow Class = "ConnectorArrow"
 	// ClassTable (shape 312, "Таблица"/Table) is a purely decorative
 	// annotation box — not real electrical equipment, same non-electrical
 	// status as ClassRectangle (no Ports/Voltage/State, never a
@@ -670,6 +724,22 @@ type Element struct {
 	// corpus shows both a plain and a bold real instance. Unused by every
 	// other class.
 	Bold bool `xml:"bold,attr,omitempty" json:"bold,omitempty"`
+	// TextSize/TextDx/TextDy/TextAnchor/TextBaseline place a Container's
+	// (310) caption: its font size (0 = 14), its anchor's offset from the
+	// outline's own top-left (min x/y of Points, so the caption moves with
+	// it), and its text-anchor/dominant-baseline ("" = middle/middle).
+	// Stored as drawn rather than as the source's position presets, so a
+	// real caption round-trips exactly. Unused by every other class.
+	TextSize     float64 `xml:"textSize,attr,omitempty" json:"textSize,omitempty"`
+	TextDx       float64 `xml:"textDx,attr,omitempty" json:"textDx,omitempty"`
+	TextDy       float64 `xml:"textDy,attr,omitempty" json:"textDy,omitempty"`
+	TextAnchor   string  `xml:"textAnchor,attr,omitempty" json:"textAnchor,omitempty"`
+	TextBaseline string  `xml:"textBaseline,attr,omitempty" json:"textBaseline,omitempty"`
+	// Length is a Connector arrow's (83) total length, tail to tip (0 =
+	// 30, the common real one), and HeadStroke its arrowhead's outline
+	// color. Unused by every other class.
+	Length     float64 `xml:"length,attr,omitempty" json:"length,omitempty"`
+	HeadStroke string  `xml:"headStroke,attr,omitempty" json:"headStroke,omitempty"`
 	// RadiusX/RadiusY/LargeArc/Sweep are an Arc's (shape 9, see
 	// ClassArc) own SVG elliptical-arc parameters, stored exactly as the
 	// arc's own "A rx,ry rotation large-arc sweep x,y" command carries them

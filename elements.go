@@ -1516,12 +1516,27 @@ func parseRectangle(n *rawNode) (Element, error) {
 	if err != nil {
 		return Element{}, err
 	}
+	return parseRect(n, id, ClassRectangle, "3")
+}
+
+// parseSmallWindow handles shape 319 (Окошко/Small window, see
+// ClassSmallWindow): Rectangle's same bare <rect>. element_319.go wrote no
+// id before it was patched, so a missing one is left 0 for Extract to fill
+// in; the border width is fixed, so StrokeWidth stays unset.
+func parseSmallWindow(n *rawNode) (Element, error) {
+	el, err := parseRect(n, parseOptionalID(n), ClassSmallWindow, "319")
+	el.StrokeWidth = 0
+	return el, err
+}
+
+// parseRect is parseRectangle/parseSmallWindow's shared <rect> reader.
+func parseRect(n *rawNode, id int, class Class, shape string) (Element, error) {
 	x, errX := strconv.ParseFloat(n.attr("x"), 64)
 	y, errY := strconv.ParseFloat(n.attr("y"), 64)
 	w, errW := strconv.ParseFloat(n.attr("width"), 64)
 	h, errH := strconv.ParseFloat(n.attr("height"), 64)
 	if errX != nil || errY != nil || errW != nil || errH != nil {
-		return Element{}, fmt.Errorf("slddoc: rectangle %s: invalid x/y/width/height", n.attr("id"))
+		return Element{}, fmt.Errorf("slddoc: %s %s: invalid x/y/width/height", class, n.attr("id"))
 	}
 	style := n.attr("style")
 	// StrokeWidth left at 0 (unset) when absent or unparseable — Render's
@@ -1531,8 +1546,8 @@ func parseRectangle(n *rawNode) (Element, error) {
 	strokeWidth, _ := strconv.ParseFloat(styleProp(style, "stroke-width"), 64)
 	return Element{
 		ID:          id,
-		Class:       ClassRectangle,
-		Shape:       "3",
+		Class:       class,
+		Shape:       shape,
 		Name:        n.attr("data-name"),
 		Layer:       resolveLayer(n.attr("data-layer")),
 		X:           x + w/2,
@@ -1669,6 +1684,100 @@ func parseArrow(n *rawNode) (Element, error) {
 // happens, but a hand-edited file could) simply extracts with an empty
 // PropertyText, same as an ordinary unlabeled Rectangle.
 func parseButton(n *rawNode) (Element, error) {
+	return parseTextBox(n, ClassButton, "113")
+}
+
+// parseWindowIcon handles shape 302 (Иконка окна/Window icon), drawn as
+// Button's same <g><rect/><text/></g> (see writeTextBox). Its border width
+// is fixed at 1 by the source, so StrokeWidth stays unset. A real
+// instance's text style carries an empty "fill:", read as no TextColor
+// (the black default).
+func parseWindowIcon(n *rawNode) (Element, error) {
+	el, err := parseTextBox(n, ClassWindowIcon, "302")
+	el.StrokeWidth = 0
+	return el, err
+}
+
+// containerDashStyles is the reverse of render.go's containerDashPatterns.
+var containerDashStyles = map[string]ConnectorLineStyle{
+	"3,2": LineStyleDotted,
+	"6,5": LineStyleDashed,
+}
+
+// parseContainer handles shape 310 (Контейнер/Container, see
+// ClassContainer). The patched xsde2svg (and Render) write one <g
+// data-type="310"> holding the outline <path> and an optional caption
+// <text>. An older export wrote only the caption inside the group and the
+// outline as the bare, untyped <path> right after it, passed here as next;
+// an older uncaptioned container carried no data-type at all and isn't
+// recognizable. The caption is stored as drawn: TextDx/TextDy from the
+// outline's top-left, its anchor/baseline/size/fill, and Orient from its
+// rotate(angle,x,y).
+func parseContainer(n, next *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	var outline *rawNode
+	if paths := n.childrenTagged("path"); len(paths) > 0 {
+		outline = paths[0]
+	} else if next != nil && next.Tag == "path" && next.attr("data-type") == "" {
+		outline = next
+	}
+	if outline == nil {
+		return Element{}, fmt.Errorf("slddoc: container %d: no outline path", id)
+	}
+	subpaths, err := parseSubpaths(outline.attr("d"))
+	if err != nil {
+		return Element{}, err
+	}
+	if len(subpaths) == 0 {
+		return Element{}, fmt.Errorf("slddoc: container %d: empty outline", id)
+	}
+	pts := subpaths[0]
+	if len(pts) > 1 && pts[len(pts)-1] == pts[0] {
+		pts = pts[:len(pts)-1] // the closing z
+	}
+	if len(pts) < 3 {
+		return Element{}, fmt.Errorf("slddoc: container %d: %d points, want at least 3", id, len(pts))
+	}
+	style := outline.attr("style")
+	strokeWidth, _ := strconv.ParseFloat(strings.TrimSpace(styleProp(style, "stroke-width")), 64)
+	el := Element{
+		ID:          id,
+		Class:       ClassContainer,
+		Shape:       "310",
+		Layer:       resolveLayer(n.attr("data-layer")),
+		X:           pts[0].X,
+		Y:           pts[0].Y,
+		Fill:        styleProp(style, "fill"),
+		Stroke:      styleProp(style, "stroke"),
+		StrokeWidth: strokeWidth,
+		LineStyle:   containerDashStyles[strings.TrimSpace(styleProp(style, "stroke-dasharray"))],
+		Points:      pts,
+	}
+	if t := firstTextChild(n); t != nil {
+		lbl := textToLabel(t)
+		el.PropertyText = lbl.Text
+		el.TextColor = lbl.Color
+		el.TextSize = lbl.Size
+		el.TextAnchor = lbl.Anchor
+		el.TextBaseline = strings.TrimSpace(styleProp(t.attr("style"), "dominant-baseline"))
+		el.Name = n.attr("data-name")
+		minX, minY := pts[0].X, pts[0].Y
+		for _, p := range pts[1:] {
+			minX, minY = math.Min(minX, p.X), math.Min(minY, p.Y)
+		}
+		el.TextDx, el.TextDy = lbl.X-minX, lbl.Y-minY
+		if angle, _, ok := parseRotate(t.attr("transform")); ok {
+			el.Orient = angle
+		}
+	}
+	return el, nil
+}
+
+// parseTextBox is parseButton/parseWindowIcon's shared reader.
+func parseTextBox(n *rawNode, class Class, shape string) (Element, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return Element{}, err
@@ -1678,7 +1787,7 @@ func parseButton(n *rawNode) (Element, error) {
 		rects = n.descendants("rect")
 	}
 	if len(rects) == 0 {
-		return Element{}, fmt.Errorf("slddoc: button %s: no rect child", n.attr("id"))
+		return Element{}, fmt.Errorf("slddoc: %s %s: no rect child", class, n.attr("id"))
 	}
 	rn := rects[0]
 	x, errX := strconv.ParseFloat(rn.attr("x"), 64)
@@ -1686,15 +1795,15 @@ func parseButton(n *rawNode) (Element, error) {
 	w, errW := strconv.ParseFloat(rn.attr("width"), 64)
 	h, errH := strconv.ParseFloat(rn.attr("height"), 64)
 	if errX != nil || errY != nil || errW != nil || errH != nil {
-		return Element{}, fmt.Errorf("slddoc: button %s: invalid x/y/width/height", n.attr("id"))
+		return Element{}, fmt.Errorf("slddoc: %s %s: invalid x/y/width/height", class, n.attr("id"))
 	}
 	rectStyle := rn.attr("style")
 	strokeWidth, _ := strconv.ParseFloat(styleProp(rectStyle, "stroke-width"), 64)
 
 	el := Element{
 		ID:          id,
-		Class:       ClassButton,
-		Shape:       "113",
+		Class:       class,
+		Shape:       shape,
 		Name:        n.attr("data-name"),
 		Layer:       resolveLayer(n.attr("data-layer")),
 		X:           x + w/2,
@@ -2369,6 +2478,157 @@ func parseLamp(n *rawNode) (Element, error) {
 		FillOn:  on,
 		Radius:  radius,
 	}, nil
+}
+
+// parseConnectorArrow handles shape 83 (Коннектор-стрелка/Connector arrow,
+// see ClassConnectorArrow): a <g data-type="83"> holding the line and the
+// arrowhead. element_83.go writes the line either as "M x y l dx dy" (an
+// axis-aligned arrow; direction and length from the vector) or as
+// "M x y h len" under rotate(angle,x,y) (a diagonal one); an extra group
+// rotation can come on top of either. The tail (x,y) is the anchor and the
+// one port; the length adds the 11-unit arrowhead the line stops short of.
+func parseConnectorArrow(n *rawNode) (Element, []Point, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, err
+	}
+	paths := n.childrenTagged("path")
+	if len(paths) < 2 {
+		return Element{}, nil, fmt.Errorf("slddoc: connector arrow %d: want a line and an arrowhead path", id)
+	}
+	toks := pathTokenRe.FindAllString(paths[0].attr("d"), -1)
+	num := func(i int) (float64, bool) {
+		if i >= len(toks) {
+			return 0, false
+		}
+		v, err := strconv.ParseFloat(toks[i], 64)
+		return v, err == nil
+	}
+	if len(toks) < 4 || toks[0] != "M" {
+		return Element{}, nil, fmt.Errorf("slddoc: connector arrow %d: unexpected line path", id)
+	}
+	x, okX := num(1)
+	y, okY := num(2)
+	var dx, dy float64
+	var okD bool
+	switch toks[3] {
+	case "l":
+		var okDy bool
+		dx, okD = num(4)
+		dy, okDy = num(5)
+		okD = okD && okDy
+	case "h":
+		dx, okD = num(4)
+	}
+	if !okX || !okY || !okD {
+		return Element{}, nil, fmt.Errorf("slddoc: connector arrow %d: unexpected line path", id)
+	}
+	angle := 0.0
+	if dx != 0 || dy != 0 {
+		angle = math.Atan2(dy, dx) * 180 / math.Pi
+	}
+	if a, _, ok := parseRotate(n.attr("transform")); ok {
+		angle += float64(a)
+	}
+	head := paths[1].attr("style")
+	el := Element{
+		ID:         id,
+		Class:      ClassConnectorArrow,
+		Shape:      "83",
+		Name:       n.attr("data-name"),
+		Layer:      resolveLayer(n.attr("data-layer")),
+		X:          x,
+		Y:          y,
+		Orient:     normalizeOrient(int(math.Round(angle))),
+		Stroke:     styleProp(paths[0].attr("style"), "stroke"),
+		HeadStroke: styleProp(head, "stroke"),
+		Fill:       styleProp(head, "fill"),
+		Ports:      []Port{{Name: "1"}},
+	}
+	if l := math.Round((math.Hypot(dx, dy)+connectorArrowHeadLength)*100) / 100; l != connectorArrowLength {
+		el.Length = l
+	}
+	return el, []Point{{X: x, Y: y}}, nil
+}
+
+// parseConnectorPoint handles shape 10 (Коннектор/Connector, see
+// ClassConnectorPoint): a real bare <rect data-type="10"> 10x10 on its
+// anchor, or Render's <g data-type="10"> holding that <rect>. The anchor
+// and its one port are the square's center, its stroke the element's own
+// color (not registered as a voltage class), and Orient the rotate()
+// angle when there is one.
+func parseConnectorPoint(n *rawNode) (Element, []Point, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, err
+	}
+	rect := n
+	if n.Tag != "rect" {
+		rects := n.descendants("rect")
+		if len(rects) == 0 {
+			return Element{}, nil, fmt.Errorf("slddoc: connector %d: no <rect> geometry", id)
+		}
+		rect = rects[0]
+	}
+	x, errX := strconv.ParseFloat(rect.attr("x"), 64)
+	y, errY := strconv.ParseFloat(rect.attr("y"), 64)
+	w, errW := strconv.ParseFloat(rect.attr("width"), 64)
+	h, errH := strconv.ParseFloat(rect.attr("height"), 64)
+	if errX != nil || errY != nil || errW != nil || errH != nil {
+		return Element{}, nil, fmt.Errorf("slddoc: connector %d: invalid x/y/width/height", id)
+	}
+	center := Point{X: x + w/2, Y: y + h/2}
+	el := Element{
+		ID:     id,
+		Class:  ClassConnectorPoint,
+		Shape:  "10",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      center.X,
+		Y:      center.Y,
+		Stroke: styleProp(rect.attr("style"), "stroke"),
+		Ports:  []Port{{Name: "1"}},
+	}
+	if angle, _, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		el.Orient = normalizeOrient(angle)
+	}
+	return el, []Point{center}, nil
+}
+
+// parseLampOnPole handles shape 320002 (Лампа на опоре/Lamp on pole, see
+// ClassLampOnPole): a <g data-type="320002"> holding a circle and two
+// diagonal paths. The anchor is the circle's center, its stroke the
+// element's own color (data-voltage carries that same color, not a voltage,
+// so it isn't registered as a voltage class), and Orient comes from the
+// group's rotate(angle,x,y), present only when the angle isn't 0.
+func parseLampOnPole(n *rawNode) (Element, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, err
+	}
+	circle := firstCircleChild(n)
+	if circle == nil {
+		return Element{}, fmt.Errorf("slddoc: lamp on pole %s: no <circle> geometry", n.attr("id"))
+	}
+	cx, errX := strconv.ParseFloat(circle.attr("cx"), 64)
+	cy, errY := strconv.ParseFloat(circle.attr("cy"), 64)
+	if errX != nil || errY != nil {
+		return Element{}, fmt.Errorf("slddoc: lamp on pole %s: invalid cx/cy", n.attr("id"))
+	}
+	el := Element{
+		ID:     id,
+		Class:  ClassLampOnPole,
+		Shape:  "320002",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      cx,
+		Y:      cy,
+		Stroke: styleProp(circle.attr("style"), "stroke"),
+	}
+	if angle, _, ok := parseRotate(n.attr("transform")); ok {
+		el.Orient = normalizeOrient(angle)
+	}
+	return el, nil
 }
 
 // parseFaultPassageIndicator handles shape 320003 (ИКЗ/fault passage
