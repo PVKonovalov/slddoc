@@ -121,6 +121,7 @@ func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 			{ID: 3, Class: ClassPowerTransformer, Shape: "47", Windings: []TransformerWinding{{Scheme: SchemeWye}, {Scheme: SchemeWye}}},
 			{ID: 4, Class: ClassBreaker, Shape: "41"},
 			{ID: 5, Class: ClassTable2, Shape: "313", RowHeights: []float64{20}, ColumnWidths: []float64{60}, Cells: []TableCell{{Row: 0, Col: 0}}},
+			{ID: 6, Class: ClassSubstation, Shape: "360", Sectors: []SubstationSector{{Voltage: 1}}},
 		},
 	}
 
@@ -148,6 +149,10 @@ func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 	// The Breaker (no RowHeights/ColumnWidths/Cells) must not carry empty
 	// <rows/>/<columns/>/<cells/>, but the Table2 (real ones) must still
 	// carry real ones.
+	// Only the Substation carries a <sectors>.
+	if bytes.Count(buf.Bytes(), []byte("<sectors")) != 1 {
+		t.Errorf("expected exactly one real <sectors> (the substation's), got: %s", saved)
+	}
 	for _, tag := range []string{"<rows", "<columns", "<cells"} {
 		if bytes.Count(buf.Bytes(), []byte(tag)) != 1 {
 			t.Errorf("expected exactly one real %s (the table2's), got: %s", tag, saved)

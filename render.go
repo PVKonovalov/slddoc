@@ -14,6 +14,16 @@ import (
 // defaultBackground is used when a Diagram carries no Editor.Background.
 const defaultBackground = "#12161d"
 
+// diagramBackground is the page background d renders on, which also backs
+// the {background} template placeholder (e.g. Knife switch (44)'s circles,
+// filled so they hide the blade's ends, as in the real source).
+func diagramBackground(d *Diagram) string {
+	if d.Editor != nil && d.Editor.Background != "" {
+		return d.Editor.Background
+	}
+	return defaultBackground
+}
+
 // RenderMode controls whether Render adds this editor's own
 // interactivity-only markup on top of an otherwise xsde2svg-faithful
 // rendering.
@@ -222,6 +232,7 @@ var shapeName = map[string]string{
 	"43":     "Breaker (withdrawable)",
 	"47":     "Power transformer",
 	"49":     "Disconnector (withdrawable)",
+	"50":     "Sectionalizer (withdrawable)",
 	"54":     "Ground switch",
 	"398":    "Short-circuiter",
 	"399":    "Power circuit breaker",
@@ -230,7 +241,13 @@ var shapeName = map[string]string{
 	"106":    "Lamp",
 	"113":    "Button",
 	"302":    "Window icon",
+	"103":    "Automation device",
 	"319":    "Small window",
+	"360":    "Substation",
+	"389":    "Blocking filter",
+	"38":     "Power plant",
+	"19":     "Metal anchor/angle pole",
+	"11":     "Backdrop/image file",
 	"310":    "Container",
 	"146":    "Power pole",
 	"154":    "Fuse (withdrawable)",
@@ -243,7 +260,9 @@ var shapeName = map[string]string{
 	"51":     "Chassis",
 	"173":    "Generator",
 	"174":    "Synchronous compensator",
+	"39":     "Synchronous motor",
 	"175":    "3-position knife switch",
+	"44":     "Knife switch",
 	"203":    "Fuse",
 	"388":    "Capacitor",
 	"156":    "Resistor",
@@ -372,13 +391,13 @@ var elementZOrder = map[Class]int{
 // itself just before calling this, the same split renderConnector's own
 // doc comment describes for a connector's. In Static mode the fragment is
 // rewritten into absolute coordinates (see absolutize).
-func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
+func renderElement(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText, background string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
 	if mode != Static {
-		renderElementLocal(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, missing, seenMissing, mode)
+		renderElementLocal(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, missing, seenMissing, mode)
 		return
 	}
 	var buf bytes.Buffer
-	renderElementLocal(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, missing, seenMissing, mode)
+	renderElementLocal(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, missing, seenMissing, mode)
 	writeAbsolute(w, buf.String())
 }
 
@@ -394,7 +413,7 @@ func writeAbsolute(w io.Writer, frag string) {
 
 // renderElementLocal draws e in its own local frame, placed by
 // transform="translate(x,y) rotate(orient)" (see renderElement).
-func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
+func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText, background string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
 
 	var color string
 	if e.Class == ClassLamp {
@@ -496,6 +515,16 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		writePackageSubstation(w, e, color, mode)
 		return
 	}
+	if e.Class == ClassPowerPlant {
+		// Two variants (NType) with their own hatching.
+		writePowerPlant(w, e, color, mode)
+		return
+	}
+	if e.Class == ClassSubstation {
+		// One sector path per voltage, a count Sectors sets per instance.
+		writeSubstation(w, e, voltageColor, color, mode)
+		return
+	}
 	if e.Class == ClassEnclosedSubstation {
 		// Same reasoning as ClassPackageSubstation just above — real
 		// equipment with a genuine voltage-driven color, but its own
@@ -546,6 +575,17 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 	if e.Class == ClassSmallWindow {
 		// Rectangle's same bare <rect> (see writeSmallWindow).
 		writeSmallWindow(w, e, mode)
+		return
+	}
+	if e.Class == ClassPicture {
+		// Rectangle's same two-corner frame, holding an image (see
+		// writePicture).
+		writePicture(w, e, mode)
+		return
+	}
+	if e.Class == ClassAutomationDevice {
+		// Button's box and label, picked by State (see writeAutomationDevice).
+		writeAutomationDevice(w, e, mode)
 		return
 	}
 	if e.Class == ClassWindowIcon {
@@ -654,6 +694,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		"{junctionRadius}", fmtNum(junctionRadius),
 		"{junctionFill}", esc(junctionFill),
 		"{fpiText}", esc(fpiText),
+		"{background}", esc(background),
 	).Replace(body)
 	// data-editor-kind (this editor's own addition, not part of the
 	// xsde2svg format) is what the frontend hit-tests against — it no
@@ -755,61 +796,105 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaul
 	stateColors := newStateColorSet(stateColorLegend)
 	fpiColors := newStateColorSet(fpiStateColorLegend)
 
-	background := defaultBackground
-	if d.Editor != nil && d.Editor.Background != "" {
-		background = d.Editor.Background
-	}
+	background := diagramBackground(d)
 
 	fmt.Fprintf(w, "<?xml version=\"1.0\"?>\n<svg width=\"%s\" height=\"%s\" style=\"stroke-width: 0px; background-color: %s;\" xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">\n",
 		fmtNum(d.Width), fmtNum(d.Height), esc(background))
 
+	io.WriteString(w, writeLayerMetadata(d))
+
 	var missing []string
 	seenMissing := map[string]bool{}
 
-	elevated := map[int][]Element{}
-
-	var lastShape string
+	// Items are drawn layer group by layer group, lowest Layer.Z first (see
+	// Layer.Z); an unknown layer counts as Z 0. Within a group the order is
+	// fixed: devices, wires, elementZOrder's indicator tiers, text labels,
+	// digital devices.
+	layerZ := map[int]int{}
+	for _, l := range d.Layers {
+		layerZ[l.ID] = l.Z
+	}
+	zSet := map[int]bool{}
 	for _, e := range d.Elements {
-		if z := elementZOrder[e.Class]; z > 0 {
-			elevated[z] = append(elevated[z], e)
-			continue
-		}
-		typeComment(w, shapeName, e.Shape, e.Shape, &lastShape)
-		renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, mode)
+		zSet[layerZ[e.Layer]] = true
 	}
-
-	var lastConnKind string
 	for _, c := range d.Connectors {
-		code := connectorTypeCode[c.Kind]
-		typeComment(w, connectorKindName, string(c.Kind), code, &lastConnKind)
-		renderConnector(w, c, voltageColor, mode)
-	}
-
-	tiers := make([]int, 0, len(elevated))
-	for z := range elevated {
-		tiers = append(tiers, z)
-	}
-	sort.Ints(tiers)
-	for _, z := range tiers {
-		var lastTierShape string
-		for _, e := range elevated[z] {
-			typeComment(w, shapeName, e.Shape, e.Shape, &lastTierShape)
-			renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, mode)
-		}
-	}
-
-	if len(d.Labels) > 0 {
-		fmt.Fprintf(w, "<!-- Text:%s -->\n", labelTypeCode)
+		zSet[layerZ[c.Layer]] = true
 	}
 	for _, l := range d.Labels {
-		writeLabel(w, l, mode)
-	}
-
-	if len(d.DigitalDevices) > 0 {
-		fmt.Fprintf(w, "<!-- Digital device2:%s -->\n", digitalDeviceTypeCode)
+		zSet[layerZ[l.Layer]] = true
 	}
 	for _, dd := range d.DigitalDevices {
-		writeDigitalDevice(w, dd, mode)
+		zSet[layerZ[dd.Layer]] = true
+	}
+	groups := make([]int, 0, len(zSet))
+	for z := range zSet {
+		groups = append(groups, z)
+	}
+	sort.Ints(groups)
+
+	for _, group := range groups {
+		elevated := map[int][]Element{}
+
+		var lastShape string
+		for _, e := range d.Elements {
+			if layerZ[e.Layer] != group {
+				continue
+			}
+			if z := elementZOrder[e.Class]; z > 0 {
+				elevated[z] = append(elevated[z], e)
+				continue
+			}
+			typeComment(w, shapeName, e.Shape, e.Shape, &lastShape)
+			renderElementLayered(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, &missing, seenMissing, mode)
+		}
+
+		var lastConnKind string
+		for _, c := range d.Connectors {
+			if layerZ[c.Layer] != group {
+				continue
+			}
+			code := connectorTypeCode[c.Kind]
+			typeComment(w, connectorKindName, string(c.Kind), code, &lastConnKind)
+			renderConnectorLayered(w, c, voltageColor, mode)
+		}
+
+		tiers := make([]int, 0, len(elevated))
+		for z := range elevated {
+			tiers = append(tiers, z)
+		}
+		sort.Ints(tiers)
+		for _, z := range tiers {
+			var lastTierShape string
+			for _, e := range elevated[z] {
+				typeComment(w, shapeName, e.Shape, e.Shape, &lastTierShape)
+				renderElementLayered(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, &missing, seenMissing, mode)
+			}
+		}
+
+		wroteLabelComment := false
+		for _, l := range d.Labels {
+			if layerZ[l.Layer] != group {
+				continue
+			}
+			if !wroteLabelComment {
+				fmt.Fprintf(w, "<!-- Text:%s -->\n", labelTypeCode)
+				wroteLabelComment = true
+			}
+			writeLabelLayered(w, l, mode)
+		}
+
+		wroteDDComment := false
+		for _, dd := range d.DigitalDevices {
+			if layerZ[dd.Layer] != group {
+				continue
+			}
+			if !wroteDDComment {
+				fmt.Fprintf(w, "<!-- Digital device2:%s -->\n", digitalDeviceTypeCode)
+				wroteDDComment = true
+			}
+			writeDigitalDeviceLayered(w, dd, mode)
+		}
 	}
 
 	fmt.Fprint(w, "</svg>\n")
@@ -874,7 +959,7 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 			continue
 		}
 		var buf bytes.Buffer
-		renderElement(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, e, &missing, seenMissing, mode)
+		renderElementLayered(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, diagramBackground(d), e, &missing, seenMissing, mode)
 		fragments[e.ID] = buf.String()
 	}
 
@@ -883,7 +968,7 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 			continue
 		}
 		var buf bytes.Buffer
-		renderConnector(&buf, c, voltageColor, mode)
+		renderConnectorLayered(&buf, c, voltageColor, mode)
 		fragments[c.ID] = buf.String()
 	}
 
@@ -892,7 +977,7 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 			continue
 		}
 		var buf bytes.Buffer
-		writeLabel(&buf, l, mode)
+		writeLabelLayered(&buf, l, mode)
 		fragments[l.ID] = buf.String()
 	}
 
@@ -901,7 +986,7 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 			continue
 		}
 		var buf bytes.Buffer
-		writeDigitalDevice(&buf, dd, mode)
+		writeDigitalDeviceLayered(&buf, dd, mode)
 		fragments[dd.ID] = buf.String()
 	}
 
@@ -909,6 +994,51 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 		return fragments, fmt.Errorf("slddoc: symbol library missing shape(s): %s", strings.Join(missing, ", "))
 	}
 	return fragments, nil
+}
+
+// The *Layered writers are Render/RenderFragments' entry points for one
+// item: the item's own markup with data-layer added to its root node
+// (withLayerAttr), in both modes, so a viewer can toggle layers on the
+// exported SVG and the canvas can hide them while editing.
+
+func renderElementLayered(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText, background string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
+	if e.Layer == BaseLayer {
+		renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, missing, seenMissing, mode)
+		return
+	}
+	var buf bytes.Buffer
+	renderElement(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, missing, seenMissing, mode)
+	io.WriteString(w, withLayerAttr(buf.String(), e.Layer))
+}
+
+func renderConnectorLayered(w io.Writer, c Connector, voltageColor map[int]string, mode RenderMode) {
+	if c.Layer == BaseLayer {
+		renderConnector(w, c, voltageColor, mode)
+		return
+	}
+	var buf bytes.Buffer
+	renderConnector(&buf, c, voltageColor, mode)
+	io.WriteString(w, withLayerAttr(buf.String(), c.Layer))
+}
+
+func writeLabelLayered(w io.Writer, l Label, mode RenderMode) {
+	if l.Layer == BaseLayer {
+		writeLabel(w, l, mode)
+		return
+	}
+	var buf bytes.Buffer
+	writeLabel(&buf, l, mode)
+	io.WriteString(w, withLayerAttr(buf.String(), l.Layer))
+}
+
+func writeDigitalDeviceLayered(w io.Writer, dd DigitalDevice, mode RenderMode) {
+	if dd.Layer == BaseLayer {
+		writeDigitalDevice(w, dd, mode)
+		return
+	}
+	var buf bytes.Buffer
+	writeDigitalDevice(&buf, dd, mode)
+	io.WriteString(w, withLayerAttr(buf.String(), dd.Layer))
 }
 
 // renderConnector writes one Connector's own rendered markup — the
@@ -1039,6 +1169,42 @@ func writeRectangle(w io.Writer, e Element, mode RenderMode) {
 // border color.
 func writeSmallWindow(w io.Writer, e Element, mode RenderMode) {
 	writeRect(w, e, mode, "319", "gray", 1)
+}
+
+// writePicture draws a Picture (shape 11). Static is real xsde2svg's own bare
+// <image x y width height xlink:href> (element_11_12.go), plus this
+// editor's id/data-name/data-type, and nothing at all when there is no
+// image, as in the source. Interactive wraps the same <image> in a <g> the
+// canvas can select and drag, but leaves its href out: the canvas strips
+// every Href from the diagram it posts (so a large backdrop isn't resent on
+// every edit) and fills the attribute in itself from its own state. A
+// Picture without an image (Href empty) gets a dashed placeholder frame
+// there instead, so it can still be seen and picked. Fewer than 2 Points
+// draws nothing, as for writeRect.
+func writePicture(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	x, y := math.Min(p0.X, p1.X), math.Min(p0.Y, p1.Y)
+	width, height := math.Abs(p1.X-p0.X), math.Abs(p1.Y-p0.Y)
+	dims := fmt.Sprintf(`x="%s" y="%s" width="%s" height="%s"`, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height))
+
+	if mode != Interactive {
+		if e.Href == "" {
+			return
+		}
+		fmt.Fprintf(w, "<image id=\"%d\" %s xlink:href=\"%s\" data-name=\"%s\" data-type=\"11\" />\n",
+			e.ID, dims, esc(e.Href), esc(e.Name))
+		return
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-type=\"11\" data-editor-kind=\"element\">\n", e.ID, esc(e.Name))
+	if e.Href == "" {
+		fmt.Fprintf(w, "<rect %s style=\"fill:none;stroke:gray;stroke-width:1;stroke-dasharray:4 2\" />\n", dims)
+	} else {
+		fmt.Fprintf(w, "<image %s />\n", dims)
+	}
+	io.WriteString(w, "</g>\n")
 }
 
 // writeRect is writeRectangle/writeSmallWindow's shared writer: code is the
@@ -1307,6 +1473,61 @@ type textBoxStyle struct {
 	stroke      string
 	textColor   string
 	strokeWidth float64
+}
+
+// automationDeviceFontSize is an Automation device's (103) default label
+// size, the source's Scale(scaleChosed, 12).
+const automationDeviceFontSize = 12
+
+// writeAutomationDevice draws an Automation device (shape 103) the way
+// internal/modus/element_103.go does: Button's <g><rect/><text/></g> with a
+// 1px border (Stroke, the source's typ103_default black when unset) and the
+// label 2 units below the center, its fill, text and text color picked by
+// State: On (1) FillOn/PropertyTextOn/TextColorOn, otherwise
+// FillOff/PropertyText/TextColor. The source writes no state; this editor
+// adds data-state (when set) so an exported tile reads back in its state.
+func writeAutomationDevice(w io.Writer, e Element, mode RenderMode) {
+	if len(e.Points) < 2 {
+		return
+	}
+	p0, p1 := e.Points[0], e.Points[1]
+	x, y := math.Min(p0.X, p1.X), math.Min(p0.Y, p1.Y)
+	width, height := math.Abs(p1.X-p0.X), math.Abs(p1.Y-p0.Y)
+	on := e.State != nil && *e.State == 1
+	fill, text, textColor := e.FillOff, e.PropertyText, e.TextColor
+	if on {
+		fill, text, textColor = e.FillOn, e.PropertyTextOn, e.TextColorOn
+	}
+	if fill == "" {
+		fill = "none"
+	}
+	if textColor == "" {
+		textColor = "black"
+	}
+	stroke := e.Stroke
+	if stroke == "" {
+		stroke = "black"
+	}
+	size := e.TextSize
+	if size <= 0 {
+		size = automationDeviceFontSize
+	}
+	weight := ""
+	if e.Bold {
+		weight = ";font-weight: bold"
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"103\" data-name=\"%s\" data-voltage=\"%s\"%s%s>\n", e.ID, esc(e.Name), esc(fill), stateAttr(e.State), editorAttr)
+	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:1\" />\n",
+		fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke))
+	if text != "" {
+		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%spx;font-family:Arial%s", textColor, fmtNum(size), weight)
+		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", fmtNum(x+width/2), fmtNum(y+height/2+2), esc(style), esc(text))
+	}
+	fmt.Fprint(w, "</g>\n")
 }
 
 // writeTextBox is writeButton/writeWindowIcon's shared writer.
@@ -1890,6 +2111,136 @@ func writePackageSubstation(w io.Writer, e Element, color string, mode RenderMod
 		fmt.Fprintf(w, "<line x1=\"0\" y1=\"-18\" x2=\"0\" y2=\"-22\" style=\"stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
 	}
 	writeSubstationPropertyText(w, e)
+	fmt.Fprint(w, "</g>\n")
+}
+
+// substationRadius is a Substation's circle radius: Element.Radius, or the
+// source's 20 when unset.
+func substationRadius(e Element) float64 {
+	if e.Radius > 0 {
+		return e.Radius
+	}
+	return 20
+}
+
+// writeSubstation draws a Substation (shape 360) as element_360.go does, in
+// its local frame around the center: one filled path per sector (Sectors,
+// 1–4; none counts as one), outlined in color. 1 is a whole circle, 2 the
+// right and left halves, 3 upper-right, bottom and upper-left, 4 the
+// quadrants clockwise from upper-right, the 3-sector split points scaled
+// from the source's 19/27/7 at radius 20. A sector without a voltage is
+// filled with color. The source's xMirror reverses the sector colors, which
+// is exactly the geometric flip Mirror applies.
+func writeSubstation(w io.Writer, e Element, voltageColor map[int]string, color string, mode RenderMode) {
+	r := substationRadius(e)
+	n := len(e.Sectors)
+	if n < 1 {
+		n = 1
+	}
+	if n > 4 {
+		n = 4
+	}
+	fills := make([]string, n)
+	for i := range fills {
+		fills[i] = color
+		if i < len(e.Sectors) {
+			if c := voltageColor[e.Sectors[i].Voltage]; c != "" {
+				fills[i] = c
+			}
+		}
+	}
+	f := fmtNum
+	l31, l32, l33 := r*19/20, r*27/20, r*7/20
+	var paths []string
+	switch n {
+	case 1:
+		paths = []string{fmt.Sprintf("M 0 %s a %s %s 0 1 1 0 %s a %s %s 0 0 1 0 %s", f(r), f(r), f(r), f(-2*r), f(r), f(r), f(2*r))}
+	case 2:
+		paths = []string{
+			fmt.Sprintf("M 0 0 v %s a %s %s 0 0 0 0 %s z", f(r), f(r), f(r), f(-2*r)),
+			fmt.Sprintf("M 0 0 v %s a %s %s 0 0 0 0 %s z", f(-r), f(r), f(r), f(2*r)),
+		}
+	case 3:
+		paths = []string{
+			fmt.Sprintf("M 0 0 v %s a %s %s 0 0 1 %s %s z", f(-r), f(r), f(r), f(l31), f(l32)),
+			fmt.Sprintf("M 0 0 l %s %s a %s %s 0 0 1 %s 0 z", f(l31), f(l33), f(r), f(r), f(-2*l31)),
+			fmt.Sprintf("M 0 0 l %s %s a %s %s 0 0 1 %s %s z", f(-l31), f(l33), f(r), f(r), f(l31), f(-l32)),
+		}
+	case 4:
+		paths = []string{
+			fmt.Sprintf("M 0 0 v %s a %s %s 0 0 1 %s %s z", f(-r), f(r), f(r), f(r), f(r)),
+			fmt.Sprintf("M 0 0 v %s a %s %s 0 0 0 %s %s z", f(r), f(r), f(r), f(r), f(-r)),
+			fmt.Sprintf("M 0 0 h %s a %s %s 0 0 0 %s %s z", f(-r), f(r), f(r), f(r), f(r)),
+			fmt.Sprintf("M 0 0 h %s a %s %s 0 0 1 %s %s z", f(-r), f(r), f(r), f(r), f(-r)),
+		}
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	transform := fmt.Sprintf("translate(%s,%s) rotate(%d)%s", fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"360\"%s transform=\"%s\">\n",
+		e.ID, esc(e.Name), esc(color), editorAttr, transform)
+	for i, d := range paths {
+		fmt.Fprintf(w, "<path d=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:1\" />\n", d, esc(fills[i]), esc(color))
+	}
+	fmt.Fprint(w, "</g>\n")
+}
+
+// powerPlantHatch is the source's hatching pitch: its <pattern> tiles are
+// 10 units, whatever the export scale.
+const powerPlantHatch = 10
+
+// writePowerPlant draws a PowerPlant (shape 38) as element_38.go does, in
+// its local frame around the center with half side L (Radius, default 20):
+// first the hatched part's outline, then the other part's (exactly the
+// source's two paths, so Extract reads both kinds back), then the hatching.
+// Thermal (NType 0): the lower half hatched with "/" lines, the upper half
+// outlined. Hydro (NType 1): the upper-left triangle hatched with
+// horizontal lines, the lower-right one an open outline; the source's
+// xMirror (the other diagonal) is exactly the flip Mirror applies. The
+// source hatches through a shared <pattern id="diagonal|horizontal">
+// written again for every instance, so in a browser every hatch takes the
+// first instance's color; here each instance draws its own lines, in its
+// own color, at the same 10-unit pitch.
+func writePowerPlant(w io.Writer, e Element, color string, mode RenderMode) {
+	l := substationRadius(e)
+	f := fmtNum
+	var hatched, other string
+	var hatch strings.Builder
+	if e.NType == 1 {
+		hatched = fmt.Sprintf("M %s %s h %s v %s z", f(l), f(-l), f(-2*l), f(2*l))
+		other = fmt.Sprintf("M %s %s h %s v %s", f(-l), f(l), f(2*l), f(-2*l))
+		// Horizontal lines across the triangle x >= -l, y >= -l, x+y <= 0.
+		for y := -l + powerPlantHatch; y < l; y += powerPlantHatch {
+			fmt.Fprintf(&hatch, "M %s %s H %s ", f(-l), f(y), f(-y))
+		}
+	} else {
+		hatched = fmt.Sprintf("M %s 0 v %s h %s v %s z", f(-l), f(l), f(2*l), f(-l))
+		other = fmt.Sprintf("M %s 0 v %s h %s v %s z", f(-l), f(-l), f(2*l), f(l))
+		// "/" lines x+y = c across the lower half x in [-l,l], y in [0,l].
+		x0, x1, y0, y1 := -l, l, 0.0, l
+		for c := math.Ceil((x0+y0)/powerPlantHatch) * powerPlantHatch; c < x1+y1; c += powerPlantHatch {
+			lo := math.Max(y0, c-x1)
+			hi := math.Min(y1, c-x0)
+			if hi-lo > 1e-9 {
+				fmt.Fprintf(&hatch, "M %s %s L %s %s ", f(c-lo), f(lo), f(c-hi), f(hi))
+			}
+		}
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"element\""
+	}
+	transform := fmt.Sprintf("translate(%s,%s) rotate(%d)%s", fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"38\"%s transform=\"%s\">\n",
+		e.ID, esc(e.Name), esc(color), editorAttr, transform)
+	style := fmt.Sprintf("fill:none;stroke:%s;stroke-width:1", esc(color))
+	fmt.Fprintf(w, "<path d=\"%s\" style=\"%s\" />\n", hatched, style)
+	fmt.Fprintf(w, "<path d=\"%s\" style=\"%s\" />\n", other, style)
+	if hatch.Len() > 0 {
+		fmt.Fprintf(w, "<path d=\"%s\" style=\"%s\" />\n", strings.TrimSpace(hatch.String()), style)
+	}
 	fmt.Fprint(w, "</g>\n")
 }
 

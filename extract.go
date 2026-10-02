@@ -34,7 +34,7 @@ var elementDataTypes = map[string]bool{
 	"397": true, "29": true, "76": true, "154": true, "168": true,
 	"172": true, "173": true, "14": true, "55": true, "52": true, "51": true,
 	"164": true, "3": true, "2": true, "4": true, "56": true, "398": true,
-	"385": true, "386": true, "32": true, "146": true, "113": true, "302": true, "310": true, "319": true, "335": true, "292": true, "1": true, "16": true, "9": true, "26": true,
+	"385": true, "386": true, "32": true, "146": true, "113": true, "302": true, "310": true, "319": true, "11": true, "335": true, "292": true, "1": true, "16": true, "9": true, "26": true,
 	"320001": true,
 	"320002": true,
 	"10":     true,
@@ -48,6 +48,14 @@ var elementDataTypes = map[string]bool{
 	"166": true,
 	"174": true,
 	"175": true,
+	"39":  true,
+	"360": true,
+	"389": true,
+	"38":  true,
+	"19":  true,
+	"103": true,
+	"50":  true,
+	"44":  true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -82,25 +90,18 @@ var twoPortShapes = map[string]Class{
 // anything in this package.
 var unrecognizedShapeName = map[string]string{
 	"10":   "Connector",
-	"11":   "Backdrop/image file",
-	"19":   "Metal anchor/angle pole",
-	"38":   "Thermal power plant",
 	"39":   "Synchronous motor",
 	"44":   "Knife switch",
-	"50":   "Withdrawable sectionalizer",
 	"60":   "Zone division",
 	"71":   "RZD connection/disconnector",
 	"83":   "Connector arrow",
 	"102":  "Panel/board",
-	"103":  "Automation device",
 	"130":  "Device",
 	"146":  "Power pole",
 	"302":  "Window icon",
 	"310":  "Container",
 	"319":  "Small window",
 	"320":  "Custom element",
-	"360":  "Substation",
-	"389":  "Blocking filter",
 	"391":  "RTF text",
 	"3206": "RZD connection/disconnector (arc-extinguishing contacts)",
 }
@@ -273,6 +274,9 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	// own (addElement is still called with "" for it, same as before), so
 	// this needs its own side-channel rather than reusing elementVoltage.
 	windingColors := map[int][]string{}
+	// sectorColors is the same side channel for a Substation's (360) own
+	// sector fills, resolved into each SubstationSector.Voltage.
+	sectorColors := map[int][]string{}
 
 	addElement := func(el Element, ports []Point, voltage string) {
 		colors = append(colors, voltage)
@@ -301,6 +305,18 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			// node is <defs>, a style helper, or similar.
 			if n.Tag == "text" {
 				labelNodes = append(labelNodes, n)
+			}
+			// A bare top-level <image> is real xsde2svg's Backdrop/Image
+			// file (shapes 11 and 12, element_11_12.go), written with no
+			// id or data-type: each tag is one whole instance.
+			if n.Tag == "image" {
+				if el, err := parsePicture(n); err == nil {
+					el.ID = nextSynthID
+					nextSynthID++
+					addElement(el, nil, "")
+				} else {
+					report.Failed = append(report.Failed, "image")
+				}
 			}
 			continue
 		}
@@ -355,6 +371,19 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, nil, "")
 
+		case "11":
+			el, err := parsePicture(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			if el.ID == 0 {
+				el.ID = nextSynthID
+				nextSynthID++
+			}
+			addElement(el, nil, "")
+
 		case "319":
 			el, err := parseSmallWindow(n)
 			if err != nil {
@@ -404,6 +433,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 				next = root.Children[i+1]
 			}
 			el, err := parseContainer(n, next)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, "")
+
+		case "103":
+			el, err := parseAutomationDevice(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
@@ -604,6 +642,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, ports, voltage)
 
+		case "50":
+			el, ports, voltage, err := parseWithdrawableSectionalizer(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
 		case "399":
 			el, ports, voltage, err := parsePowerCircuitBreaker(n)
 			if err != nil {
@@ -694,8 +741,17 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, ports, voltage)
 
+		case "44":
+			el, ports, voltage, err := parseKnifeSwitch(n, ClassKnifeSwitch, "44")
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
 		case "175":
-			el, ports, voltage, err := parseKnifeSwitch3(n)
+			el, ports, voltage, err := parseKnifeSwitch(n, ClassKnifeSwitch3, "175")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
@@ -705,6 +761,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "174":
 			el, ports, voltage, err := parseOnePortDevice(n, ClassSynchronousCompensator, "174")
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "39":
+			el, ports, voltage, err := parseOnePortDevice(n, ClassSynchronousMotor, "39")
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
@@ -775,6 +840,44 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			addElement(el, ports, voltage)
 
+		case "19":
+			el, ports, voltage, err := parseAnchorPole(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "38":
+			el, ports, voltage, err := parsePowerPlant(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "389":
+			el, ports, voltage, err := parseBlockingFilter(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "360":
+			el, ports, voltage, sColors, err := parseSubstation(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			sectorColors[len(d.Elements)] = sColors
+			addElement(el, ports, voltage)
+			colors = append(colors, sColors...)
+
 		case "47":
 			el, ports, wColors, err := parsePowerTransformer(n)
 			if err != nil {
@@ -792,6 +895,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	if d.Layers == nil {
 		d.Layers, _ = parseLayers("")
 	}
+	addMissingLayers(d)
 
 	classes, colorToID := buildVoltageClasses(colors, voltageHints)
 	d.VoltageClasses = classes
@@ -800,6 +904,13 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	}
 	for i := range d.Connectors {
 		d.Connectors[i].Voltage = colorToID[normalizeColor(connectorVoltage[i])]
+	}
+	for idx, sColors := range sectorColors {
+		for i, c := range sColors {
+			if i < len(d.Elements[idx].Sectors) {
+				d.Elements[idx].Sectors[i].Voltage = colorToID[normalizeColor(c)]
+			}
+		}
 	}
 	for idx, wColors := range windingColors {
 		for i, c := range wColors {

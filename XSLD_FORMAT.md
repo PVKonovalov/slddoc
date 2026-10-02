@@ -102,6 +102,7 @@ SVG root's `background-color` style, when that style is present.
 | `showGrid` | bool | Draw the grid overlay |
 | `background` | color | Canvas background color |
 | `defaultVoltage` | id → `class` | Voltage class newly placed objects start with (0 = none) |
+| `activeLayer` | id → `layer` | Layer newly placed objects go on (0 = the base layer) |
 | `showNodes` | bool | Draw a debug marker at every `<node>` |
 
 ## 4. Sections
@@ -114,9 +115,19 @@ Visibility layers — a viewer can toggle everything on one layer at once.
 |---|---|---|---|
 | `id` | int | yes | Layer id. `0` is the base layer |
 | `name` | string | yes | Display name |
+| `z` | int | no | Drawing order (default 0). Render draws all items of the lowest `z` first, so a higher layer covers a lower one; layers with the same `z` are drawn together, in the usual order (devices, wires, indicators, labels, digital devices) |
 
 Every element, connector, label and digital device carries exactly one `layer`
 reference (default `0`).
+
+In the rendered SVG (as in xsde2svg output) every item off the base layer
+carries `data-layer="<id>"` on its root node, and a `<metadata>` block right
+after `<svg>` lists the non-base layers:
+`{"layers":[{"id":"20","label":"Disconnectors","z":2}],"base":{"label":"Base","z":1}}`.
+`z` and `base` (the base layer's name and `z`, written only when not the
+defaults) are this package's additions, ignored by viewers. `Extract` reads
+them back, and gives any layer id an item uses without a `<metadata>` entry a
+layer named "Layer N".
 
 ### 4.2 `<voltageClasses>` / `<class>`
 
@@ -282,7 +293,7 @@ classes; elsewhere they are ignored.
 | `state` | FaultPassageIndicator | `0` not triggered, `1` triggered |
 | `state` | Lamp | `0` off, `1` on |
 | `state` | PowerflowIndicator | `0`/absent draws `→`, any other value draws `←` |
-| `position` | withdrawable Breaker (43), withdrawable Disconnector (49) | `0` Service, `1` Normal, `2` Test — the racking position, independent of `state` |
+| `position` | withdrawable Breaker (43), withdrawable Disconnector (49), withdrawable Sectionalizer (50) | `0` Service, `1` Normal, `2` Test — the racking position, independent of `state` |
 
 The state → color legend (`0:red, 1:lawngreen, 2:yellow` for switching devices)
 is a renderer setting, not stored in the diagram.
@@ -298,7 +309,7 @@ instead of a symbol template around `x`/`y`:
 | Line (1), Road (335) | 2+ vertices, polyline |
 | Polygon (16), Container (310) | 3+ vertices, closed polygon |
 | Arc (9) | exactly 2: start, end (see `rx`/`ry`/`largeArc`/`sweep`) |
-| Rectangle (3), SmallWindow (319), Circle (4), Button (113), WindowIcon (302), Table (312) | 2 opposite corners of the bounding box, any order |
+| Rectangle (3), SmallWindow (319), Picture (11), Circle (4), Button (113), WindowIcon (302), Table (312) | 2 opposite corners of the bounding box, any order |
 | Arrow (2) | start, end — order matters, the arrowhead is at the second point |
 
 ### 6.3 Decorative styling
@@ -382,9 +393,10 @@ extendable per site); this is the default set.
 | Breaker | 41, 43 (withdrawable) | 2 | `state`; 43 also `position` |
 | Disconnector | 162, 49 (withdrawable) | 2 | `state`; 49 also `position` |
 | LoadBreakSwitch | 42 | 2 | `state` |
-| Sectionalizer | 164 | 2 | `state` (0/1) |
+| Sectionalizer | 164, 50 (withdrawable) | 2 | `state` (0/1); 50 also `position`, and `mirror` moves the blade's square |
 | ShortCircuiterNoGround | 163 | 2 | `state` (0/1) |
 | DisconnectorFuse | 166 | 2 | `state` (0/1) |
+| KnifeSwitch | 44 | 3 | pivot, left contact, right contact; `state`: unset/0 left, 2 right |
 | KnifeSwitch3 | 175 | 3 | `state`: 1/unset middle, 0 left, 2 right |
 | PowerCircuitBreaker | 399 | 2 | `state` (0/1) |
 | GroundSwitch | 54 | 1 | `state` |
@@ -401,12 +413,15 @@ extendable per site); this is the default set.
 | SurgeArrester | 35, 29, 168 (grounded) | 1–2 | |
 | Capacitor / CapacitorBank | 388 / 172 | 2 / 1 | |
 | Resistor | 156 | 2 | |
+| BlockingFilter | 389 | 2 | line trap; terminals at the ends (±10, 0) |
 | Thyristor | 157 | 3 | anode, cathode, gate |
 | Generator | 173 | 1 | |
 | SynchronousCompensator | 174 | 1 | |
+| SynchronousMotor | 39 | 1 | |
 | Ground | 31 | 1 | |
 | CableConnector / CableJoint | 56 / 32 | 2 | |
 | PowerPole | 146 | 2 | a pole on an overhead line; terminals at the lead tips (0,±10) |
+| AnchorPole | 19 | 1 (center) | metal anchor/angle pole of a pole-by-pole diagram; `mirror` points the apex left |
 | JunctionPoint | 7 | 1 | `radius`, `fill` |
 | NonIntersection (wire jump) | 14 | 2 | |
 | BusBarSection | 24 | 0+ | `<geometry>`; see §5 |
@@ -423,9 +438,13 @@ extendable per site); this is the default set.
 | Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
 | Rectangle / Circle / Arrow | 3 / 4 / 2 | — | decorative; `<geometry>` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText` |
+| AutomationDevice | 103 | — | decorative two-state tile; `<geometry>`, `state` (1 On, else Off), `fillOff`/`fillOn`, `propertyText`/`propertyTextOn`, `textColor`/`textColorOn`, `stroke` (border, default black), `textSize` (default 12), `bold` |
 | WindowIcon | 302 | — | decorative; `<geometry>`, `propertyText`; fixed 1px border |
 | SmallWindow | 319 | — | decorative; `<geometry>`, `fill`, `stroke` (default gray); fixed 1px border |
+| Picture | 11 | — | decorative; `<geometry>` frame, `<image>` child holding the picture as a data URI (`data:image/...;base64,...`); shape 12 imports as 11 |
 | PostPole | 292 | — | decorative; `radius`, `square` |
+| PowerPlant | 38 | 1 (center) | network-map pictogram; `nType` 0 thermal (lower half hatched), 1 hydro (a diagonal triangle hatched; `mirror` the other diagonal); `radius` half side (0 = 20) |
+| Substation | 360 | 1 (center) | network-map pictogram; `radius` (0 = 20), `<sectors><sector voltage=".."/>…</sectors>` 1–4 sector fills (voltage class ids), outline in the element's `voltage` |
 | Table / Table2 | 312 / 313 | — | decorative; §6.2, §6.5 |
 
 The "Ports" column is the usual count (measured over the existing corpus); the format itself does not enforce it.

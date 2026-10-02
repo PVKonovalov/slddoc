@@ -228,18 +228,121 @@ func parsePowerCircuitBreaker(n *rawNode) (Element, []Point, string, error) {
 		len(blade[0]) < 2 || len(square[0]) < 2 {
 		return el, ports, voltage, nil
 	}
-	b0, b1 := blade[0][0], blade[0][1]
-	q0, q1 := square[0][0], square[0][1]
+	el.Mirror = bladeSquareMirrored(blade[0], square[0])
+	return el, ports, voltage, nil
+}
+
+// bladeSquareMirrored reads xMirror back from the blade-and-square switch
+// Power circuit breaker (399) and Withdrawable sectionalizer (50) share,
+// both in their own unrotated coordinates: true for the xMirror==0 layout,
+// which this editor draws as Mirror. blade and square need 2+ points each.
+func bladeSquareMirrored(blade, square []Point) bool {
+	b0, b1 := blade[0], blade[1]
+	q0, q1 := square[0], square[1]
 	if b0.X == b1.X {
 		// Closed (vertical blade): the xMirror==1 square starts drawing
 		// rightward from the blade, the xMirror==0 one leftward.
-		el.Mirror = q1.X < q0.X
-	} else {
-		// Open (horizontal blade): the xMirror==1 square sits right of the
-		// blade's own center, the xMirror==0 one left of it.
-		el.Mirror = q0.X < (b0.X+b1.X)/2
+		return q1.X < q0.X
 	}
-	return el, ports, voltage, nil
+	// Open (horizontal blade): the xMirror==1 square sits right of the
+	// blade's own center, the xMirror==0 one left of it.
+	return q0.X < (b0.X+b1.X)/2
+}
+
+// parseWithdrawableSectionalizer handles shape 50 (Withdrawable sectionalizer,
+// see base.xml): shape 49's withdrawable frame around 399's blade and
+// square. The blade path comes first and carries data-state, data-voltage
+// and data-name; the square follows it. The two outer chevron tips (on the
+// last path, the outer chevrons the source draws twice) are the ports, top
+// first in the unrotated drawing, and the anchor is their midpoint, which
+// holds at any export scale and wherever the movable body has slid to
+// (Position, read from this editor's data-trolley). An optional rotate()
+// (on an inner <g> in the source) turns both about its center, which is
+// that same anchor.
+func parseWithdrawableSectionalizer(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	// The outer chevrons are the last path with several subpaths (each
+	// relative move starts one); their tips are its top-most and
+	// bottom-most subpath starts, in the unrotated drawing.
+	var tips []Point
+	for i := len(paths) - 1; i >= 0 && tips == nil; i-- {
+		subs, err := parseSubpaths(paths[i].attr("d"))
+		if err != nil || len(subs) < 2 {
+			continue
+		}
+		var top, bottom *Point
+		for _, sp := range subs {
+			if len(sp) == 0 {
+				continue
+			}
+			p := sp[0]
+			if top == nil || p.Y < top.Y {
+				top = &p
+			}
+			if bottom == nil || p.Y > bottom.Y {
+				bottom = &p
+			}
+		}
+		if top != nil && bottom != nil && top.Y < bottom.Y {
+			tips = []Point{*top, *bottom}
+		}
+	}
+	if tips == nil {
+		return Element{}, nil, "", fmt.Errorf("slddoc: withdrawable sectionalizer %s: no outer chevrons", n.attr("id"))
+	}
+	anchor := Point{X: (tips[0].X + tips[1].X) / 2, Y: (tips[0].Y + tips[1].Y) / 2}
+	ports := []Point{tips[0], tips[1]}
+	var orient int
+	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		anchor = rotate(anchor, center, float64(angle))
+		ports = []Point{rotate(tips[0], center, float64(angle)), rotate(tips[1], center, float64(angle))}
+		orient = normalizeOrient(angle)
+	}
+
+	var mirror bool
+	if len(paths) >= 2 {
+		blade, err1 := parseSubpaths(paths[0].attr("d"))
+		square, err2 := parseSubpaths(paths[1].attr("d"))
+		if err1 == nil && err2 == nil && len(blade) > 0 && len(square) > 0 && len(blade[0]) >= 2 && len(square[0]) >= 2 {
+			mirror = bladeSquareMirrored(blade[0], square[0])
+		}
+	}
+
+	voltage := firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage"))
+	return Element{
+		ID:       id,
+		Class:    ClassSectionalizer,
+		Shape:    "50",
+		Name:     firstNonEmpty(n.attr("data-name"), n.firstAttrDescendant("data-name")),
+		Layer:    resolveLayer(n.attr("data-layer")),
+		X:        anchor.X,
+		Y:        anchor.Y,
+		Orient:   orient,
+		Mirror:   mirror,
+		State:    parseState(n),
+		Position: parsePosition(n),
+		Ports:    []Port{{Name: "1"}, {Name: "2"}},
+	}, ports, voltage, nil
+}
+
+// parsePosition reads a withdrawable device's racking position back from
+// the data-trolley attribute this editor writes on its movable body's <g>
+// (render.go's positionAttr); real xsde2svg output has none, so it is nil
+// (Normal) there.
+func parsePosition(n *rawNode) *int {
+	v := n.firstAttrDescendant("data-trolley")
+	if v == "" {
+		return nil
+	}
+	p, err := strconv.Atoi(v)
+	if err != nil {
+		return nil
+	}
+	return &p
 }
 
 // parseDataFill reads a data-fill="0:off,1:on" attribute (as written by
@@ -344,14 +447,17 @@ func parseTwoPortDevice(n *rawNode, class Class, shape string) (Element, []Point
 	}, ports, voltage, nil
 }
 
-// parseKnifeSwitch3 handles shape 175 (Рубильник 3-позиционный). The real
+// parseKnifeSwitch handles shapes 44 (Knife switch) and 175
+// (3-position knife switch), which differ only in where the blade is drawn. The real
 // source draws three r=2 circles in one path — the pivot, then the right
 // and the left contact — whose relative moves are fixed numbers, not
 // scaled, so each circle's center is its subpath's start plus (2, 0). The
 // anchor is the rotate() center, or when unrotated, the pivot's x and the
-// contacts' y + 10 (the source's origin). The source has no state and
-// always draws the blade in the middle, so State is left unset (middle).
-func parseKnifeSwitch3(n *rawNode) (Element, []Point, string, error) {
+// contacts' y + 10 (the source's origin). Neither source has a state
+// (175 always draws the blade in the middle, 44 on the left contact), so
+// State stays unset for real markup; this editor's own output carries the
+// blade's position as data-state, which is read back.
+func parseKnifeSwitch(n *rawNode, class Class, shape string) (Element, []Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return Element{}, nil, "", err
@@ -388,13 +494,14 @@ func parseKnifeSwitch3(n *rawNode) (Element, []Point, string, error) {
 	}
 	return Element{
 		ID:     id,
-		Class:  ClassKnifeSwitch3,
-		Shape:  "175",
+		Class:  class,
+		Shape:  shape,
 		Name:   n.attr("data-name"),
 		Layer:  resolveLayer(n.attr("data-layer")),
 		X:      anchor.X,
 		Y:      anchor.Y,
 		Orient: normalizeOrient(angle),
+		State:  parseState(n),
 		Ports: []Port{
 			{Name: "1"},
 			{Name: "2"},
@@ -1063,7 +1170,7 @@ func parseSectionalizer(n *rawNode) (Element, []Point, string, error) {
 // connection point is its combined path's own first point, *in the path's
 // own local/pre-rotation coordinates* — ReactorShunt (397), SurgeArrester
 // (168, the grounded variant), CapacitorBank (172), Generator (173),
-// SynchronousCompensator (174). Real
+// SynchronousCompensator (174), SynchronousMotor (39). Real
 // instances appear both with and without a rotate() transform; when
 // absent, the anchor is exactly that first point (the element's formula
 // always starts drawing there). When present, the first point is *not*
@@ -1527,6 +1634,32 @@ func parseSmallWindow(n *rawNode) (Element, error) {
 	el, err := parseRect(n, parseOptionalID(n), ClassSmallWindow, "319")
 	el.StrokeWidth = 0
 	return el, err
+}
+
+// parsePicture handles shapes 11/12 (Backdrop/Image file, see
+// ClassPicture): a bare <image x y width height xlink:href>, read into
+// two corner Points and Href. Real xsde2svg writes no id (left 0 for
+// Extract to fill in); this editor's own Static output carries one. Both
+// codes draw identically in the source, so both come back as shape 11.
+func parsePicture(n *rawNode) (Element, error) {
+	x, errX := strconv.ParseFloat(n.attr("x"), 64)
+	y, errY := strconv.ParseFloat(n.attr("y"), 64)
+	w, errW := strconv.ParseFloat(n.attr("width"), 64)
+	h, errH := strconv.ParseFloat(n.attr("height"), 64)
+	if errX != nil || errY != nil || errW != nil || errH != nil {
+		return Element{}, fmt.Errorf("slddoc: picture %s: invalid x/y/width/height", n.attr("id"))
+	}
+	return Element{
+		ID:     parseOptionalID(n),
+		Class:  ClassPicture,
+		Shape:  "11",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      x + w/2,
+		Y:      y + h/2,
+		Points: []Point{{X: x, Y: y}, {X: x + w, Y: y + h}},
+		Href:   n.attr("href"),
+	}, nil
 }
 
 // parseRect is parseRectangle/parseSmallWindow's shared <rect> reader.
@@ -2767,4 +2900,272 @@ func parseConnector(n *rawNode) (Connector, string, error) {
 		Dashed: styleProp(geom.attr("style"), "stroke-dasharray") != "",
 		Points: pts,
 	}, n.attr("data-voltage"), nil
+}
+
+// parseSubstation handles shape 360 (Substation, see ClassSubstation): a
+// <g> (data-voltage the outline color, an optional rotate() about the
+// center) of 1 to 4 filled sector paths. The center and radius come from
+// the drawing at any export scale: a single sector is a whole circle drawn
+// from its bottom point to its top one, and 2 to 4 sectors all start at the
+// center, the first then running one radius straight out. The sector fill
+// colors are returned in drawing order, for Extract to map to voltage
+// classes. The source's xMirror only reorders those colors, so it reads
+// back as the same picture with Mirror unset.
+func parseSubstation(n *rawNode) (Element, []Point, string, []string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", nil, err
+	}
+	paths := elementPaths(n)
+	if len(paths) < 1 || len(paths) > 4 {
+		return Element{}, nil, "", nil, fmt.Errorf("slddoc: substation %s: %d sectors", n.attr("id"), len(paths))
+	}
+	subs, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil || len(subs) == 0 || len(subs[0]) < 2 {
+		return Element{}, nil, "", nil, fmt.Errorf("slddoc: substation %s: unreadable sector", n.attr("id"))
+	}
+	p0, p1 := subs[0][0], subs[0][1]
+	var center Point
+	var r float64
+	if len(paths) == 1 {
+		center = Point{X: (p0.X + p1.X) / 2, Y: (p0.Y + p1.Y) / 2}
+		r = math.Hypot(p1.X-p0.X, p1.Y-p0.Y) / 2
+	} else {
+		center = p0
+		r = math.Hypot(p1.X-p0.X, p1.Y-p0.Y)
+	}
+	anchor := center
+	var orient int
+	if angle, c, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		anchor = rotate(center, c, float64(angle))
+		orient = normalizeOrient(angle)
+	}
+	sectors := make([]SubstationSector, len(paths))
+	fills := make([]string, len(paths))
+	for i, p := range paths {
+		fills[i] = styleProp(p.attr("style"), "fill")
+	}
+	radius := r
+	if math.Abs(r-20) < 1e-9 {
+		radius = 0
+	}
+	return Element{
+		ID:      id,
+		Class:   ClassSubstation,
+		Shape:   "360",
+		Name:    n.attr("data-name"),
+		Layer:   resolveLayer(n.attr("data-layer")),
+		X:       anchor.X,
+		Y:       anchor.Y,
+		Orient:  orient,
+		Radius:  radius,
+		Ports:   []Port{{Name: "1"}},
+		Sectors: sectors,
+	}, []Point{anchor}, n.attr("data-voltage"), fills, nil
+}
+
+// parseBlockingFilter handles shape 389 (Blocking filter, see
+// ClassBlockingFilter): real xsde2svg writes one bare <path> carrying the
+// id, data-type, data-voltage and an optional rotate() about the center;
+// this editor's own output wraps the same path in a <g>. The path's first
+// and last points are the two ends, the ports (left first, in the unrotated
+// drawing), and the anchor is their midpoint, at any export scale.
+func parseBlockingFilter(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: blocking filter %s: no <path> geometry", n.attr("id"))
+	}
+	pts, err := allPathPoints(paths[:1])
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(pts) < 2 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: blocking filter %s: path too short", n.attr("id"))
+	}
+	left, right := pts[0], pts[len(pts)-1]
+	anchor := midpoint(left, right)
+	ports := []Point{left, right}
+	var orient int
+	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		anchor = rotate(anchor, center, float64(angle))
+		ports = []Point{rotate(left, center, float64(angle)), rotate(right, center, float64(angle))}
+		orient = normalizeOrient(angle)
+	}
+	return Element{
+		ID:     id,
+		Class:  ClassBlockingFilter,
+		Shape:  "389",
+		Name:   n.attr("data-name"),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
+		Ports:  []Port{{Name: "1"}, {Name: "2"}},
+	}, ports, firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage")), nil
+}
+
+// parsePowerPlant handles shape 38 (thermal or hydro power plant, see ClassPowerPlant):
+// a <g> (data-voltage, an optional rotate() about the center) whose first
+// two paths are the hatched part and the other part of the square. The
+// center and half side come from their points' bounding box, at any export
+// scale. The kind comes from the hatched part: a half rectangle (4 corners)
+// is thermal, a triangle (3) hydro, and a hydro triangle that starts at the
+// square's left edge is the source's xMirror layout, read as Mirror (as is
+// a scale(-1,1) in the transform, this editor's own mirrored output). An
+// instance of a kind the source doesn't draw has empty paths: it imports as
+// thermal at the default size, centered on its rotate() center, or fails
+// when it has none (there is then no position to place it at).
+func parsePowerPlant(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	var hatched, all []Point
+	for i, p := range paths {
+		if i > 1 {
+			break
+		}
+		pts, err := allPathPoints([]*rawNode{p})
+		if err != nil {
+			return Element{}, nil, "", err
+		}
+		if i == 0 {
+			hatched = pts
+		}
+		all = append(all, pts...)
+	}
+	angle, rotCenter, rotated := parseRotate(n.firstAttrDescendant("transform"))
+
+	el := Element{
+		ID:    id,
+		Class: ClassPowerPlant,
+		Shape: "38",
+		Name:  n.attr("data-name"),
+		Layer: resolveLayer(n.attr("data-layer")),
+		Ports: []Port{{Name: "1"}},
+	}
+	var center Point
+	if len(all) == 0 {
+		if !rotated {
+			return Element{}, nil, "", fmt.Errorf("slddoc: power plant %s: nothing drawn and no rotate() center to place it at", n.attr("id"))
+		}
+		center = rotCenter
+	} else {
+		minX, minY, maxX, maxY := all[0].X, all[0].Y, all[0].X, all[0].Y
+		for _, p := range all {
+			minX, maxX = math.Min(minX, p.X), math.Max(maxX, p.X)
+			minY, maxY = math.Min(minY, p.Y), math.Max(maxY, p.Y)
+		}
+		center = Point{X: (minX + maxX) / 2, Y: (minY + maxY) / 2}
+		if l := (maxX - minX) / 2; math.Abs(l-20) > 1e-9 {
+			el.Radius = l
+		}
+		distinct := map[Point]bool{}
+		for _, p := range hatched {
+			distinct[p] = true
+		}
+		if len(distinct) == 3 {
+			el.NType = 1
+			el.Mirror = len(hatched) > 0 && hatched[0].X < center.X
+			// This editor's own Static output keeps the drawing unflipped
+			// and mirrors it with a scale(-1,1) in the transform.
+			if strings.Contains(n.firstAttrDescendant("transform"), "scale(-1") {
+				el.Mirror = !el.Mirror
+			}
+		}
+	}
+	anchor := center
+	if rotated {
+		anchor = rotate(center, rotCenter, float64(angle))
+		el.Orient = normalizeOrient(angle)
+	}
+	el.X, el.Y = anchor.X, anchor.Y
+	return el, []Point{anchor}, firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage")), nil
+}
+
+// parseAnchorPole handles shape 19 (Metal anchor/angle pole, see
+// ClassAnchorPole): real xsde2svg writes one bare <path> "M apex l ±2a a
+// v -2a z" carrying the id, data-type, data-name, data-voltage and an
+// optional rotate() about the center; this editor's own output wraps the
+// same path in a <g>. The center is halfway between the apex (the first
+// point) and the base (the second point's x), at any export scale, and the
+// apex lying left of the base is the source's xMirror, read as Mirror.
+func parseAnchorPole(n *rawNode) (Element, []Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: anchor pole %s: no <path> geometry", n.attr("id"))
+	}
+	pts, err := allPathPoints(paths[:1])
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(pts) < 2 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: anchor pole %s: path too short", n.attr("id"))
+	}
+	apex, base := pts[0], pts[1]
+	center := Point{X: (apex.X + base.X) / 2, Y: apex.Y}
+	mirror := apex.X < base.X
+	anchor := center
+	var orient int
+	transform := n.firstAttrDescendant("transform")
+	if angle, c, ok := parseRotate(transform); ok {
+		anchor = rotate(center, c, float64(angle))
+		orient = normalizeOrient(angle)
+	}
+	// This editor's own Static output keeps the drawing unflipped and
+	// mirrors it with a scale(-1,1) in the transform.
+	if strings.Contains(transform, "scale(-1") {
+		mirror = !mirror
+	}
+	return Element{
+		ID:     id,
+		Class:  ClassAnchorPole,
+		Shape:  "19",
+		Name:   firstNonEmpty(n.attr("data-name"), n.firstAttrDescendant("data-name")),
+		Layer:  resolveLayer(n.attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
+		Mirror: mirror,
+		Ports:  []Port{{Name: "1"}},
+	}, []Point{anchor}, firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage")), nil
+}
+
+// parseAutomationDevice handles shape 103 (Automation device, see
+// ClassAutomationDevice): Button's <g><rect/><text/></g>. The source writes
+// only the state it drew and no data-state, so its fill, text and text
+// color are read as the Off ones; this editor's own output carries
+// data-state, and a tile drawn On then fills the On fields instead. The
+// font size comes from the text style (12 is left unset, the default).
+func parseAutomationDevice(n *rawNode) (Element, error) {
+	box, err := parseTextBox(n, ClassAutomationDevice, "103")
+	if err != nil {
+		return Element{}, err
+	}
+	el := box
+	el.Fill, el.StrokeWidth = "", 0
+	el.FillOff = box.Fill
+	if t := firstTextChild(n); t != nil {
+		if size, err := strconv.ParseFloat(strings.TrimSuffix(styleProp(t.attr("style"), "font-size"), "px"), 64); err == nil && size != automationDeviceFontSize {
+			el.TextSize = size
+		}
+	}
+	if state := parseState(n); state != nil {
+		el.State = state
+		if *state == 1 {
+			el.FillOn, el.FillOff = box.Fill, ""
+			el.PropertyTextOn, el.PropertyText = box.PropertyText, ""
+			el.TextColorOn, el.TextColor = box.TextColor, ""
+		}
+	}
+	return el, nil
 }

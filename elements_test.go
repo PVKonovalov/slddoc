@@ -1212,6 +1212,46 @@ func TestParseSynchronousCompensator(t *testing.T) {
 	}
 }
 
+// TestParseSynchronousMotor uses real xsde2svg markup (ctrlroom sld1
+// corpus, shape 39): the anchor and only port
+// are the stem's tip, the circle path's first point, rotated through the
+// path's rotate() about the circle's center when there is one.
+func TestParseSynchronousMotor(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+	}{
+		{"unrotated", `<g id="12913" data-voltage="#CC9900" data-type="39" >
+<path d="M 1140 1733 v 5 m -12 12 a 12 12 0 0 1 24 0 a 12 12 0 0 1 -24 0" style="fill:none;stroke:#CC9900;stroke-width:2"  />
+<text x="1140" y="1750" style="fill:#CC9900;font-size:12px;font-family:Arial;text-anchor:middle;dominant-baseline:middle"  >M</text>
+</g>`, 1140, 1733, 0},
+		{"rotated", `<g id="29570" data-voltage="#CC9900" data-type="39" >
+<path d="M 890 757 v 7 m -16 16 a 16 16 0 0 1 32 0 a 16 16 0 0 1 -32 0" style="fill:none;stroke:#CC9900;stroke-width:2" transform="rotate(180,890,780)" />
+<text x="890" y="780" style="fill:#CC9900;font-size:16px;font-family:Arial;text-anchor:middle;dominant-baseline:middle" transform="rotate(180,890,780)" >M</text>
+</g>`, 890, 803, 180},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, voltage, err := parseOnePortDevice(parseFirst(t, c.svg), ClassSynchronousMotor, "39")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassSynchronousMotor || el.Shape != "39" || voltage != "#CC9900" {
+				t.Errorf("class/shape/voltage = %s/%s/%s", el.Class, el.Shape, voltage)
+			}
+			if math.Abs(el.X-c.wantX) > 1e-9 || math.Abs(el.Y-c.wantY) > 1e-9 || el.Orient != c.wantOrient {
+				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
+			}
+			if len(ports) != 1 || math.Abs(ports[0].X-c.wantX) > 1e-9 || math.Abs(ports[0].Y-c.wantY) > 1e-9 {
+				t.Errorf("ports = %v, want [(%v,%v)]", ports, c.wantX, c.wantY)
+			}
+		})
+	}
+}
+
 // TestParseKnifeSwitch3 has no real corpus instance to use (none exist), so
 // its markup is element_175.go's own output format at two positions: the
 // ports are the circles' centers (pivot, left, right) and State stays
@@ -1246,12 +1286,68 @@ func TestParseKnifeSwitch3(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			el, ports, voltage, err := parseKnifeSwitch3(parseFirst(t, c.svg))
+			el, ports, voltage, err := parseKnifeSwitch(parseFirst(t, c.svg), ClassKnifeSwitch3, "175")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if el.Class != ClassKnifeSwitch3 || el.Shape != "175" || voltage != "purple" || el.State != nil {
 				t.Errorf("class/shape/voltage/state = %s/%s/%s/%v", el.Class, el.Shape, voltage, el.State)
+			}
+			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient {
+				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
+			}
+			if len(ports) != 3 || len(el.Ports) != 3 {
+				t.Fatalf("ports = %v / %v, want 3", ports, el.Ports)
+			}
+			for i := range ports {
+				if math.Abs(ports[i].X-c.wantPorts[i].X) > 1e-9 || math.Abs(ports[i].Y-c.wantPorts[i].Y) > 1e-9 {
+					t.Errorf("ports = %v, want %v", ports, c.wantPorts)
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestParseKnifeSwitch uses real xsde2svg markup for shape 44 (ctrlroom
+// sld1 corpus: Switches.svg id 7, unrotated, and id 7163, rotated -90):
+// the same three circles as shape 175, with the blade on the left contact.
+func TestParseKnifeSwitch(t *testing.T) {
+	cases := []struct {
+		name       string
+		svg        string
+		wantX      float64
+		wantY      float64
+		wantOrient int
+		wantPorts  []Point
+	}{
+		{
+			name: "unrotated",
+			svg: `<g id="7" data-type="44"  >
+<path d="M 240 50 l 10 15" style="fill:#FF5555;stroke:#FF5555;stroke-width:4" />
+<path d="M 248 65 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m 10 -15 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m -20 0 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0" style="fill:#f5ebeb;stroke:#FF5555;stroke-width:2" />
+</g>`,
+			wantX: 250, wantY: 60, wantOrient: 0,
+			wantPorts: []Point{{250, 65}, {240, 50}, {260, 50}},
+		},
+		{
+			name: "rotated -90",
+			svg: `<g id="7163" data-type="44" transform="rotate(-90,1790,890)" >
+<path d="M 1780 880 l 10 15" style="fill:#555555;stroke:#555555;stroke-width:4" />
+<path d="M 1788 895 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m 10 -15 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0 m -20 0 a 2 2 0 0 1 4 0 a 2 2 0 0 1 -4 0" style="fill:#12161d;stroke:#555555;stroke-width:2" />
+</g>`,
+			wantX: 1790, wantY: 890, wantOrient: -90,
+			wantPorts: []Point{{1795, 890}, {1780, 900}, {1780, 880}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			el, ports, _, err := parseKnifeSwitch(parseFirst(t, c.svg), ClassKnifeSwitch, "44")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if el.Class != ClassKnifeSwitch || el.Shape != "44" || el.State != nil {
+				t.Errorf("class/shape/state = %s/%s/%v", el.Class, el.Shape, el.State)
 			}
 			if el.X != c.wantX || el.Y != c.wantY || el.Orient != c.wantOrient {
 				t.Errorf("anchor/orient = (%v,%v,%d), want (%v,%v,%d)", el.X, el.Y, el.Orient, c.wantX, c.wantY, c.wantOrient)
@@ -1377,12 +1473,12 @@ func TestContainer_RealCorpus(t *testing.T) {
 	out := buf.String()
 	for _, s := range []string{
 		`<!-- Container:310 -->`,
-		`<g id="120996397" data-type="310" data-name="ПС 110 кВ Демянск" data-voltage="dimgray">
+		`<g data-layer="10" id="120996397" data-type="310" data-name="ПС 110 кВ Демянск" data-voltage="dimgray">
 <path d="M 670 440 L300 440 L300 130 L670 130 z" style="fill:none;stroke:dimgray;stroke-dasharray: 3,2;stroke-width:1" />
 <text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial">ПС 110 кВ Демянск</text>
 </g>`,
 		`<text x="9409" y="3554" style="fill:white;text-anchor:end;dominant-baseline:baseline;font-size:39px;font-family:Arial" transform="rotate(-90,9409,3554)">ПС Сельхозкомплекс</text>`,
-		`<g id="148694366" data-type="310" data-voltage="dimgray">
+		`<g data-layer="10" id="148694366" data-type="310" data-voltage="dimgray">
 <path d="M 620 80 L410 80 L410 40 L620 40 z" style="fill:none;stroke:dimgray;stroke-width:1" />
 </g>`,
 	} {

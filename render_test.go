@@ -1220,3 +1220,39 @@ func TestRender_TapChangerFragment(t *testing.T) {
 		}
 	}
 }
+
+// TestRender_BackgroundPlaceholder checks that a template's {background}
+// becomes the diagram's own background (or the default one when unset), in
+// both Render and RenderFragments.
+func TestRender_BackgroundPlaceholder(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"44": `<circle r="2" style="fill:{background};stroke:{color}" />`,
+	})
+	el := Element{ID: 1, Class: ClassKnifeSwitch, Shape: "44"}
+	for _, c := range []struct {
+		name   string
+		editor *EditorSettings
+		want   string
+	}{
+		{"set", &EditorSettings{Background: "#abcdef"}, "fill:#abcdef;"},
+		{"default", nil, "fill:" + defaultBackground + ";"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := &Diagram{Editor: c.editor, Elements: []Element{el}}
+			var buf bytes.Buffer
+			if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(buf.String(), c.want) {
+				t.Errorf("Render: want %q in\n%s", c.want, buf.String())
+			}
+			frags, err := RenderFragments(d, lib, []int{1}, Interactive, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(frags[1], c.want) {
+				t.Errorf("RenderFragments: want %q in %s", c.want, frags[1])
+			}
+		})
+	}
+}

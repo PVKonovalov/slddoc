@@ -77,6 +77,9 @@ type EditorSettings struct {
 	// (where connectors/ports actually land) independent of what a
 	// symbol's drawn geometry suggests.
 	ShowNodes bool `xml:"showNodes,attr,omitempty" json:"showNodes,omitempty"`
+	// ActiveLayer references the Layer.ID newly placed items go on (0, the
+	// default, is BaseLayer). Like DefaultVoltage it is only round-tripped.
+	ActiveLayer int `xml:"activeLayer,attr,omitempty" json:"activeLayer,omitempty"`
 }
 
 // Layer is one entry of a diagram's visibility layers. A viewer toggles
@@ -85,6 +88,11 @@ type EditorSettings struct {
 type Layer struct {
 	ID   int    `xml:"id,attr" json:"id"`
 	Name string `xml:"name,attr" json:"name"`
+	// Z is the layer's drawing order: Render draws every item of the
+	// lowest Z first and the highest last, so a higher layer covers a
+	// lower one. Layers sharing a Z (all of them by default) are drawn
+	// together, interleaved in document order.
+	Z int `xml:"z,attr,omitempty" json:"z,omitempty"`
 }
 
 // VoltageClass maps a logical, real-world voltage level (e.g. "10 kV") to the
@@ -143,6 +151,12 @@ const (
 	// fuse body between two contact bars, Open swings it about a bottom
 	// pivot. Only two real states, Closed(1)/Open(0).
 	ClassDisconnectorFuse Class = "DisconnectorFuse"
+	// ClassKnifeSwitch (shape 44, Knife switch) is a changeover knife switch
+	// drawn like ClassKnifeSwitch3 (pivot "1", left contact "2", right
+	// contact "3"). State picks the blade's position: unset or 0 is the
+	// left contact (the only position the real source draws), 2 the right
+	// one.
+	ClassKnifeSwitch Class = "KnifeSwitch"
 	// ClassKnifeSwitch3 (shape 175, Рубильник 3-позиционный) is a
 	// three-position knife switch: a blade pivoting at its bottom
 	// terminal ("1") between two contact terminals, left ("2") and right
@@ -189,8 +203,13 @@ const (
 	// single-terminal rotating machine drawn like ClassGenerator (a circle
 	// hanging from its terminal's stem) with an upright "=" mark inside.
 	ClassSynchronousCompensator Class = "SynchronousCompensator"
-	ClassBusBarSection          Class = "BusBarSection"
-	ClassJunctionPoint          Class = "JunctionPoint"
+	// ClassSynchronousMotor (shape 39, Synchronous motor) is a
+	// single-terminal rotating machine drawn like ClassGenerator (a circle
+	// hanging from its terminal's stem) with an "M" inside that turns
+	// with the symbol.
+	ClassSynchronousMotor Class = "SynchronousMotor"
+	ClassBusBarSection    Class = "BusBarSection"
+	ClassJunctionPoint    Class = "JunctionPoint"
 	// ClassFork (shape 26, "Развилка"/Fork) is a real three-terminal
 	// wiring element: a "V" whose vertex (at X/Y) and two arm tips are each
 	// a real electrical terminal — one wire in at the vertex, one out at
@@ -273,6 +292,33 @@ const (
 	// downward-pointing triangle always drawn inside it (see
 	// writeEnclosedSubstation for the full geometry).
 	ClassEnclosedSubstation Class = "EnclosedSubstation"
+	// ClassSubstation (shape 360, Substation) is a network-map pictogram of
+	// a whole substation: a filled circle of Radius (default 20) split into
+	// one sector per voltage (Sectors, 1–4), outlined in the element's own
+	// Voltage color. Lines end at its center, its single terminal.
+	ClassSubstation Class = "Substation"
+	// ClassBlockingFilter (shape 389, Blocking filter) is a line trap
+	// sitting in a line: a zigzag (slant, vertical stroke, slant) between
+	// its two terminals, the ends, left "1" and right "2".
+	ClassBlockingFilter Class = "BlockingFilter"
+	// ClassPowerPlant (shape 38, thermal or hydro power plant) is a network-map
+	// pictogram of a power plant: a square of half side Radius (default 20)
+	// split in two, one part hatched. NType 0 (thermal) splits it across
+	// with the lower half hatched diagonally, 1 (hydro) along a diagonal
+	// with one triangle hatched horizontally. One terminal at the center.
+	ClassPowerPlant Class = "PowerPlant"
+	// ClassAnchorPole (shape 19, Metal anchor/angle pole) is a pole of a
+	// pole-by-pole line diagram: a triangle with its apex at (10, 0) and
+	// its base at x = -10 (Mirror points the apex left), one terminal at
+	// the center.
+	ClassAnchorPole Class = "AnchorPole"
+	// ClassAutomationDevice (shape 103, Automation device) is a decorative
+	// two-state status tile drawn from two corner Points like ClassButton:
+	// State 1 (On) shows FillOn, PropertyTextOn and TextColorOn, anything
+	// else (Off) FillOff, PropertyText and TextColor. Stroke is the border
+	// (black by default), TextSize the font size (12 by default), Bold the
+	// weight. No Voltage, no Ports.
+	ClassAutomationDevice Class = "AutomationDevice"
 	// ClassButton (shape 113, "Объемная кнопка"/3D button) is a purely
 	// decorative annotation widget — not real electrical equipment, same
 	// non-electrical status as ClassRectangle (no Ports/Voltage/State,
@@ -304,6 +350,12 @@ const (
 	// but always with a 1px border and gray by default. Real corpus shows
 	// it unfilled, usually in the 110 kV blue. Older exports carry no id.
 	ClassSmallWindow Class = "SmallWindow"
+	// ClassPicture (shape 11, Backdrop, and its twin 12, Image
+	// file) is a decorative picture stretched over
+	// two corner Points, drawn by internal/modus/element_11_12.go as a bare
+	// <image> with the picture embedded as a data URI (Href). No Ports/
+	// Voltage/State, never a routing endpoint, no rotation.
+	ClassPicture Class = "Picture"
 	// ClassRoad (shape 335, "Дорога"/Road) is a purely decorative
 	// geographic background line — not real electrical equipment, same
 	// non-electrical status as ClassRectangle (no Ports/Voltage/State,
@@ -679,7 +731,8 @@ type Element struct {
 	// doc comments — since neither variant's own drawn geometry otherwise
 	// gives it away on its own): 0 (unset, the common case) draws a
 	// box-in-box pictogram with a short lead stub; 1 draws a plain
-	// downward-pointing triangle instead. Unused by every other class.
+	// downward-pointing triangle instead. For a PowerPlant (shape 38) it
+	// is the plant kind: 0 thermal, 1 hydro.
 	NType int `xml:"nType,attr,omitempty" json:"nType,omitempty"`
 	// PropertyText is a short overlay label (e.g. a transformer's own power
 	// rating, "160") drawn centered on PackageSubstation's (385) or
@@ -724,6 +777,11 @@ type Element struct {
 	// corpus shows both a plain and a bold real instance. Unused by every
 	// other class.
 	Bold bool `xml:"bold,attr,omitempty" json:"bold,omitempty"`
+	// PropertyTextOn and TextColorOn are an AutomationDevice's (shape 103)
+	// text and text color while it is On (State 1); PropertyText and
+	// TextColor are its Off ones.
+	PropertyTextOn string `xml:"propertyTextOn,attr,omitempty" json:"propertyTextOn,omitempty"`
+	TextColorOn    string `xml:"textColorOn,attr,omitempty" json:"textColorOn,omitempty"`
 	// TextSize/TextDx/TextDy/TextAnchor/TextBaseline place a Container's
 	// (310) caption: its font size (0 = 14), its anchor's offset from the
 	// outline's own top-left (min x/y of Points, so the caption moves with
@@ -797,6 +855,23 @@ type Element struct {
 	RowHeights   []float64   `xml:"rows>row,omitempty" json:"rowHeights,omitempty"`
 	ColumnWidths []float64   `xml:"columns>column,omitempty" json:"columnWidths,omitempty"`
 	Cells        []TableCell `xml:"cells>cell,omitempty" json:"cells,omitempty"`
+
+	// Sectors are a Substation's (shape 360) sector fills, in the source's
+	// drawing order: one sector per entry, 1 to 4 (see writeSubstation).
+	Sectors []SubstationSector `xml:"sectors>sector,omitempty" json:"sectors,omitempty"`
+
+	// Href is a Picture's (shape 11) image, a data URI
+	// ("data:image/...;base64,..."), embedded so the diagram stays
+	// self-contained like real xsde2svg output. Saved as an <image> child
+	// rather than an attribute, since it can run to megabytes.
+	Href string `xml:"image,omitempty" json:"href,omitempty"`
+}
+
+// SubstationSector is one sector of a Substation pictogram: Voltage
+// references a VoltageClass.ID (0 means unassigned, drawn in the outline
+// color), the sector's fill.
+type SubstationSector struct {
+	Voltage int `xml:"voltage,attr,omitempty" json:"voltage,omitempty"`
 }
 
 // WindingScheme is a PowerTransformer winding's own connection scheme.
@@ -1063,7 +1138,7 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Element's own tag newly empty, which emptyElement then collapses to
 // self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices|rows|columns|cells)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices|rows|columns|cells|sectors)></[A-Za-z][\w:.-]*>`,
 )
 
 // Save writes d as indented XML.
