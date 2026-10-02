@@ -2133,13 +2133,7 @@ func substationRadius(e Element) float64 {
 // is exactly the geometric flip Mirror applies.
 func writeSubstation(w io.Writer, e Element, voltageColor map[int]string, color string, mode RenderMode) {
 	r := substationRadius(e)
-	n := len(e.Sectors)
-	if n < 1 {
-		n = 1
-	}
-	if n > 4 {
-		n = 4
-	}
+	n := min(max(len(e.Sectors), 1), 4)
 	fills := make([]string, n)
 	for i := range fills {
 		fills[i] = color
@@ -2822,7 +2816,7 @@ func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, 
 	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n",
 		e.ID, esc(e.Name), attrs, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		var winding TransformerWinding
 		if i < len(e.Windings) {
 			winding = e.Windings[i]
