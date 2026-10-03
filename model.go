@@ -611,6 +611,13 @@ type Element struct {
 	// element defaults to false/unmirrored — it exists purely as an
 	// editor-side property a user can toggle after placement.
 	Mirror bool `xml:"mirror,attr,omitempty" json:"mirror,omitempty"`
+	// Scale is the real xsde2svg per-element size step: every length in
+	// its symbol is Scale(s, v) = int(v·√2^s) of its step-0 value, so each
+	// step is √2 larger (0 = the symbol library's own size). It only
+	// applies to a symbol drawn from its library template (UsesSizeStep);
+	// Render scales that template about (X,Y), keeping its stroke width,
+	// and a terminal t sits at ScaledTerminal(t, Scale).
+	Scale int `xml:"scale,attr,omitempty" json:"scale,omitempty"`
 	// State carries an element's status (e.g. breaker open/closed), when
 	// one applies to this class. Also used by PowerflowIndicator (shape
 	// 320001) for its own two-way arrow direction: nil/0 draws "→", any

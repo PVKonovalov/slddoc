@@ -696,6 +696,9 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		"{fpiText}", esc(fpiText),
 		"{background}", esc(background),
 	).Replace(body)
+	if e.Scale != 0 {
+		body = sizeStepTemplate(body, SizeFactor(e.Scale))
+	}
 	// data-editor-kind (this editor's own addition, not part of the
 	// xsde2svg format) is what the frontend hit-tests against — it no
 	// longer pairs with any invisible fixed-radius hit-target geometry
@@ -713,8 +716,8 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n%s\n</g>\n",
-		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror), body)
+	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s%s\">\n%s\n</g>\n",
+		e.ID, esc(e.Name), esc(color), esc(e.Shape), editorAttr, fmtNum(e.X), fmtNum(e.Y), e.Orient, mirrorScale(e.Mirror), sizeStepScale(e), body)
 }
 
 // forkArmLength is a Fork's (shape 26) own default arm length, the real

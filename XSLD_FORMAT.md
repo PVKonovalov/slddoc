@@ -168,6 +168,7 @@ decorative shape (rectangle, line, table, ...).
 | `x`, `y` | number | yes | Anchor: the symbol's rotation center (for points-based shapes, informational — the midpoint of its geometry) |
 | `orient` | int | no | Rotation around the anchor, in degrees, clockwise (SVG `rotate`). Multiples of 90; negative values and ±270 occur in extracted files |
 | `mirror` | bool | no | Flip the symbol horizontally in its local frame, before rotation. Editor-only; Extract never sets it |
+| `scale` | int | no | xsde2svg size step: the symbol template is drawn √2^`scale` times its library size about the anchor, stroke width unchanged; a terminal (tx,ty) sits at (int(tx·√2^s), int(ty·√2^s)). Only for template-drawn classes (`UsesSizeStep`); 0 = library size. Extract doesn't set it; the editor infers it on SVG import from where the ports sit |
 
 **Children**
 

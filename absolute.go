@@ -117,7 +117,7 @@ func joinOps(ops []transformOp) string {
 }
 
 // placement recognizes a fragment's own outer local-frame placement,
-// "translate(x,y) [rotate(a)] [scale(-1,1)]", returning its translation and
+// "translate(x,y) [rotate(a)] [scale(-1,1)] [scale(f)]", returning its translation and
 // the transform the absolute form uses instead ("" when there is none left).
 func placement(transform string) (tx, ty float64, abs string, ok bool) {
 	ops, err := parseTransformList(transform)
@@ -138,6 +138,10 @@ func placement(transform string) (tx, ty float64, abs string, ok bool) {
 		case op.name == "scale" && len(op.args) == 2 && op.args[0] == -1 && op.args[1] == 1:
 			// A mirror about the anchor: x -> 2tx - x.
 			out = append(out, transformOp{"translate", []float64{2 * tx, 0}}, transformOp{"scale", []float64{-1, 1}})
+		case op.name == "scale" && len(op.args) == 1 && op.args[0] > 0:
+			// A size step about the anchor: x -> tx + f(x - tx).
+			f := op.args[0]
+			out = append(out, transformOp{"translate", []float64{round6((1 - f) * tx), round6((1 - f) * ty)}}, transformOp{"scale", []float64{f}})
 		default:
 			return 0, 0, "", false
 		}

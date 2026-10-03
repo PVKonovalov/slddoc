@@ -32,6 +32,11 @@ func TestAbsolutize(t *testing.T) {
 			`<g id="1" transform="rotate(90,10,20) translate(20,0) scale(-1,1)"><line x1="10" y1="20" x2="15" y2="15" /></g>`,
 		},
 		{
+			"size step scales about the anchor",
+			`<g id="1" transform="translate(10,20) rotate(90) scale(2)"><line x1="0" y1="0" x2="5" y2="-5" /></g>`,
+			`<g id="1" transform="rotate(90,10,20) translate(-10,-20) scale(2)"><line x1="10" y1="20" x2="15" y2="15" /></g>`,
+		},
+		{
 			"nested transforms keep their effect",
 			`<g id="1" transform="translate(10,20) rotate(90)">
 <g transform="translate(0 21) rotate(-90)"><text x="0" y="5">A</text></g>
