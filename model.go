@@ -618,6 +618,12 @@ type Element struct {
 	// Render scales that template about (X,Y), keeping its stroke width,
 	// and a terminal t sits at ScaledTerminal(t, Scale).
 	Scale int `xml:"scale,attr,omitempty" json:"scale,omitempty"`
+	// Span is a lead shape's (HasLeads: breakers, disconnectors and similar)
+	// distance between its two terminals, in diagram units: the source
+	// draws each instance's leads to its own length, the body staying at
+	// its size step. 0 = the library's own spacing at that step; Render
+	// extends the leads to ±Span/2 when it reaches past them (LeadTerminal).
+	Span float64 `xml:"span,attr,omitempty" json:"span,omitempty"`
 	// State carries an element's status (e.g. breaker open/closed), when
 	// one applies to this class. Also used by PowerflowIndicator (shape
 	// 320001) for its own two-way arrow direction: nil/0 draws "→", any

@@ -278,7 +278,11 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	// sector fills, resolved into each SubstationSector.Voltage.
 	sectorColors := map[int][]string{}
 
+	// cur is the source node being parsed, so addElement can read a lead
+	// shape's own body size and lead length from it (inferLeads).
+	var cur *rawNode
 	addElement := func(el Element, ports []Point, voltage string) {
+		inferLeads(&el, cur, ports)
 		colors = append(colors, voltage)
 		elementVoltage = append(elementVoltage, voltage)
 		idx := len(d.Elements)
@@ -289,6 +293,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	}
 
 	for i, n := range root.Children {
+		cur = n
 		if n.Tag == "metadata" {
 			layers, err := parseLayers(n.Text)
 			if err != nil {
@@ -920,15 +925,16 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 		}
 	}
 
-	if nextSynthID-1 > d.LastID {
-		d.LastID = nextSynthID - 1
-	}
-
 	buildTopology(d, bindings)
 	// append, not assign — d.Labels may already hold addMissingLabel's own
 	// diagnostic entries from earlier in this same loop, which matchLabels
 	// itself knows nothing about and would otherwise silently clobber.
 	d.Labels = append(d.Labels, matchLabels(d, labelNodes)...)
+
+	nextSynthID = assignUniqueIDs(d, nextSynthID)
+	if nextSynthID-1 > d.LastID {
+		d.LastID = nextSynthID - 1
+	}
 
 	report.Elements = len(d.Elements)
 	report.Connectors = len(d.Connectors)

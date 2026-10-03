@@ -168,7 +168,8 @@ decorative shape (rectangle, line, table, ...).
 | `x`, `y` | number | yes | Anchor: the symbol's rotation center (for points-based shapes, informational — the midpoint of its geometry) |
 | `orient` | int | no | Rotation around the anchor, in degrees, clockwise (SVG `rotate`). Multiples of 90; negative values and ±270 occur in extracted files |
 | `mirror` | bool | no | Flip the symbol horizontally in its local frame, before rotation. Editor-only; Extract never sets it |
-| `scale` | int | no | xsde2svg size step: the symbol template is drawn √2^`scale` times its library size about the anchor, stroke width unchanged; a terminal (tx,ty) sits at (int(tx·√2^s), int(ty·√2^s)). Only for template-drawn classes (`UsesSizeStep`); 0 = library size. Extract doesn't set it; the editor infers it on SVG import from where the ports sit |
+| `scale` | int | no | xsde2svg size step: the symbol template is drawn √2^`scale` times its library size about the anchor, stroke width unchanged; a terminal (tx,ty) sits at (int(tx·√2^s), int(ty·√2^s)). Only for template-drawn classes (`UsesSizeStep`); 0 = library size. Extract sets it for lead shapes (from the drawn body); for the rest the editor infers it on SVG import from where the ports sit |
+| `span` | number | no | Lead shapes only (breakers 41, load-break switch 42, disconnectors 71/162, 163, 164, 166, fuse 203, 399 — `HasLeads`): distance between the two terminals in diagram units. The leads are drawn out to ±`span`/2 along the local y axis; the body keeps its size step. 0 = the library's spacing at that step. Extract reads it from the two port points |
 
 **Children**
 

@@ -696,6 +696,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		"{fpiText}", esc(fpiText),
 		"{background}", esc(background),
 	).Replace(body)
+	body += leadExtension(e, esc(color))
 	if e.Scale != 0 {
 		body = sizeStepTemplate(body, SizeFactor(e.Scale))
 	}

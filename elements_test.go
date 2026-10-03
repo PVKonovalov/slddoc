@@ -117,8 +117,10 @@ func TestParseGroundSwitch(t *testing.T) {
 	if el.X != 910 || el.Y != 620 || el.Orient != 90 {
 		t.Errorf("anchor/orient = (%v,%v,%d), want (910,620,90)", el.X, el.Y, el.Orient)
 	}
-	if len(ports) != 1 || ports[0] != (Point{910, 620}) {
-		t.Errorf("ports = %v, want a single port at the rotation anchor", ports)
+	// The stub tip (910,632), rotated 90° about the anchor — where the
+	// wire meets it, not the anchor itself.
+	if len(ports) != 1 || ports[0] != (Point{898, 620}) {
+		t.Errorf("ports = %v, want a single port at the stub tip (898,620)", ports)
 	}
 	if el.State == nil || *el.State != 0 {
 		t.Errorf("state = %v, want 0", el.State)
@@ -365,8 +367,9 @@ func TestParseGround_WithTransform(t *testing.T) {
 	if el.X != 1805 || el.Y != 1132 || el.Orient != -90 {
 		t.Errorf("anchor/orient = (%v,%v,%d), want (1805,1132,-90)", el.X, el.Y, el.Orient)
 	}
-	if len(ports) != 1 || ports[0] != (Point{1805, 1132}) {
-		t.Errorf("ports = %v, want a single port at the rotation anchor", ports)
+	// The stub's free end (1805,1122), rotated -90° about the anchor.
+	if len(ports) != 1 || ports[0] != (Point{1795, 1132}) {
+		t.Errorf("ports = %v, want a single port at the stub's free end (1795,1132)", ports)
 	}
 }
 
@@ -378,9 +381,9 @@ func TestParseGround_WithoutTransform(t *testing.T) {
 		t.Fatal(err)
 	}
 	if el.X != 1815 || el.Y != 962 || el.Orient != 0 {
-		t.Errorf("anchor/orient = (%v,%v,%d), want (1815,962,0) (no transform: the port is the path's own first point)", el.X, el.Y, el.Orient)
+		t.Errorf("anchor/orient = (%v,%v,%d), want (1815,962,0) (no transform: the anchor is the path's own first point)", el.X, el.Y, el.Orient)
 	}
-	if len(ports) != 1 || ports[0] != (Point{1815, 962}) {
+	if len(ports) != 1 || ports[0] != (Point{1815, 952}) {
 		t.Errorf("ports = %v", ports)
 	}
 }
@@ -1790,5 +1793,29 @@ func TestConnectorPoint_RealCorpus(t *testing.T) {
 	again, report, err := Extract(buf.Bytes(), "", nil)
 	if err != nil || len(report.Failed) != 0 || len(again.Elements) != 1 || again.Elements[0].X != 400 || again.Elements[0].Y != 1310 {
 		t.Fatalf("re-extract: err=%v failed=%v elements=%+v", err, report.Failed, again.Elements)
+	}
+}
+
+func TestParseShortCircuiterPortAtLeadEnd(t *testing.T) {
+	n := parseFirst(t, `
+<g id="1015" data-voltage="#00A0F0" data-type="398" data-name="КЗ-110 Т-2 ф.А" transform="rotate(90,850,545)" >
+<g data-state="1" visibility="hidden" >
+<path d="M 850 556 l 0 -8" style="fill:none;stroke:#00A0F0;stroke-width:1" />
+</g>
+<g data-state="0" visibility="visible" >
+<path d="M 850 556 l 0 -8" style="fill:none;stroke:#00A0F0;stroke-width:1" />
+<path d="M 849 539  v -6  l 8 3 z" style="fill:#00A0F0;stroke:#00A0F0;stroke-width:1" />
+</g>
+</g>`)
+	el, ports, _, err := parseShortCircuiter(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.X != 850 || el.Y != 545 || el.Orient != 90 {
+		t.Errorf("anchor/orient = (%v,%v,%d), want (850,545,90)", el.X, el.Y, el.Orient)
+	}
+	// The lead's free end (850,556), rotated 90° about the anchor.
+	if len(ports) != 1 || ports[0] != (Point{839, 545}) {
+		t.Errorf("ports = %v, want [(839,545)]", ports)
 	}
 }

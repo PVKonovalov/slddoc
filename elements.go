@@ -702,8 +702,10 @@ func parseThyristor(n *rawNode) (Element, []Point, string, error) {
 
 // parseGround handles shape 31 (ground/earth terminal): a single electrical port.
 // Real instances appear both with and without a rotate() transform; when
-// absent, the port is the drawn path's own first point (the element's
-// formula always starts drawing exactly at its origin/anchor).
+// absent, the anchor is the drawn path's own first point (the element's
+// formula always starts drawing exactly at its origin/anchor, the earth
+// bars). The port is the stub's free end, where the wire meets it: the end
+// of that first "v -leg" segment, rotated about the anchor.
 func parseGround(n *rawNode) (Element, []Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -714,20 +716,19 @@ func parseGround(n *rawNode) (Element, []Point, string, error) {
 		return Element{}, nil, "", fmt.Errorf("slddoc: ground %s: no <path> geometry", n.attr("id"))
 	}
 
-	var anchor Point
+	subpaths, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(subpaths) == 0 || len(subpaths[0]) < 2 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: ground %s: first path has fewer than 2 points", n.attr("id"))
+	}
+	anchor := subpaths[0][0]
 	var orient int
 	if angle, center, ok := parseRotate(n.attr("transform")); ok {
 		anchor, orient = center, angle
-	} else {
-		subpaths, err := parseSubpaths(paths[0].attr("d"))
-		if err != nil {
-			return Element{}, nil, "", err
-		}
-		if len(subpaths) == 0 || len(subpaths[0]) == 0 {
-			return Element{}, nil, "", fmt.Errorf("slddoc: ground %s: empty path", n.attr("id"))
-		}
-		anchor = subpaths[0][0]
 	}
+	port := rotate(subpaths[0][1], anchor, float64(orient))
 
 	return Element{
 		ID:     id,
@@ -739,11 +740,14 @@ func parseGround(n *rawNode) (Element, []Point, string, error) {
 		Y:      anchor.Y,
 		Orient: orient,
 		Ports:  []Port{{Name: "1"}},
-	}, []Point{anchor}, n.attr("data-voltage"), nil
+	}, []Point{port}, n.attr("data-voltage"), nil
 }
 
 // parseGroundSwitch handles shape 54 (ground switch): a single electrical
-// port at the element's own rotation anchor. Real instances appear both
+// port at the stub's free end, where the wire meets it — the first path's
+// own first point ("M x y+yx", see below), rotated about the anchor. (The
+// port used to be the anchor itself, Scale(s, 12) away from the wire end,
+// beyond buildTopology's snapTolerance, so no ground switch connected.) Real instances appear both
 // with and without a rotate() transform (element_54.go only emits one when
 // its own computed angle is non-zero) — when absent, the anchor is
 // recovered from the drawn path's own geometry instead, the same
@@ -774,26 +778,27 @@ func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 		return Element{}, nil, "", err
 	}
 
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: no <path> geometry", n.attr("id"))
+	}
+	subpaths, err := parseSubpaths(paths[0].attr("d"))
+	if err != nil {
+		return Element{}, nil, "", err
+	}
+	if len(subpaths) == 0 || len(subpaths[0]) < 2 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: first path has fewer than 2 points", n.attr("id"))
+	}
+	p0, p1 := subpaths[0][0], subpaths[0][1]
 	var anchor Point
 	var orient int
 	if angle, center, ok := parseRotate(n.attr("transform")); ok {
 		anchor, orient = center, angle
 	} else {
-		paths := elementPaths(n)
-		if len(paths) == 0 {
-			return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: no <path> geometry", n.attr("id"))
-		}
-		subpaths, err := parseSubpaths(paths[0].attr("d"))
-		if err != nil {
-			return Element{}, nil, "", err
-		}
-		if len(subpaths) == 0 || len(subpaths[0]) < 2 {
-			return Element{}, nil, "", fmt.Errorf("slddoc: ground switch %s: first path has fewer than 2 points", n.attr("id"))
-		}
-		p0, p1 := subpaths[0][0], subpaths[0][1]
 		tail := p0.Y - p1.Y
 		anchor = Point{X: p0.X, Y: p0.Y - tail*12/9}
 	}
+	port := rotate(p0, anchor, float64(orient))
 
 	return Element{
 		ID:     id,
@@ -806,7 +811,7 @@ func parseGroundSwitch(n *rawNode) (Element, []Point, string, error) {
 		Orient: orient,
 		State:  parseState(n),
 		Ports:  []Port{{Name: "1"}},
-	}, []Point{anchor}, n.attr("data-voltage"), nil
+	}, []Point{port}, n.attr("data-voltage"), nil
 }
 
 // parseShortCircuiter handles shape 398 (short-circuiter): a single
@@ -827,11 +832,13 @@ func parseShortCircuiter(n *rawNode) (Element, []Point, string, error) {
 	// own doc comment); only the visible group's own data-state is real.
 	var state *int
 	found := false
+	var visible *rawNode
 	for _, g := range n.childrenTagged("g") {
 		if g.attr("visibility") != "visible" {
 			continue
 		}
 		found = true
+		visible = g
 		if v, err := strconv.Atoi(g.attr("data-state")); err == nil {
 			state = &v
 		}
@@ -845,6 +852,17 @@ func parseShortCircuiter(n *rawNode) (Element, []Point, string, error) {
 	if !ok {
 		return Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: no rotate() transform (unrotated short-circuiters are not yet supported)", n.attr("id"))
 	}
+	// The port is the bottom lead's free end, where the wire meets it: the
+	// visible group's first path starts there ("M x y+y1", element_398.go's
+	// pathTop), rotated about the anchor. Falls back to the anchor.
+	port := center
+	if visible != nil {
+		if ps := visible.childrenTagged("path"); len(ps) > 0 {
+			if subs, err := parseSubpaths(ps[0].attr("d")); err == nil && len(subs) > 0 && len(subs[0]) > 0 {
+				port = rotate(subs[0][0], center, float64(angle))
+			}
+		}
+	}
 	return Element{
 		ID:     id,
 		Class:  ClassShortCircuiter,
@@ -856,7 +874,7 @@ func parseShortCircuiter(n *rawNode) (Element, []Point, string, error) {
 		Orient: angle,
 		State:  state,
 		Ports:  []Port{{Name: "1"}},
-	}, []Point{center}, n.attr("data-voltage"), nil
+	}, []Point{port}, n.attr("data-voltage"), nil
 }
 
 // substationAnchorFromGeometry recovers PackageSubstation's (385) or
