@@ -125,7 +125,7 @@ func TestRender_StaticIsAbsoluteInteractiveIsLocal(t *testing.T) {
 		`data-type="41" transform="rotate(90,100,50)">`,
 		`<path d="M 93 43 h 14 v 14 h -14 z"`,
 		`data-type="47">`, // unrotated: no transform at all
-		`<circle cx="118" cy="150" r="22"`,
+		`<circle cx="120" cy="150" r="22"`,
 		`<polyline points="0,0 10,0" style="fill:none;stroke:#962896;stroke-width:1" data-name="W1" data-type="21" data-voltage="#962896" id="3" />`,
 	} {
 		if !strings.Contains(s, want) {

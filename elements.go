@@ -1399,7 +1399,7 @@ func parsePowerTransformer(n *rawNode) (Element, []Point, []string, error) {
 	// fallback for a missing rotate()) — unlike those, a transformer's own
 	// untransformed anchor isn't simply its first path's own raw point or
 	// two ports' own midpoint, so it's recovered below, once the winding
-	// count is known, by reversing transformerWindingOffset against the
+	// count is known, by reversing xsde2svgWindingZeroOffset against the
 	// first circle's own absolute center.
 	angle, center, hasRotate := parseRotate(n.attr("transform"))
 
@@ -1513,7 +1513,7 @@ func parsePowerTransformer(n *rawNode) (Element, []Point, []string, error) {
 		}
 	}
 	if !hasRotate {
-		off0X, off0Y := transformerWindingOffset(len(circles), 0)
+		off0X, off0Y := xsde2svgWindingZeroOffset(len(circles))
 		center = Point{X: circles[0].center.X - off0X, Y: circles[0].center.Y - off0Y}
 	}
 	// A transformer's own anchor and each winding's own lead tip are

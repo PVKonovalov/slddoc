@@ -632,21 +632,21 @@ func TestRender_PowerTransformer2Winding(t *testing.T) {
 	for _, want := range []string{
 		`<!-- Power transformer:47 -->`,
 		`<g id="7" data-name="T-1" data-voltage="gray" data-type="47" data-editor-kind="element" transform="translate(100,100) rotate(0)">`,
-		// Winding 0 (delta, #962896): circle at local (+18,0), leg to
-		// (+50,0) (circle edge 18+22=40, plus a 10-unit lead — chosen so
-		// the tip lands on the 10-unit grid; see transformerLegLength's
+		// Winding 0 (delta, #962896): circle at local (+20,0), leg to
+		// (+50,0) (circle edge 20+22=42, plus an 8-unit lead — chosen so
+		// the tip lands on the 10-unit grid; see transformerLeadLength's
 		// own doc comment), and the delta triangle M(cx,cy-5) l(5,11)
 		// l(-11,0) z.
-		`<circle cx="18" cy="0" r="22" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
-		`<path d="M 40 0 L 50 0" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
-		`<path d="M 18 -5 l 5 11 l -11 0 z" style="fill:none;stroke:#962896;stroke-width:1" />`,
+		`<circle cx="20" cy="0" r="22" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
+		`<path d="M 42 0 L 50 0" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
+		`<path d="M 20 -5 l 5 11 l -11 0 z" style="fill:none;stroke:#962896;stroke-width:1" />`,
 		// Winding 1 (wye-with-neutral + solid grounding, #965000): circle
-		// at local (-18,0), leg to (-50,0), the 4-spoke wyeN glyph, and a
+		// at local (-20,0), leg to (-50,0), the 4-spoke wyeN glyph, and a
 		// grounding mark just past the neutral spoke's own tip.
-		`<circle cx="-18" cy="0" r="22" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
-		`<path d="M -40 0 L -50 0" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
-		`<path d="M -18 0 l -7 -7 M -18 0 l 7 -7 M -18 0 l 0 7 M -18 0 l 7 0" style="fill:none;stroke:#965000;stroke-width:1" />`,
-		`<path d="M -8 0 v 4 M -13 4 h 10 M -11 7 h 6 M -9 10 h 2" style="fill:none;stroke:#965000;stroke-width:1" />`,
+		`<circle cx="-20" cy="0" r="22" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
+		`<path d="M -42 0 L -50 0" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
+		`<path d="M -20 0 l -7 -7 M -20 0 l 7 -7 M -20 0 l 0 7 M -20 0 l 7 0" style="fill:none;stroke:#965000;stroke-width:1" />`,
+		`<path d="M -10 0 v 4 M -15 4 h 10 M -13 7 h 6 M -11 10 h 2" style="fill:none;stroke:#965000;stroke-width:1" />`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("2-winding power transformer missing %q: %s", want, out)
@@ -661,10 +661,10 @@ func TestRender_PowerTransformer2Winding(t *testing.T) {
 }
 
 // TestRender_PowerTransformer2WindingAutotransformerTap checks the tap's
-// own real terminal (transformerTapOffset, local (0,-50) — grid-aligned
+// own real terminal (transformerTapOffset, local (0,-70) — grid-aligned
 // and independent of Windings[0]'s own circle position) and the arc
 // connecting it to Windings[0]'s own circle, for the case where that
-// circle sits off-center (dX=18, the 2-winding default) rather than
+// circle sits off-center (dX=20, the 2-winding default) rather than
 // directly below the tap the way a 3/4-winding transformer's own
 // top-positioned winding 0 does — the case that surfaced a real
 // connectivity bug (see RELEASE.md): a real user reported the tap arc
@@ -691,21 +691,21 @@ func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		// Winding 0's own circle at local (+18,0) (the 2-winding default).
-		`<circle cx="18" cy="0" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
-		// The tap's own real terminal: stub from (0,-50) down to (0,-30),
+		// Winding 0's own circle at local (+20,0) (the 2-winding default).
+		`<circle cx="20" cy="0" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// The tap's own real terminal: stub from (0,-70) down to (0,-50),
 		// still directly above the *anchor* (x=0), not winding 0's own
-		// circle (x=18) — this is what keeps it grid-aligned regardless
+		// circle (x=20) — this is what keeps it grid-aligned regardless
 		// of which winding position the tap ends up decorating. Drawn at
 		// stroke-width 2, matching every regular winding lead — this is a
 		// real electrical lead, not a thinner decorative line.
-		`<path d="M 0 -50 L 0 -30" style="fill:none;stroke:teal;stroke-width:2" />`,
-		// The connecting arc sweeps from (0,-30), radius 40, to a point on
+		`<path d="M 0 -70 L 0 -50" style="fill:none;stroke:teal;stroke-width:2" />`,
+		// The connecting arc sweeps from (0,-50), radius 40, to a point on
 		// winding 0's own circle rim 50° up from its own top, offset
 		// toward whichever side the circle sits on (right, here, since
-		// winding 0 sits at +18) — a broad, smooth sweep past the
+		// winding 0 sits at +20) — a broad, smooth sweep past the
 		// circle's own top rather than a tight loop landing dead center.
-		`<path d="M 0 -30 A 40 40 0 0 1 35 -14" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M 0 -50 A 40 40 0 0 1 37 -14" style="fill:none;stroke:teal;stroke-width:2" />`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("2-winding autotransformer tap missing %q: %s", want, out)
@@ -743,36 +743,36 @@ func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
 
 	for _, want := range []string{
 		// Winding 0 (top, default terminal for a 3-winding transformer):
-		// circle at local (0,-25), the tap stub+arc, and the regulation
+		// circle at local (0,-30), the tap stub+arc, and the regulation
 		// arrow (centered on the element's own anchor, teal — winding 0's
 		// own color, since it's the one with TapChanger set).
-		`<circle cx="0" cy="-25" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
-		// Winding 0's own real lead (top, legLen 13 — chosen so
-		// topShift(25)+radius(22)+13=60 lands on the 10-unit grid), drawn
+		`<circle cx="0" cy="-30" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// Winding 0's own real lead (top, transformerLeadLength 8 —
+		// topShift(30)+radius(22)+8=60 lands on the 10-unit grid), drawn
 		// in addition to (not instead of) its own tap decoration below.
-		`<path d="M 0 -47 L 0 -60" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		`<path d="M 0 -52 L 0 -60" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
 		// The autotransformer's own extra "line" terminal
 		// (transformerTapOffset): a real, connectable point at local
-		// (0,-50) — always directly above the anchor regardless of
+		// (0,-70) — always directly above the anchor regardless of
 		// winding count, so it lands on the grid the same way a
 		// top-positioned winding's own lead does — with a short stub
-		// down to (0,-30) and a broad radius-40 arc sweeping to a point
-		// on winding 0's own circle rim 50° up from its own top (17,-39)
+		// down to (0,-50) and a broad radius-40 arc sweeping to a point
+		// on winding 0's own circle rim 50° up from its own top (17,-44)
 		// — offset from dead-center-top even though winding 0 itself has
 		// no horizontal offset of its own (dX=0 for a 3-winding's own top
 		// winding), since the landing angle is independent of that.
-		`<path d="M 0 -50 L 0 -30" style="fill:none;stroke:teal;stroke-width:2" />`,
-		`<path d="M 0 -30 A 40 40 0 0 1 17 -39" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M 0 -70 L 0 -50" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M 0 -50 A 40 40 0 0 1 17 -44" style="fill:none;stroke:teal;stroke-width:2" />`,
 		`<path d="M -25 25 L 25 -25" style="fill:none;stroke:teal;stroke-width:1" />`,
 		`<path d="M 28 -23 l -5 -5 l 7 -2 z" style="fill:teal;stroke:teal;stroke-width:1" />`,
 		// Windings 1/2 (right/left, matching the non-auto 3-winding
 		// default) carry no tap decoration of their own, and their own
-		// legLen (10 — xShift(18)+radius(22)+10=50, also grid-aligned)
-		// differs from winding 0's own.
-		`<circle cx="18" cy="0" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
-		`<path d="M 40 0 L 50 0" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
-		`<circle cx="-18" cy="0" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
-		`<path d="M -40 0 L -50 0" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
+		// legLen (8 — transformerGridShift(20)+radius(22)+8=50, also
+		// grid-aligned) differs from winding 0's own.
+		`<circle cx="20" cy="0" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
+		`<path d="M 42 0 L 50 0" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
+		`<circle cx="-20" cy="0" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
+		`<path d="M -42 0 L -50 0" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("autotransformer missing %q: %s", want, out)
@@ -805,18 +805,16 @@ func TestRender_PowerTransformer4Winding(t *testing.T) {
 
 	for _, want := range []string{
 		`<circle cx="0" cy="-20" r="22"`, // top
-		`<circle cx="0" cy="18" r="22"`,  // bottom
-		`<circle cx="-29" cy="0" r="22"`, // left
-		`<circle cx="29" cy="0" r="22"`,  // right
-		// Each winding's own lead tip lands on the 10-unit grid despite
-		// each position using its own distinct legLen: top uses 8
-		// (vertShift(20)+radius(22)+8=50), bottom uses 10
-		// (xShift(18)+radius(22)+10=50 — winding 1 reuses xShift), and
-		// left/right use 9 (sideShift(29)+radius(22)+9=60).
-		`L 0 -50`, // top:    -20-22-8  = -50
-		`L 0 50`,  // bottom:  18+22+10 =  50
-		`L -60 0`, // left:   -29-22-9  = -60
-		`L 60 0`,  // right:   29+22+9  =  60
+		`<circle cx="0" cy="20" r="22"`,  // bottom
+		`<circle cx="-30" cy="0" r="22"`, // left
+		`<circle cx="30" cy="0" r="22"`,  // right
+		// Every circle offset is a multiple of 10 (xsde2svg's 18 and 29
+		// widened to 20 and 30) and every lead is 8 long, so each tip
+		// lands on the 10-unit grid.
+		`L 0 -50`, // top:    -20-22-8 = -50
+		`L 0 50`,  // bottom:  20+22+8 =  50
+		`L -60 0`, // left:   -30-22-8 = -60
+		`L 60 0`,  // right:   30+22+8 =  60
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("4-winding power transformer missing %q: %s", want, out)
@@ -837,12 +835,12 @@ func TestRender_PowerTransformer4Winding(t *testing.T) {
 // for writeObjectLink's own arrow, after an earlier version of *that*
 // function was caught rendering thousands of units off despite a passing
 // but circular test): for winding 0 of a 2-winding transformer at anchor
-// (100,100), Orient 90, local circle center (18,0), a wye glyph's own
+// (100,100), Orient 90, local circle center (20,0), a wye glyph's own
 // first spoke tip is at local offset (-7,-7) from that center, i.e. the
-// raw local point (11,-7). Composing the inner rotate(-90,18,0) then the
-// outer translate(100,100) rotate(90) by hand: (11,-7) rotates to (11,7)
-// around the pivot (18,0), then the outer transform sends that to
-// (93,111) — exactly the winding's own global circle center (100,118)
+// raw local point (13,-7). Composing the inner rotate(-90,20,0) then the
+// outer translate(100,100) rotate(90) by hand: (13,-7) rotates to (13,7)
+// around the pivot (20,0), then the outer transform sends that to
+// (93,113) — exactly the winding's own global circle center (100,120)
 // plus the *original*, unrotated offset (-7,-7), confirming the glyph's
 // own on-screen shape truly doesn't rotate with the transformer.
 func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
@@ -864,10 +862,10 @@ func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.Contains(out, `<g transform="rotate(-90,18,0)">`) {
+	if !strings.Contains(out, `<g transform="rotate(-90,20,0)">`) {
 		t.Fatalf("winding 0's own glyph should be wrapped in a counter-rotating <g>: %s", out)
 	}
-	if !strings.Contains(out, "<path d=\"M 18 0 l -7 -7 M 18 0 l 7 -7 M 18 0 l 0 7\" style=\"fill:none;stroke:teal;stroke-width:1\" />\n</g>") {
+	if !strings.Contains(out, "<path d=\"M 20 0 l -7 -7 M 20 0 l 7 -7 M 20 0 l 0 7\" style=\"fill:none;stroke:teal;stroke-width:1\" />\n</g>") {
 		t.Errorf("the glyph itself should still be drawn in its own ordinary local coordinates, closed by the counter-rotating </g>: %s", out)
 	}
 
@@ -875,8 +873,8 @@ func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
 	// position from the two composed transforms, rather than trusting
 	// the transform strings are correct by construction.
 	innerAngle := -90 * math.Pi / 180
-	localTip := Point{X: 11, Y: -7} // winding 0's own spoke tip, local (18-7, 0-7)
-	pivot := Point{X: 18, Y: 0}
+	localTip := Point{X: 13, Y: -7} // winding 0's own spoke tip, local (20-7, 0-7)
+	pivot := Point{X: 20, Y: 0}
 	rel := Point{X: localTip.X - pivot.X, Y: localTip.Y - pivot.Y}
 	rotatedRel := Point{
 		X: rel.X*math.Cos(innerAngle) - rel.Y*math.Sin(innerAngle),
@@ -892,8 +890,8 @@ func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
 	onScreen := Point{X: afterOuterRotate.X + 100, Y: afterOuterRotate.Y + 100}
 
 	const eps = 0.01
-	if math.Abs(onScreen.X-93) > eps || math.Abs(onScreen.Y-111) > eps {
-		t.Errorf("spoke tip on-screen = (%.4f,%.4f), want (93,111)", onScreen.X, onScreen.Y)
+	if math.Abs(onScreen.X-93) > eps || math.Abs(onScreen.Y-113) > eps {
+		t.Errorf("spoke tip on-screen = (%.4f,%.4f), want (93,113)", onScreen.X, onScreen.Y)
 	}
 }
 
@@ -1254,5 +1252,20 @@ func TestRender_BackgroundPlaceholder(t *testing.T) {
 				t.Errorf("RenderFragments: want %q in %s", c.want, frags[1])
 			}
 		})
+	}
+}
+
+// TestRender_PowerTransformerSideLeadsOnGrid checks every 2- and 4-winding
+// winding, and a 3-winding side winding, ends on the 10-unit grid whichever
+// way it is led.
+func TestRender_PowerTransformerSideLeadsOnGrid(t *testing.T) {
+	for _, c := range []struct{ count, i int }{{2, 0}, {2, 1}, {3, 0}, {3, 1}, {3, 2}, {4, 0}, {4, 1}, {4, 2}, {4, 3}} {
+		cx, cy := transformerWindingOffset(c.count, c.i)
+		for _, dir := range []TerminalDirection{TerminalTop, TerminalBottom, TerminalLeft, TerminalRight} {
+			x, y := transformerLegEndpoint(cx, cy, dir, transformerLeadLength)
+			if math.Mod(x, 10) != 0 || math.Mod(y, 10) != 0 {
+				t.Errorf("%d-winding winding %d %s tip (%v,%v) off the grid", c.count, c.i, dir, x, y)
+			}
+		}
 	}
 }

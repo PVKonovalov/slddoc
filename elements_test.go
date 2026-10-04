@@ -1819,3 +1819,26 @@ func TestParseShortCircuiterPortAtLeadEnd(t *testing.T) {
 		t.Errorf("ports = %v, want [(839,545)]", ports)
 	}
 }
+
+// TestParsePowerTransformer_UnrotatedAnchorUsesXsde2svgOffsets checks an
+// unrotated transformer's anchor is recovered with xsde2svg's own winding-0
+// offset (0,-25 for 3 windings), not this editor's widened grid one.
+func TestParsePowerTransformer_UnrotatedAnchorUsesXsde2svgOffsets(t *testing.T) {
+	n := parseFirst(t, `
+<g id="6" data-name="T-3" data-type="47" >
+<circle cx="200" cy="175" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />
+<path d="M 200 153 v -13" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />
+<circle cx="218" cy="200" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<path d="M 240 200 h 10" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />
+<circle cx="182" cy="200" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />
+<path d="M 160 200 h -10" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />
+</g>`)
+
+	el, _, _, err := parsePowerTransformer(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el.X != 200 || el.Y != 200 {
+		t.Errorf("anchor = (%v,%v), want (200,200)", el.X, el.Y)
+	}
+}

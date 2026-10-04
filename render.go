@@ -2495,57 +2495,39 @@ func writeObjectLink(w io.Writer, c Connector, color, code string, mode RenderMo
 // PowerTransformer always uses the one true default set below.
 const (
 	transformerRadius     = 22                    // baseRadius
-	transformerXShift     = 18                    // int(baseRadius/1.2) — 2-winding and 3-winding side-circle offset
-	transformerTopShift   = 25                    // int(baseRadius*1.16) — 3-winding top-circle offset (real source: -25.52 truncated toward zero)
-	transformerSideShift  = 29                    // 4-winding left/right-circle offset
-	transformerVertShift  = 20                    // 4-winding top-circle offset (bottom reuses transformerXShift, matching real source exactly)
+	transformerGridShift  = 20                    // 2-/3-winding side and 4-winding bottom-circle offset: xsde2svg's int(baseRadius/1.2)=18, widened onto the grid
+	transformerTopShift   = 30                    // 3-winding top-circle offset: xsde2svg's int(baseRadius*1.16)=25, widened onto the grid
+	transformerSideShift  = 30                    // 4-winding left/right-circle offset: xsde2svg's 29, widened onto the grid
+	transformerVertShift  = 20                    // 4-winding top-circle offset
 	transformerGlyphShift = transformerRadius / 3 // wye/wyeN spoke length (int division, matching element_47.go exactly)
 	transformerArrowSize  = 20
 	transformerArrowShift = 5
 )
 
-// transformerLegLength returns winding index i's own leg length, for a
-// transformer with the given real winding count — chosen so that, for
-// that winding's own *default* TerminalDirection (defaultTerminal), the
-// lead tip's own distance from the anchor (transformerWindingOffset ±
-// transformerRadius ± this) is always an exact multiple of
-// diagramOps.ts's own default 10-unit grid, the same way every other
-// shape's own fixed-offset terminal already does — without this, a
-// freshly placed transformer's own anchor lands on-grid (the editor's own
-// generic click-to-place snap) but its own lead tip never did, forcing a
-// short non-orthogonal jog into an otherwise-orthogonal routed wire (see
-// this package's own RELEASE.md for the real screenshot that surfaced
-// this). Real xsde2svg itself varies its own leg length by
-// direction/WindingNo too (h=11, h+lenShift=13, hLegs=10, hLegsTop=13) —
-// unlike that convention, which exists for its own cosmetic reasons, this
-// one is driven purely by which of the fixed offset constants above
-// (transformerXShift/TopShift/SideShift/VertShift) that winding's own
-// circle uses, each paired with whichever length makes
-// offset+transformerRadius+length divisible by 10. A winding whose own
-// Terminal is overridden away from its own default direction can still
-// land off-grid on the axis perpendicular to its own chosen direction
-// (that axis inherits the winding's own raw, non-grid-multiple offset
-// instead) — a real but narrower residual gap than the one this fixes.
-func transformerLegLength(count, i int) float64 {
+// transformerLeadLength is every winding's lead length past its circle
+// edge. Every circle offset (transformerWindingOffset) is a multiple of 10
+// — xsde2svg's own 18, 25 and 29 widened to 20, 30 and 30 — so with the
+// radius of 22 every lead tip lands on the editor's default 10-unit grid,
+// whichever direction the winding is led. Without this, a freshly placed
+// transformer's own anchor lands on-grid but its lead tip doesn't, forcing
+// a short non-orthogonal jog into an otherwise-orthogonal routed wire (see
+// this package's RELEASE.md).
+const transformerLeadLength = 8
+
+// xsde2svgWindingZeroOffset is winding 0's circle-center offset as real
+// xsde2svg draws it (element_47.go), before this editor widened the offsets
+// onto the grid. Extract uses it to recover an unrotated transformer's
+// anchor from a real exported file's first circle.
+func xsde2svgWindingZeroOffset(count int) (float64, float64) {
 	switch count {
 	case 2:
-		return 10 // transformerXShift(18)+radius(22)+10 = 50
+		return 18, 0
 	case 3:
-		if i == 0 {
-			return 13 // transformerTopShift(25)+radius(22)+13 = 60
-		}
-		return 10 // transformerXShift(18)+radius(22)+10 = 50
+		return 0, -25
 	case 4:
-		switch i {
-		case 0:
-			return 8 // transformerVertShift(20)+radius(22)+8 = 50
-		case 1:
-			return 10 // transformerXShift(18)+radius(22)+10 = 50 (winding 1 reuses transformerXShift — see transformerWindingOffset)
-		default:
-			return 9 // transformerSideShift(29)+radius(22)+9 = 60
-		}
+		return 0, -20
 	}
-	return 10
+	return 0, 0
 }
 
 // transformerWindingOffset returns real winding index i's own local
@@ -2560,24 +2542,24 @@ func transformerWindingOffset(count, i int) (float64, float64) {
 	switch count {
 	case 2:
 		if i == 0 {
-			return transformerXShift, 0
+			return transformerGridShift, 0
 		}
-		return -transformerXShift, 0
+		return -transformerGridShift, 0
 	case 3:
 		switch i {
 		case 0:
 			return 0, -transformerTopShift
 		case 1:
-			return transformerXShift, 0
+			return transformerGridShift, 0
 		default:
-			return -transformerXShift, 0
+			return -transformerGridShift, 0
 		}
 	case 4:
 		switch i {
 		case 0:
 			return 0, -transformerVertShift
 		case 1:
-			return 0, transformerXShift
+			return 0, transformerGridShift
 		case 2:
 			return -transformerSideShift, 0
 		default:
@@ -2627,7 +2609,7 @@ func defaultTerminal(count, i int) TerminalDirection {
 // transformerLegEndpoint returns a winding's own lead tip — its real
 // electrical terminal, matching parsePowerTransformer's own "final point
 // of a two-point lead path" extraction convention — given its own circle
-// center, lead direction, and own leg length (transformerLegLength).
+// center, lead direction, and lead length (transformerLeadLength).
 func transformerLegEndpoint(cx, cy float64, dir TerminalDirection, legLen float64) (float64, float64) {
 	switch dir {
 	case TerminalTop:
@@ -2744,12 +2726,13 @@ func writeGroundingMark(w io.Writer, cx, cy float64, grounding NeutralGrounding,
 // instance's own external HV lead. Always directly above the anchor
 // (local x=0), regardless of winding count or Windings[0]'s own dX, so it
 // lands on the 10-unit grid by construction the same way every other
-// fixed-offset terminal in this package does — unlike Windings[0]'s own
+// fixed-offset terminal in this package does; at -70 it sits above a 3- or
+// 4-winding top winding's own lead tip (-60 / -50) — unlike Windings[0]'s own
 // circle position, which the tap's real xsde2svg counterpart is *not*
 // anchored to (confirmed by reading element_47.go's own isAutoTrans i==0
 // branch: its own dX/dY default to 0, i.e. the transformer's own overall
 // anchor, not whatever dX a later real circle ends up at).
-const transformerTapOffsetY = -50
+const transformerTapOffsetY = -70
 
 // writeAutotransformerTap draws an autotransformer's own extra terminal
 // (transformerTapOffset) as a short stub, plus a curved arc sweeping down
@@ -2837,7 +2820,7 @@ func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, 
 
 		fmt.Fprintf(w, "<circle cx=\"%s\" cy=\"%s\" r=\"%d\" style=\"fill:none;stroke:%s;stroke-width:2\" data-voltage=\"%s\" />\n",
 			fmtNum(cx), fmtNum(cy), transformerRadius, esc(color), esc(color))
-		writeTransformerLeg(w, cx, cy, dir, transformerLegLength(count, i), color)
+		writeTransformerLeg(w, cx, cy, dir, transformerLeadLength, color)
 		// The connection-scheme glyph (and its own grounding mark) is
 		// wrapped in a counter-rotating <g> — rotate(-Orient) around the
 		// winding's own circle center — so it stays upright on screen
@@ -2886,9 +2869,8 @@ func writePowerTransformer(w io.Writer, e Element, voltageColor map[int]string, 
 
 	if e.VectorGroupLabel != "" {
 		// A fixed cosmetic offset below the symbol's own lowest possible
-		// extent (transformerRadius, plus the largest transformerLegLength
-		// value any winding count/position ever returns, plus a small
-		// margin) — this text's own position isn't part of the electrical
+		// extent (transformerRadius, plus a 13-unit allowance for the
+		// lead, plus a small margin) — this text's own position isn't part of the electrical
 		// geometry, so it doesn't need to be grid-aligned the way a lead
 		// tip does.
 		const vectorGroupLabelOffset = transformerRadius + 13 + 14
