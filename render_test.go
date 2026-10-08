@@ -451,7 +451,9 @@ func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
 }
 
 // TestRender_ObjectLinkMatchesXsde2svgFormat checks Static output against a
-// real xsde2svg instance exactly: <polyline points="1980,300 1980,252"
+// real xsde2svg instance, now wrapped in one <g id data-type="28"
+// data-voltage> (see writeObjectLink) that carries the polyline's former
+// attributes. The real instance, as older xsde2svg wrote it flat: <polyline points="1980,300 1980,252"
 // style="fill:none;stroke:#00A0F0;;stroke-width:2" data-type="28"
 // id="2120" data-voltage="#00A0F0" /> plus its separate arrowhead <path
 // d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2"
@@ -476,8 +478,10 @@ func TestRender_ObjectLinkMatchesXsde2svgFormat(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{
-		`<polyline points="1980,300 1980,252" style="fill:none;stroke:#00A0F0;stroke-width:2" data-type="28" data-voltage="#00A0F0" id="2120" />`,
-		`<path d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2" transform="rotate(180,1980,252)" />`,
+		`<g id="2120" data-type="28" data-voltage="#00A0F0">
+<polyline points="1980,300 1980,252" style="fill:none;stroke:#00A0F0;stroke-width:2" />
+<path d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2" transform="rotate(180,1980,252)" />
+</g>`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Static object link missing %q:\n%s", want, out)
@@ -1267,5 +1271,55 @@ func TestRender_PowerTransformerSideLeadsOnGrid(t *testing.T) {
 				t.Errorf("%d-winding winding %d %s tip (%v,%v) off the grid", c.count, c.i, dir, x, y)
 			}
 		}
+	}
+}
+
+// TestRender_ObjectLinkIsOneGroup checks that an object link's line and
+// arrowhead form a single item: Interactive puts data-editor-kind on the
+// group (so the canvas selects the link from its arrowhead too), the
+// polyline has no id of its own, data-layer lands on the group (so the
+// arrowhead hides with its layer), and a saved Static file extracts back
+// to the same connector.
+func TestRender_ObjectLinkIsOneGroup(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &Diagram{
+		Width: 400, Height: 400,
+		Layers:         []Layer{{ID: BaseLayer, Name: "Base"}, {ID: 3, Name: "Links"}},
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "110kV", Color: "#00A0F0"}},
+		Connectors: []Connector{{
+			ID: 77, Kind: KindLinkToObject, Voltage: 1, Name: "Link-77", Layer: 3,
+			Points: []Point{{X: 100, Y: 300}, {X: 100, Y: 200}, {X: 200, Y: 200}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `<g data-layer="3" id="77" data-type="28" data-name="Link-77" data-voltage="#00A0F0" data-editor-kind="connector">`) {
+		t.Errorf("Interactive object link should be one <g> with id, data-editor-kind and data-layer: %s", out)
+	}
+	if strings.Count(out, `id="77"`) != 1 {
+		t.Errorf("only the group should carry the id: %s", out)
+	}
+	if !regexp.MustCompile(`<g [^>]*id="77"[^>]*>\n<polyline [^>]*/>\n<path [^>]*/>\n</g>`).MatchString(out) {
+		t.Errorf("polyline and arrowhead should both sit inside the group: %s", out)
+	}
+
+	buf.Reset()
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := Extract(buf.Bytes(), "link.svg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Connectors) != 1 {
+		t.Fatalf("extracted %d connectors, want 1: %+v", len(got.Connectors), got.Connectors)
+	}
+	c := got.Connectors[0]
+	if c.ID != 77 || c.Kind != KindLinkToObject || c.Name != "Link-77" || c.Layer != 3 || len(c.Points) != 3 || c.Points[2] != (Point{X: 200, Y: 200}) {
+		t.Errorf("extracted connector = %+v", c)
 	}
 }

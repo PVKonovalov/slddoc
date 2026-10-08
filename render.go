@@ -2440,36 +2440,62 @@ func writeNamedLine(w io.Writer, c Connector, color string, code string, mode Re
 const objectLinkStrokeWidth = 2
 
 // writeObjectLink draws a KindLinkToObject connector (shape 28,
-// "Связь с объектом"/"Object link" in the xsde2svg catalog) — the same
-// flat, un-wrapped <polyline> convention as KindBusWork (writePolyline),
-// just at objectLinkStrokeWidth instead of 1px, plus a triangular
-// arrowhead marking direction: a separate sibling <path>, carrying no
-// data-type/data-name/id of its own, positioned at the connector's own
-// final point and rotated to continue pointing in the direction its last
-// segment was already travelling. The arrowhead's own local geometry (base
-// corners at local (±7,0), apex at local (0,12), i.e. drawn "pointing
-// south" before rotation) is reverse-engineered from a real instance, but
-// — unlike that real instance's own single rotate(angle,cx,cy) around an
-// absolute-coordinate path — placed with the same translate-then-rotate
-// convention renderElement already uses for every symbol template
-// (transform="translate(x,y) rotate(angle)", local-origin path data): a
-// bare rotate() around an arbitrary point is *not* equivalent to that when
-// the path's own coordinates are local rather than pre-rotation-absolute
-// (confirmed the hard way — an earlier version of this function paired
-// local coordinates with a bare rotate(angle,cx,cy) and silently rendered
-// the arrowhead thousands of units away from its own connector). The
-// rotate() angle formula (atan2(-dx,dy), which reproduces a real
-// instance's own effective 180° for a straight-up final segment) was also
-// reverse-engineered from that same real instance.
+// "Связь с объектом"/"Object link" in the xsde2svg catalog): one
+// <g id data-type="28" [data-name] data-voltage> wrapping the line (a bare
+// <polyline> at objectLinkStrokeWidth, no attributes of its own beyond its
+// style) and a triangular arrowhead <path> at the connector's final point,
+// rotated to continue the direction its last segment travels. The group
+// makes the pair one item, like an overhead/cable line's <g>: the canvas
+// hit-tests and selects the arrowhead too, a fragment patch or delete
+// replaces both, and data-layer (withLayerAttr, the root node) hides both.
+// xsde2svg (internal/modus/element_28.go) writes the same group since
+// 1.4.21; older exports draw the two as flat siblings, which Extract still
+// reads (parseConnector takes a <g>'s first <polyline> or a bare one).
+//
+// The arrowhead's local geometry (base corners at local (±7,0), apex at
+// local (0,12), "pointing south" before rotation) and its rotate() angle,
+// atan2(-dx,dy) (a straight-up final segment gives 180, as real instances
+// read), are reverse-engineered from a real instance. It is placed with
+// translate(x,y) rotate(angle) and local path data like every symbol
+// template; Static's absolute pass rewrites that into xsde2svg's
+// rotate(angle,cx,cy) around absolute coordinates. (A bare rotate around
+// an arbitrary point is not equivalent with local coordinates: an earlier
+// version paired the two and drew the arrowhead thousands of units off.)
 func writeObjectLink(w io.Writer, c Connector, color, code string, mode RenderMode) {
-	writePolyline(w, c.ID, "connector", c.Points, color, c.Dashed, objectLinkStrokeWidth, wireDataAttrs(c, color, code), mode)
+	if color == "" {
+		color = "black"
+	}
+	nameAttr := ""
+	if c.Name != "" {
+		nameAttr = fmt.Sprintf(" data-name=\"%s\"", esc(c.Name))
+	}
+	editorAttr := ""
+	if mode == Interactive {
+		editorAttr = " data-editor-kind=\"connector\""
+	}
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"%s\"%s data-voltage=\"%s\"%s>\n", c.ID, esc(code), nameAttr, esc(color), editorAttr)
+	// id 0: the group carries the id, so the polyline writes none.
+	writePolyline(w, 0, "connector", c.Points, color, c.Dashed, objectLinkStrokeWidth, "", mode)
+	if mode == Static {
+		// absolutize rewrites a top-level fragment, not one nested in this
+		// group, so the arrowhead is converted on its own.
+		var arrow bytes.Buffer
+		writeObjectLinkArrow(&arrow, c.Points, color)
+		writeAbsolute(w, arrow.String())
+	} else {
+		writeObjectLinkArrow(w, c.Points, color)
+	}
+	io.WriteString(w, "</g>\n")
+}
 
-	if len(c.Points) < 2 {
+// writeObjectLinkArrow is writeObjectLink's arrowhead at the last of pts;
+// nothing for fewer than two points or a zero-length final segment.
+func writeObjectLinkArrow(w io.Writer, pts []Point, color string) {
+	if len(pts) < 2 {
 		return
 	}
-	from := c.Points[len(c.Points)-2]
-	to := c.Points[len(c.Points)-1]
-	dy := to.Y - from.Y
+	from := pts[len(pts)-2]
+	to := pts[len(pts)-1]
 	if from.X == to.X && from.Y == to.Y {
 		return
 	}
@@ -2478,13 +2504,9 @@ func writeObjectLink(w io.Writer, c Connector, color, code string, mode RenderMo
 	// atan2's own result by a full turn (180 here becomes -180) — cosmetic
 	// only (they're the same rotation), but real corpus instances always
 	// read "180", not "-180", for a straight-up final segment.
-	angle := math.Atan2(from.X-to.X, dy) * 180 / math.Pi
-	arrowColor := color
-	if arrowColor == "" {
-		arrowColor = "black"
-	}
+	angle := math.Atan2(from.X-to.X, to.Y-from.Y) * 180 / math.Pi
 	fmt.Fprintf(w, "<path d=\"M 7 0 l -7 12 l -7 -12 z\" style=\"fill:none;stroke:%s;stroke-width:%s\" transform=\"translate(%s,%s) rotate(%s)\" />\n",
-		esc(arrowColor), fmtNum(objectLinkStrokeWidth), fmtNum(to.X), fmtNum(to.Y), fmtNum(angle))
+		esc(color), fmtNum(objectLinkStrokeWidth), fmtNum(to.X), fmtNum(to.Y), fmtNum(angle))
 }
 
 // Power transformer (shape 47) geometry constants, transcribed from real
