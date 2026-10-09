@@ -387,9 +387,84 @@ func parseElementID(n *rawNode) (int, error) {
 }
 
 // horizontalTwoPortShapes are the two-port shapes whose xsde2svg formula
-// draws them horizontally before any rotation (Resistor, Thyristor), unlike the rest,
-// so an unrotated instance's own Orient is 0, not orientFromPorts' 90.
-var horizontalTwoPortShapes = map[string]bool{"156": true, "157": true}
+// draws them horizontally before any rotation (Resistor, Thyristor, Wire
+// jump; their base.xml terminals lie on y = 0), unlike the rest, so an
+// unrotated instance's own Orient is 0, not orientFromPorts' 90, and a
+// rotated one's lead tips lie along x.
+var horizontalTwoPortShapes = map[string]bool{"156": true, "157": true, "14": true}
+
+// wideBodyTwoPortShapes are the two-port shapes whose body is wider than
+// their lead-to-lead span (a Capacitor's 24-wide plates over a 20-unit
+// span), so the dominant-axis search would pick the body's corners instead
+// of the lead tips: their axis is always their own vertical one.
+var wideBodyTwoPortShapes = map[string]bool{"388": true}
+
+// leadTips returns the two ends of a two-port drawing along axis ('x' or
+// 'y'): at the lowest and highest coordinate on that axis. Across it, the
+// two leads are in line, so each tip takes:
+//   - the middle of the points drawn there, when both ends span the same
+//     range (a single point each, or a Starter's two 10-wide bars, whose
+//     middles, not ends, are the terminals);
+//   - otherwise a coordinate drawn at both ends (a Thyristor's right end
+//     also carries its gate lead, (20,-20) beside (20,0), so its tip is 0);
+//   - failing that, the middle of the points at that end.
+func leadTips(pts []Point, axis byte) (Point, Point) {
+	along := func(p Point) float64 {
+		if axis == 'x' {
+			return p.X
+		}
+		return p.Y
+	}
+	across := func(p Point) float64 {
+		if axis == 'x' {
+			return p.Y
+		}
+		return p.X
+	}
+	lo, hi := along(pts[0]), along(pts[0])
+	for _, p := range pts[1:] {
+		lo = math.Min(lo, along(p))
+		hi = math.Max(hi, along(p))
+	}
+	at := func(v float64) []float64 {
+		var cs []float64
+		for _, p := range pts {
+			if along(p) == v {
+				cs = append(cs, across(p))
+			}
+		}
+		return cs
+	}
+	span := func(cs []float64) (float64, float64) {
+		mn, mx := cs[0], cs[0]
+		for _, c := range cs[1:] {
+			mn, mx = math.Min(mn, c), math.Max(mx, c)
+		}
+		return mn, mx
+	}
+	a, b := at(lo), at(hi)
+	aMin, aMax := span(a)
+	bMin, bMax := span(b)
+	ca, cb := (aMin+aMax)/2, (bMin+bMax)/2
+	if aMin != bMin || aMax != bMax {
+	shared:
+		for _, x := range a {
+			for _, y := range b {
+				if x == y {
+					ca, cb = x, x
+					break shared
+				}
+			}
+		}
+	}
+	point := func(along, across float64) Point {
+		if axis == 'x' {
+			return Point{X: along, Y: across}
+		}
+		return Point{X: across, Y: along}
+	}
+	return point(lo, ca), point(hi, cb)
+}
 
 // parseTwoPortDevice handles every two-terminal shape documented at the top
 // of this file: 41, 43, 42, 162, 71, 49, 33, 34, 35, 203, 388, 156. voltage is
@@ -409,18 +484,34 @@ func parseTwoPortDevice(n *rawNode, class Class, shape string) (Element, []Point
 	if err != nil {
 		return Element{}, nil, "", err
 	}
-	p1, p2, err := extremesAlongDominantAxis(pts)
-	if err != nil {
-		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: %w", n.attr("id"), err)
+	if len(pts) < 2 {
+		return Element{}, nil, "", fmt.Errorf("slddoc: element %s: need at least 2 points, got %d", n.attr("id"), len(pts))
 	}
+	// The ports are the lead tips along the shape's own axis. Under a
+	// rotate() the drawing is in the shape's unrotated frame, so that axis
+	// is known (vertical, or horizontal for horizontalTwoPortShapes);
+	// unrotated, the drawing's longer extent tells it, except for a shape
+	// whose body is wider than its span.
+	rotateAngle, rotateCenter, rotated := parseRotate(n.firstAttrDescendant("transform"))
+	axis := byte('y')
+	switch {
+	case wideBodyTwoPortShapes[shape]:
+	case rotated && horizontalTwoPortShapes[shape]:
+		axis = 'x'
+	case !rotated:
+		if a, b, err := extremesAlongDominantAxis(pts); err == nil && math.Abs(b.X-a.X) >= math.Abs(b.Y-a.Y) {
+			axis = 'x'
+		}
+	}
+	p1, p2 := leadTips(pts, axis)
 
 	var anchor Point
 	var orient int
 	ports := []Point{p1, p2}
-	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
-		anchor, orient = center, normalizeOrient(angle)
-		ports[0] = rotate(p1, center, float64(angle))
-		ports[1] = rotate(p2, center, float64(angle))
+	if rotated {
+		anchor, orient = rotateCenter, normalizeOrient(rotateAngle)
+		ports[0] = rotate(p1, rotateCenter, float64(rotateAngle))
+		ports[1] = rotate(p2, rotateCenter, float64(rotateAngle))
 	} else {
 		anchor = midpoint(p1, p2)
 		orient = orientFromPorts(p1, p2)
@@ -1010,8 +1101,15 @@ func parsePackageSubstation(n *rawNode) (Element, []Point, string, error) {
 		Fill:         substationFill(n),
 		PropertyText: substationPropertyText(n),
 		Ports:        []Port{{Name: "1"}},
-	}, []Point{anchor}, n.attr("data-voltage"), nil
+	}, []Point{rotate(Point{X: anchor.X, Y: anchor.Y - packageSubstationLead}, anchor, float64(angle))}, n.attr("data-voltage"), nil
 }
+
+// packageSubstationLead is how far above its center a PackageSubstation's
+// (385) lead ends: its 36-unit box's top edge (18) plus the drawn 4-unit
+// lead, the terminal base.xml declares at (0,-22). The port goes there, not
+// at the center: real drawings connect at the lead tip (often straight onto
+// a disconnector's terminal 2 units away, within snapTolerance).
+const packageSubstationLead = 22
 
 // substationFill recovers PackageSubstation's/EnclosedSubstation's own
 // Abonent-driven Fill from whichever of its own drawn shapes is the one
@@ -1066,8 +1164,27 @@ func parseEnclosedSubstation(n *rawNode) (Element, []Point, string, error) {
 		State:        substationState(n),
 		Fill:         substationFill(n),
 		PropertyText: substationPropertyText(n),
-		Ports:        []Port{{Name: "1"}},
-	}, []Point{anchor}, n.attr("data-voltage"), nil
+		Ports:        []Port{{Name: "1"}, {Name: "2"}, {Name: "3"}, {Name: "4"}},
+	}, enclosedSubstationPorts(anchor, angle), n.attr("data-voltage"), nil
+}
+
+// enclosedSubstationSide is how far from its center each of an
+// EnclosedSubstation's (386) four terminals lies: the middle of each side of
+// its 36-unit box, widened onto the grid (base.xml's terminals).
+const enclosedSubstationSide = 20
+
+// enclosedSubstationPorts returns an EnclosedSubstation's four terminals,
+// top, right, bottom, left (base.xml's order), rotated with it. It draws no
+// lead, and real drawings feed it from any side, so whichever side a wire
+// reaches binds there and the others stay free.
+func enclosedSubstationPorts(anchor Point, angle int) []Point {
+	r := float64(enclosedSubstationSide)
+	local := []Point{{X: 0, Y: -r}, {X: r, Y: 0}, {X: 0, Y: r}, {X: -r, Y: 0}}
+	ports := make([]Point, len(local))
+	for i, p := range local {
+		ports[i] = rotate(Point{X: anchor.X + p.X, Y: anchor.Y + p.Y}, anchor, float64(angle))
+	}
+	return ports
 }
 
 // substationPropertyText reads PackageSubstation's/EnclosedSubstation's own

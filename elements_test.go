@@ -1842,3 +1842,206 @@ func TestParsePowerTransformer_UnrotatedAnchorUsesXsde2svgOffsets(t *testing.T) 
 		t.Errorf("anchor = (%v,%v), want (200,200)", el.X, el.Y)
 	}
 }
+
+// portPoints returns the coordinates of el's port nodes in d, in port order.
+func portPoints(t *testing.T, d *Diagram, el Element) []Point {
+	t.Helper()
+	var pts []Point
+	for _, p := range el.Ports {
+		found := false
+		for _, n := range d.Nodes {
+			if n.ID == p.Node {
+				pts = append(pts, Point{X: n.X, Y: n.Y})
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("element %d port %s: node %d missing", el.ID, p.Name, p.Node)
+		}
+	}
+	return pts
+}
+
+// TestTwoPortLeadTips_RealCorpus checks that a two-port device's ports are
+// its lead tips, from real corpus markup with the wires ending on them:
+//   - a Capacitor (388, PS_35kV_Nevskaya id 2138): plates 24 wide over a
+//     20-unit span, rotated 90°. The dominant-axis search used to pick the
+//     plate corners, (1135,288)/(1135,312), leaving both wires unconnected;
+//   - a Starter (76, PS_110kV_Zarya id 3), unrotated: its ends are 10-wide
+//     bars, whose middles, not ends, are the terminals;
+//   - a Wire jump (14, CRP_Yupiter_i_Profbumaga id 4429), drawn horizontally
+//     in its own frame and rotated -90°.
+func TestTwoPortLeadTips_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="1030,300 1120,300" style="fill:none;stroke:#965000;stroke-width:1 "  data-type="21" id="2178" data-voltage="#965000" />
+<polyline points="1140,300 1250,300" style="fill:none;stroke:#965000;stroke-width:1 "  data-type="21" id="2179" data-voltage="#965000" />
+<path d="M 1130 290 v 5 m -12 0 h 24 m -24 10 h 24  m -12 0 v 5" style="fill:none;stroke:#965000;stroke-width:1" transform="rotate(90,1130,300)" id="2138" data-voltage="#965000" data-type="388" />
+<g id="3" data-type="76" data-name="ЛР-110 л.Злч-2"  data-voltage="#00A0F0" >
+<path d="M 761 468 h 10 m 0 20 h -10" style="stroke:#00A0F0;stroke-width:1" />
+<path d="M 766 470 v 16" data-state="1" style="stroke:#00A0F0;stroke-width:1" />
+</g>
+<path d="M 1350 830 L 1337 830 A 7 7 0 0 0 1323 830 L 1310 830" style="fill:none;stroke:#962896;stroke-width:1" transform="rotate(-90,1330,830)" id="4429" data-voltage="#962896" data-type="14" />
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 {
+		t.Fatalf("failed=%v", report.Failed)
+	}
+	want := map[int]struct {
+		orient int
+		ports  []Point
+	}{
+		2138: {90, []Point{{X: 1140, Y: 300}, {X: 1120, Y: 300}}},
+		3:    {0, []Point{{X: 766, Y: 468}, {X: 766, Y: 488}}},
+		4429: {-90, []Point{{X: 1330, Y: 850}, {X: 1330, Y: 810}}}, // drawn one size step up: tips at ±20
+	}
+	for _, el := range d.Elements {
+		w, ok := want[el.ID]
+		if !ok {
+			continue
+		}
+		got := portPoints(t, d, el)
+		if el.Orient != w.orient || len(got) != 2 || !samePointSet(got, w.ports) {
+			t.Errorf("element %d (shape %s): orient %d ports %v, want orient %d ports %v", el.ID, el.Shape, el.Orient, got, w.orient, w.ports)
+		}
+	}
+	// Both capacitor wires now end on its ports.
+	var cap Element
+	for _, el := range d.Elements {
+		if el.ID == 2138 {
+			cap = el
+		}
+	}
+	for _, c := range d.Connectors {
+		if c.From != cap.Ports[0].Node && c.From != cap.Ports[1].Node && c.To != cap.Ports[0].Node && c.To != cap.Ports[1].Node {
+			t.Errorf("wire %d isn't connected to the capacitor", c.ID)
+		}
+	}
+}
+
+// samePointSet reports whether a and b hold the same points, in any order.
+func samePointSet(a, b []Point) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	used := make([]bool, len(b))
+	for _, p := range a {
+		hit := false
+		for i, q := range b {
+			if !used[i] && math.Abs(p.X-q.X) < 1e-6 && math.Abs(p.Y-q.Y) < 1e-6 {
+				used[i], hit = true, true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPackageSubstationPortAtLeadTip_RealCorpus checks that a Package
+// substation's (385) one port is its lead tip, 22 above its center (here
+// rotated -90°, so 22 to its left), not its center: real drawings connect it
+// there, as Distributed grid id 148789014 meets a disconnector's terminal 2
+// units away, which used to leave it unconnected.
+func TestPackageSubstationPortAtLeadTip_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="3000" height="3000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="2460,1810 2490,1810" style="fill:none;stroke:#962896;;stroke-width:1" data-name="Отп. на КТП ФГУ Упр.дор оп.10-2" data-voltage="#962896" data-type="22" id="148789018" />
+<g id="148789015" data-type="162" data-name="ТР-10 ФГУ Упрюдор Л-17" >
+<g transform="rotate(-270,2500,1810)" >
+<path d="M 2500 1816 v -13" data-state="1" style="fill:none;stroke:#962896;stroke-width:1" data-voltage="#962896" />
+<path d="M 2496 1801 h 8 m 0 18 h -8" style="fill:none;stroke:#962896;stroke-width:1" data-voltage="#962896" />
+<path d="M 2500 1801 v -1 M 2500 1819 v 1" style="fill:none;stroke:#962896;stroke-width:1" data-voltage="#962896" />
+</g>
+</g>
+<g id="148789014" data-voltage="#962896" transform="rotate(-90,2530,1810)" data-type="385" >
+<rect x="2512" y="1792" width="36" height="36" style="fill:none;stroke:#962896;;stroke-width:1" />
+<rect x="2521" y="1792" width="18" height="36" style="fill:#962896;stroke:#962896;;stroke-width:1" />
+<line x1="2530" y1="1792" x2="2530" y2="1788" style="fill:#962896;stroke:#962896;;stroke-width:1" />
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 {
+		t.Fatalf("failed=%v", report.Failed)
+	}
+	var sub, dis Element
+	for _, el := range d.Elements {
+		switch el.ID {
+		case 148789014:
+			sub = el
+		case 148789015:
+			dis = el
+		}
+	}
+	if len(sub.Ports) != 1 || len(dis.Ports) != 2 {
+		t.Fatalf("substation %+v, disconnector %+v", sub, dis)
+	}
+	if p := portPoints(t, d, sub)[0]; math.Abs(p.X-2508) > snapTolerance || p.Y != 1810 {
+		t.Errorf("substation port at %v, want its lead tip near (2508,1810)", p)
+	}
+	if sub.Ports[0].Node != dis.Ports[0].Node && sub.Ports[0].Node != dis.Ports[1].Node {
+		t.Errorf("substation isn't connected to the disconnector: %+v / %+v", sub.Ports, dis.Ports)
+	}
+}
+
+// TestEnclosedSubstationFourSides_RealCorpus checks that an Enclosed
+// substation (386) binds the wire feeding it on whichever side it arrives,
+// from real corpus markup (Distributed grid): id 148785150, unrotated, is
+// fed from below; id 148790539, rotated 180°, from above (its own bottom).
+// With one top terminal both stayed unconnected.
+func TestEnclosedSubstationFourSides_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="3000" height="3000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="1210,1030 1210,1020" style="fill:none;stroke:#962896;;stroke-width:1" data-name="Л-1 ПС Марево" data-voltage="#962896" data-type="22" id="148785152" />
+<g id="148785150" data-voltage="#962896"  data-type="386" >
+<rect x="1192" y="982" width="36" height="36" style="fill:none;stroke:#962896;;stroke-width:1" />
+<path d="M 1210 1000 m -18 -18 h 36 l -18 36 l -18 -36" style="fill:#962896;stroke:#962896;;stroke-width:1" />
+</g>
+<polyline points="2530,1360 2530,1380" style="fill:none;stroke:#962896;;stroke-width:1" data-name="Л-4 ПС Марево" data-voltage="#962896" data-type="22" id="148791168" />
+<g id="148790539" data-voltage="#962896" transform="rotate(180,2530,1400)" data-type="386" >
+<rect x="2512" y="1382" width="36" height="36" style="fill:none;stroke:#962896;;stroke-width:1" />
+<path d="M 2530 1400 m -18 -18 h 36 l -18 36 l -18 -36" style="fill:none;stroke:#962896;;stroke-width:1" />
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 {
+		t.Fatalf("failed=%v", report.Failed)
+	}
+	feeds := map[int]int{148785150: 148785152, 148790539: 148791168}
+	for _, el := range d.Elements {
+		wire, ok := feeds[el.ID]
+		if !ok {
+			continue
+		}
+		if len(el.Ports) != 4 {
+			t.Fatalf("substation %d has %d ports, want 4", el.ID, len(el.Ports))
+		}
+		var c Connector
+		for _, x := range d.Connectors {
+			if x.ID == wire {
+				c = x
+			}
+		}
+		connected := false
+		for _, p := range el.Ports {
+			if p.Node == c.From || p.Node == c.To {
+				connected = true
+			}
+		}
+		if !connected {
+			t.Errorf("substation %d isn't connected to its feeding wire %d", el.ID, wire)
+		}
+	}
+}
