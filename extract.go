@@ -329,6 +329,22 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			labelNodes = append(labelNodes, n)
 			continue
 		}
+		if dt == "391" {
+			// RTF text: xsde2svg already strips the formatting and draws the
+			// plain lines as one <text> with a <tspan> per further line, the
+			// same markup a Text label (5) has, so it becomes one. It has no
+			// id and no data-name: a fresh id, attached to nothing.
+			if t := firstTextChild(n); t != nil {
+				lbl := textToLabel(t)
+				if lbl.Text != "" {
+					lbl.ID = nextSynthID
+					nextSynthID++
+					lbl.Layer = resolveLayer(n.attr("data-layer"))
+					d.Labels = append(d.Labels, lbl)
+				}
+			}
+			continue
+		}
 		if dt == "134" {
 			if dd, ok := parseDigitalDevice(n); ok {
 				d.DigitalDevices = append(d.DigitalDevices, dd)
