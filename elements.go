@@ -1358,6 +1358,31 @@ func parseOnePortDevice(n *rawNode, class Class, shape string) (Element, []Point
 	}, []Point{anchor}, voltage, nil
 }
 
+// parseHalfChassis handles shape 52 (Half-chassis, element_52.go): a stem
+// with a chevron at its end and a second, detached chevron below it, the
+// other half of the coupling. Anchor and Orient as parseOnePortDevice (the
+// stem's free end, the path's first point, rotated through any rotate()).
+// It has two ports: that stem end, and the lower chevron's tip, the
+// drawing's far end along its own vertical axis (leadTips), 20 below the
+// stem end at the default size, rotated with it. The device below the
+// half-chassis meets it there.
+func parseHalfChassis(n *rawNode) (Element, []Point, string, error) {
+	el, ports, voltage, err := parseOnePortDevice(n, ClassHalfChassis, "52")
+	if err != nil {
+		return el, ports, voltage, err
+	}
+	pts, err := allPathPoints(elementPaths(n))
+	if err != nil || len(pts) < 2 {
+		return el, ports, voltage, err
+	}
+	_, tip := leadTips(pts, 'y')
+	if angle, center, ok := parseRotate(n.firstAttrDescendant("transform")); ok {
+		tip = rotate(tip, center, float64(angle))
+	}
+	el.Ports = append(el.Ports, Port{Name: "2"})
+	return el, append(ports, tip), voltage, nil
+}
+
 // parseBooster handles shape 6 (Booster/voltage regulator, see the list
 // at the top of this file). The anchor is the midpoint of the two drawn
 // lead ends, which is also the circle's center and the real source's own

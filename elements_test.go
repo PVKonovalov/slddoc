@@ -2045,3 +2045,37 @@ func TestEnclosedSubstationFourSides_RealCorpus(t *testing.T) {
 		}
 	}
 }
+
+// TestHalfChassisTwoPorts_RealCorpus checks that a Half-chassis (52) has two
+// ports, its stem's free end and its lower chevron's tip, from real corpus
+// markup (KP_55 id 148688844, rotated 180°): the wire from above meets the
+// chevron tip at (800,1160), the one to the fuse below the stem end at
+// (800,1180). With one port, the wire from above stayed unconnected.
+func TestHalfChassisTwoPorts_RealCorpus(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="800,1160 800,990" style="fill:none;stroke:#C25A5A;stroke-width:2 "  data-type="21" id="148688836" data-voltage="#C25A5A" />
+<polyline points="800,1190 800,1180" style="fill:none;stroke:#C25A5A;stroke-width:2 "  data-type="21" id="148690511" data-voltage="#C25A5A" />
+<path d="M 800 1160 v 12 l -4 -4 m 4 4 l 4 -4 m -4 12 l -4 -4 m 4 4 l 4 -4" style="fill:none;stroke:#C25A5A;stroke-width:2" transform="rotate(180,800,1170)" id="148688844" data-voltage="#C25A5A" data-type="52" />
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(d.Elements) != 1 {
+		t.Fatalf("failed=%v elements=%d", report.Failed, len(d.Elements))
+	}
+	el := d.Elements[0]
+	if el.Class != ClassHalfChassis || el.X != 800 || el.Y != 1180 || el.Orient != 180 || len(el.Ports) != 2 {
+		t.Fatalf("half-chassis = %+v, want anchor (800,1180) (the stem end), orient 180, two ports", el)
+	}
+	got := portPoints(t, d, el)
+	if got[0] != (Point{X: 800, Y: 1180}) || got[1] != (Point{X: 800, Y: 1160}) {
+		t.Errorf("ports at %v, want the stem end (800,1180) then the chevron tip (800,1160)", got)
+	}
+	for _, c := range d.Connectors {
+		if c.From != el.Ports[0].Node && c.To != el.Ports[0].Node && c.From != el.Ports[1].Node && c.To != el.Ports[1].Node {
+			t.Errorf("wire %d isn't connected to the half-chassis", c.ID)
+		}
+	}
+}

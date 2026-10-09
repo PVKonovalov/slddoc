@@ -693,7 +693,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			addElement(el, ports, voltage)
 
 		case "52":
-			el, ports, voltage, err := parseOnePortDevice(n, ClassHalfChassis, "52")
+			el, ports, voltage, err := parseHalfChassis(n)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)
