@@ -925,6 +925,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 		}
 	}
 
+	nextSynthID = tapPortsOntoWires(d, bindings, nextSynthID)
 	buildTopology(d, bindings)
 	// append, not assign — d.Labels may already hold addMissingLabel's own
 	// diagnostic entries from earlier in this same loop, which matchLabels
