@@ -1945,10 +1945,10 @@ func samePointSet(a, b []Point) bool {
 }
 
 // TestPackageSubstationPortAtLeadTip_RealCorpus checks that a Package
-// substation's (385) one port is its lead tip, 22 above its center (here
-// rotated -90°, so 22 to its left), not its center: real drawings connect it
-// there, as Distributed grid id 148789014 meets a disconnector's terminal 2
-// units away, which used to leave it unconnected.
+// substation's (385) one port is its lead tip, 20 above its center (here
+// rotated -90°, so 20 to its left), not its center: real drawings connect it
+// there, as Distributed grid id 148789014 meets a disconnector's terminal,
+// which used to leave it unconnected.
 func TestPackageSubstationPortAtLeadTip_RealCorpus(t *testing.T) {
 	const svg = `<?xml version="1.0"?>
 <svg width="3000" height="3000" xmlns="http://www.w3.org/2000/svg">
@@ -1985,8 +1985,8 @@ func TestPackageSubstationPortAtLeadTip_RealCorpus(t *testing.T) {
 	if len(sub.Ports) != 1 || len(dis.Ports) != 2 {
 		t.Fatalf("substation %+v, disconnector %+v", sub, dis)
 	}
-	if p := portPoints(t, d, sub)[0]; math.Abs(p.X-2508) > snapTolerance || p.Y != 1810 {
-		t.Errorf("substation port at %v, want its lead tip near (2508,1810)", p)
+	if p := portPoints(t, d, sub)[0]; p.X != 2510 || p.Y != 1810 {
+		t.Errorf("substation port at %v, want its lead tip (2510,1810)", p)
 	}
 	if sub.Ports[0].Node != dis.Ports[0].Node && sub.Ports[0].Node != dis.Ports[1].Node {
 		t.Errorf("substation isn't connected to the disconnector: %+v / %+v", sub.Ports, dis.Ports)

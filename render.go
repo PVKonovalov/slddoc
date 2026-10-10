@@ -2059,7 +2059,8 @@ func writePowerflowIndicator(w io.Writer, e Element, mode RenderMode) {
 // shape's own two real appearance variants — 0/unset (the common case)
 // draws a 36-unit outer square, an 18-unit-wide rectangle centered inside
 // it, and a short lead stub above the top edge (the real terminal's own
-// local position, (0,-22)); 1 draws a plain flat-topped downward-pointing
+// local position, (0,-20), 2 units above the box on the 10-grid where
+// the source draws 4); 1 draws a plain flat-topped downward-pointing
 // triangle instead, its own apex at local (0,18) — not at the anchor
 // itself, matching the box variant's own center-of-bounding-box anchor
 // semantics exactly, confirmed against that same real corpus file (no
@@ -2112,7 +2113,7 @@ func writePackageSubstation(w io.Writer, e Element, color string, mode RenderMod
 	} else {
 		fmt.Fprintf(w, "<rect x=\"-18\" y=\"-18\" width=\"36\" height=\"36\" style=\"fill:none;stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
 		fmt.Fprintf(w, "<rect x=\"-9\" y=\"-18\" width=\"18\" height=\"36\" style=\"fill:%s;stroke:%s;%sstroke-width:1\" />\n", esc(fill), esc(color), dash)
-		fmt.Fprintf(w, "<line x1=\"0\" y1=\"-18\" x2=\"0\" y2=\"-22\" style=\"stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
+		fmt.Fprintf(w, "<line x1=\"0\" y1=\"-18\" x2=\"0\" y2=\"-20\" style=\"stroke:%s;%sstroke-width:1\" />\n", esc(color), dash)
 	}
 	writeSubstationPropertyText(w, e)
 	fmt.Fprint(w, "</g>\n")

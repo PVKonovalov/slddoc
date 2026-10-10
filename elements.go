@@ -1105,11 +1105,11 @@ func parsePackageSubstation(n *rawNode) (Element, []Point, string, error) {
 }
 
 // packageSubstationLead is how far above its center a PackageSubstation's
-// (385) lead ends: its 36-unit box's top edge (18) plus the drawn 4-unit
-// lead, the terminal base.xml declares at (0,-22). The port goes there, not
-// at the center: real drawings connect at the lead tip (often straight onto
-// a disconnector's terminal 2 units away, within snapTolerance).
-const packageSubstationLead = 22
+// (385) lead ends: its 36-unit box's top edge (18) plus a 2-unit lead, the
+// terminal base.xml declares at (0,-20) on the 10-grid (the source draws a
+// 4-unit lead). The port goes there, not at the center: real drawings
+// connect at the lead tip, often onto a disconnector's terminal right there.
+const packageSubstationLead = 20
 
 // substationFill recovers PackageSubstation's/EnclosedSubstation's own
 // Abonent-driven Fill from whichever of its own drawn shapes is the one
