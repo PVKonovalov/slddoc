@@ -73,6 +73,7 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
   <connectors>      <connector ...>...    ... </connectors>
   <labels>          <label ...>text       ... </labels>
   <digitalDevices>  <digitalDevice .../>  ... </digitalDevices>
+  <history>         <revision .../>       ... </history>
 </diagram>
 ```
 
@@ -247,6 +248,21 @@ text-style attributes as `<label>` (`id`, `layer`, `x`, `y`, `size`, `anchor`,
 | `name` | string | no | SCADA tag/point name (rendered as `data-name`, not displayed) |
 | `value` | string | yes | Placeholder value shown in place of a live reading, e.g. `0.00` |
 | `unit` | string | no | Unit suffix, e.g. `MW`, drawn right after the value |
+
+### 4.8 `<history>` / `<revision>`
+
+The diagram's save history, oldest first. sld-editor's server appends one
+`<revision>` on every save (it keeps the history already on disk, not one sent by
+the client) and keeps only the most recent entries. Not rendered.
+
+| Attribute | Type | Req. | Meaning |
+|---|---|---|---|
+| `time` | RFC 3339 timestamp | yes | When the save happened (UTC) |
+| `ip` | string | no | Client IP address the save came from |
+
+```xml
+<revision time="2026-10-15T10:42:07Z" ip="10.0.3.41"/>
+```
 
 ## 5. Topology
 

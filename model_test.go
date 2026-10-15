@@ -2,7 +2,9 @@ package slddoc
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSaveLoadRoundTrip(t *testing.T) {
@@ -185,6 +187,34 @@ func TestSave_OmitsEmptyPathWrapperTags(t *testing.T) {
 	}
 	if len(got.Labels) != 0 || len(got.Connectors) != 0 || len(got.DigitalDevices) != 0 || len(got.VoltageClasses) != 0 {
 		t.Errorf("everything omitted for being empty should still load back empty, not error: %+v", got)
+	}
+}
+
+func TestSaveLoadRoundTrip_History(t *testing.T) {
+	when := time.Date(2026, 10, 15, 10, 42, 7, 0, time.UTC)
+	d := &Diagram{Width: 10, Height: 10, History: []Revision{{Time: when, IP: "10.0.3.41"}, {Time: when.Add(time.Minute)}}}
+
+	var buf bytes.Buffer
+	if err := d.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `<revision time="2026-10-15T10:42:07Z" ip="10.0.3.41"/>`) {
+		t.Errorf("revision not written as expected:\n%s", buf.String())
+	}
+	got, err := Load(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.History) != 2 || !got.History[0].Time.Equal(when) || got.History[0].IP != "10.0.3.41" || got.History[1].IP != "" {
+		t.Errorf("History = %+v", got.History)
+	}
+
+	buf.Reset()
+	if err := (&Diagram{Width: 10, Height: 10}).Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "history") {
+		t.Errorf("empty history should be omitted:\n%s", buf.String())
 	}
 }
 

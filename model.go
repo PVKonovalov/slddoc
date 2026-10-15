@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"time"
 )
 
 // BaseLayer is the implicit layer every element belongs to when a diagram
@@ -48,6 +49,17 @@ type Diagram struct {
 	Connectors     []Connector     `xml:"connectors>connector" json:"connectors"`
 	Labels         []Label         `xml:"labels>label" json:"labels"`
 	DigitalDevices []DigitalDevice `xml:"digitalDevices>digitalDevice" json:"digitalDevices"`
+
+	// History lists the diagram's saves, oldest first. The editor's server
+	// appends one entry per save; it never affects rendering.
+	History []Revision `xml:"history>revision" json:"history,omitempty"`
+}
+
+// Revision is one save of a diagram: when it happened and the client IP
+// address it came from.
+type Revision struct {
+	Time time.Time `xml:"time,attr" json:"time"`
+	IP   string    `xml:"ip,attr,omitempty" json:"ip,omitempty"`
 }
 
 // EditorSettings is a diagram's own saved editing preferences. It has no
@@ -1151,7 +1163,7 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Element's own tag newly empty, which emptyElement then collapses to
 // self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices|rows|columns|cells|sectors)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices|history|rows|columns|cells|sectors)></[A-Za-z][\w:.-]*>`,
 )
 
 // Save writes d as indented XML.
