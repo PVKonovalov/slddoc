@@ -2,6 +2,7 @@ package slddoc
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -170,6 +171,97 @@ func TestTapPortsOntoWires_LineEntrance(t *testing.T) {
 		}
 		if el.ID == 11 && (el.Ports[0].Node == line.From || el.Ports[0].Node == line.To) {
 			t.Errorf("ground switch mid-span was tapped onto the overhead line")
+		}
+	}
+}
+
+// TestTapWireEndsOntoWires_TJunction checks a buswork T-junction from
+// PS_110kV_Lubnisa: wire 3953 ends on the middle of wire 3961, which runs on
+// unbroken. 3961 is split there and all three pieces share one node. Two
+// wires merely crossing (500 and 501) stay separate.
+func TestTapWireEndsOntoWires_TJunction(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="3000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="1560,575 1560,605" style="fill:none;stroke:#965000;stroke-width:1" data-type="21" id="3961" data-voltage="#965000" />
+<polyline points="1590,595 1560,595" style="fill:none;stroke:#965000;stroke-width:1" data-type="21" id="3953" data-voltage="#965000" />
+<polyline points="100,100 200,100" style="fill:none;stroke:#965000;stroke-width:1" data-type="21" id="500" data-voltage="#965000" />
+<polyline points="150,50 150,150" style="fill:none;stroke:#965000;stroke-width:1" data-type="21" id="501" data-voltage="#965000" />
+</svg>`
+	d, _, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Connectors) != 5 {
+		t.Fatalf("want 3961 split in two (5 connectors), got %+v", d.Connectors)
+	}
+	byID := map[int]Connector{}
+	for _, c := range d.Connectors {
+		byID[c.ID] = c
+	}
+	tap := byID[3953].To
+	var pieces []Connector
+	for _, c := range d.Connectors {
+		if c.ID != 3953 && (c.From == tap || c.To == tap) {
+			pieces = append(pieces, c)
+		}
+	}
+	if len(pieces) != 2 || pieces[0].ID == pieces[1].ID {
+		t.Fatalf("pieces on the junction node %d: %+v", tap, pieces)
+	}
+	for _, c := range pieces {
+		if c.Kind != KindBusWork || c.Voltage != byID[3953].Voltage {
+			t.Errorf("piece %+v lost the wire's kind or voltage", c)
+		}
+	}
+	if a, b := byID[500], byID[501]; a.From == b.From || a.From == b.To || a.To == b.From || a.To == b.To {
+		t.Errorf("crossing wires were joined: %+v %+v", a, b)
+	}
+}
+
+// TestTapWiresThroughJunctions checks a junction point (PS_110kV_Lubnisa 1959)
+// whose dot sits where wire 1997 crosses busbar 2018: the wire is split at the
+// dot and both pieces join the busbar. An overhead line through a dot is split
+// too; wire 1600 crossing the busbar with no dot stays unconnected.
+func TestTapWiresThroughJunctions(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="3000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="1560,365 1560,445" style="fill:none;stroke:#00A0F0;stroke-width:1 "  data-type="21" id="1997" data-voltage="#00A0F0" />
+<polyline points="1440,435 1720,435" style="fill:none;stroke:#00A0F0;stroke-width:4" data-voltage="#00A0F0" data-name="1SEC 110kV" data-type="24" id="2018" />
+<polyline points="1600,400 1600,470" style="fill:none;stroke:#00A0F0;stroke-width:1 "  data-type="21" id="1600" data-voltage="#00A0F0" />
+<polyline points="100,100 900,100" style="fill:none;stroke:#965000;stroke-width:1" data-name="Л-1" data-voltage="#965000" data-type="22" id="500" />
+<circle cx="1560" cy="435" r="3" style="fill:#12161d;stroke:#00A0F0;stroke-width:1" data-type="7" id="1959" data-voltage="#12161d" />
+<circle cx="500" cy="100" r="3" style="fill:#12161d;stroke:#965000;stroke-width:1" data-type="7" id="1960" data-voltage="#12161d" />
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 {
+		t.Fatalf("failed: %v", report.Failed)
+	}
+	junction := map[int]int{}
+	for _, e := range d.Elements {
+		if e.Class == ClassJunctionPoint {
+			junction[e.ID] = e.Ports[0].Node
+		}
+	}
+	onNode := func(node int) (ids []int, kinds []ConnectorKind) {
+		for _, c := range d.Connectors {
+			if c.From == node || c.To == node {
+				ids, kinds = append(ids, c.ID), append(kinds, c.Kind)
+			}
+		}
+		return
+	}
+	if ids, _ := onNode(junction[1959]); len(ids) != 2 || !slices.Contains(ids, 1997) {
+		t.Errorf("wires on the busbar junction: %v, want 1997's two pieces", ids)
+	}
+	if ids, kinds := onNode(junction[1960]); len(ids) != 2 || kinds[0] != KindOverheadLine || kinds[1] != KindOverheadLine {
+		t.Errorf("wires on the line junction: %v %v, want the line's two pieces", ids, kinds)
+	}
+	for _, c := range d.Connectors {
+		if c.ID == 1600 && (c.From == junction[1959] || c.To == junction[1959]) {
+			t.Errorf("wire 1600 crossing the busbar without a dot was joined to it")
 		}
 	}
 }

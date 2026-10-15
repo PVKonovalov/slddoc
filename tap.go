@@ -262,3 +262,177 @@ func tapPortsOntoWires(d *Diagram, bindings []portBinding, nextID int) int {
 	}
 	return nextID
 }
+
+// tapWireEndsOntoWires joins each wire end that would otherwise connect to
+// nothing to the wire passing mid-span within snapTolerance of it: a T-junction
+// in buswork, which xsde2svg draws as one wire ending on another that runs on
+// unbroken. An end is free when no port, no other wire end and no busbar lies
+// within snapTolerance of it. The nearest wire (any kind but an overhead line,
+// never the end's own wire) is split there into two connectors, the second
+// with a fresh id (nextID, returned advanced) and the wire's kind, name,
+// voltage, layer and style, and the end moves onto the split point, so
+// buildTopology joins all three. A wire merely crossing another, with no end
+// on it, stays separate. Runs after tapPortsOntoWires.
+func tapWireEndsOntoWires(d *Diagram, bindings []portBinding, nextID int) int {
+	type end struct {
+		conn int
+		last bool
+	}
+	pointOf := func(e end) Point {
+		pts := d.Connectors[e.conn].Points
+		if e.last {
+			return pts[len(pts)-1]
+		}
+		return pts[0]
+	}
+	var ends []end
+	for ci, c := range d.Connectors {
+		if len(c.Points) >= 2 {
+			ends = append(ends, end{ci, false}, end{ci, true})
+		}
+	}
+
+	type cellKey struct{ x, y int }
+	cellOf := func(p Point) cellKey {
+		return cellKey{int(math.Floor(p.X / snapTolerance)), int(math.Floor(p.Y / snapTolerance))}
+	}
+	cells := map[cellKey][]Point{}
+	for _, b := range bindings {
+		cells[cellOf(b.p)] = append(cells[cellOf(b.p)], b.p)
+	}
+	for _, e := range ends {
+		p := pointOf(e)
+		cells[cellOf(p)] = append(cells[cellOf(p)], p)
+	}
+	var buses [][]Point
+	for _, e := range d.Elements {
+		if e.Class == ClassBusBarSection {
+			buses = append(buses, e.Points)
+		}
+	}
+	// The end's own point is in cells too, so a free end finds exactly one
+	// point near it.
+	isFree := func(p Point) bool {
+		k := cellOf(p)
+		n := 0
+		for dx := -1; dx <= 1; dx++ {
+			for dy := -1; dy <= 1; dy++ {
+				for _, q := range cells[cellKey{k.x + dx, k.y + dy}] {
+					if distance(p, q) <= snapTolerance {
+						n++
+					}
+				}
+			}
+		}
+		if n != 1 {
+			return false
+		}
+		for _, pts := range buses {
+			for i := 0; i+1 < len(pts); i++ {
+				if onSegment(p, pts[i], pts[i+1]) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	// Decided up front, from the drawing as it is, as in tapPortsOntoWires.
+	// Kept as points: a split made below may leave an end on another piece
+	// of its wire.
+	var free []Point
+	for _, e := range ends {
+		if p := pointOf(e); isFree(p) {
+			free = append(free, p)
+		}
+	}
+	for _, p := range free {
+		self := end{conn: -1}
+		for ci, c := range d.Connectors {
+			if n := len(c.Points); n >= 2 && (c.Points[0] == p || c.Points[n-1] == p) {
+				self = end{ci, c.Points[n-1] == p}
+				break
+			}
+		}
+		if self.conn < 0 {
+			continue
+		}
+		best := snapTolerance + onSegmentEpsilon
+		var at Point
+		hitConn, hitSeg := -1, -1
+		for ci, c := range d.Connectors {
+			if ci == self.conn || c.Kind == KindOverheadLine || len(c.Points) < 2 {
+				continue
+			}
+			for i := 0; i+1 < len(c.Points); i++ {
+				q := nearestOnSegment(p, c.Points[i], c.Points[i+1])
+				if dist := distance(q, p); dist <= snapTolerance && dist < best {
+					best, at, hitConn, hitSeg = dist, q, ci, i
+				}
+			}
+		}
+		if hitConn < 0 {
+			continue
+		}
+		head, tail := splitPath(d.Connectors[hitConn].Points, hitSeg, at)
+		if len(head) < 2 || len(tail) < 2 {
+			continue
+		}
+		second := d.Connectors[hitConn]
+		second.ID = nextID
+		nextID++
+		second.Points = tail
+		d.Connectors[hitConn].Points = head
+		d.Connectors = append(d.Connectors, second)
+
+		own := d.Connectors[self.conn].Points
+		if self.last {
+			own[len(own)-1] = at
+		} else {
+			own[0] = at
+		}
+	}
+	return nextID
+}
+
+// tapWiresThroughJunctions splits every wire running through a junction point
+// (shape 7, xsde2svg's dot marking that what crosses there is connected) at
+// the dot: a wire whose line passes within snapTolerance of the junction's
+// port, with neither end near it, is cut there into two connectors, the second
+// with a fresh id (nextID, returned advanced) and the wire's kind, name,
+// voltage, layer and style; buildTopology then joins both pieces to the
+// junction. Every such wire is split, an overhead line included, since the dot
+// is an explicit connection. Runs before tapPortsOntoWires, so the junction's
+// port then counts as taken.
+func tapWiresThroughJunctions(d *Diagram, bindings []portBinding, nextID int) int {
+	near := func(a, b Point) bool { return distance(a, b) <= snapTolerance }
+	for _, b := range bindings {
+		if d.Elements[b.elemIdx].Class != ClassJunctionPoint {
+			continue
+		}
+		for ci := 0; ci < len(d.Connectors); ci++ {
+			pts := d.Connectors[ci].Points
+			if len(pts) < 2 || near(pts[0], b.p) || near(pts[len(pts)-1], b.p) {
+				continue
+			}
+			for i := 0; i+1 < len(pts); i++ {
+				at := nearestOnSegment(b.p, pts[i], pts[i+1])
+				if !near(at, b.p) {
+					continue
+				}
+				head, tail := splitPath(pts, i, at)
+				if len(head) < 2 || len(tail) < 2 {
+					break
+				}
+				second := d.Connectors[ci]
+				second.ID = nextID
+				nextID++
+				second.Points = tail
+				d.Connectors[ci].Points = head
+				d.Connectors = append(d.Connectors, second)
+				break
+			}
+		}
+	}
+	return nextID
+}

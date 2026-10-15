@@ -279,6 +279,11 @@ The electrical graph is expressed **only through node ids**:
 - A **junction** (a T-tap into a wire) is a single node referenced by three or
   more connector ends. The editor splits the tapped wire into two connectors
   at the tap so that the junction is always at a connector end, never mid-span.
+  `Extract` does the same for an xsde2svg T-junction, a device lead or a wire
+  end lying within 5 units of another wire's line mid-span: that wire is split
+  there (an overhead line only for a grounding device at its substation end).
+  A `JunctionPoint` (shape 7, the dot) is an explicit connection: `Extract`
+  splits every wire running through it (overhead lines included) at the dot.
 - An **unconnected wire end** is a node that no port references and only one
   connector end uses. This is legal (a wire left to be finished later).
 - **Busbars** (`BusBarSection`) are one electrical node along their whole
