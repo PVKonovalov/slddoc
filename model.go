@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"time"
 )
@@ -284,10 +285,10 @@ const (
 	// arrowhead is always drawn at the second point, or both when
 	// DoubleHeaded).
 	ClassArrow Class = "Arrow"
-	// ClassCircle (shape 4) is a decorative annotation ellipse — same
-	// non-electrical status and same two-opposite-corners Points
-	// convention as ClassRectangle (order-independent, unlike
-	// ClassArrow's), just rendered as an <ellipse> instead of a <rect>.
+	// ClassCircle (shape 4) is a decorative annotation circle, with the same
+	// non-electrical status as ClassRectangle: its center is X/Y and its size
+	// Radius (any positive value; 0 means defaultCircleRadius). It has no
+	// Points; Load converts an older file's two bounding-box corners.
 	ClassCircle Class = "Circle"
 	// ClassPackageSubstation (shape 385) is a facility-level pictogram
 	// (Package transformer substation, KTP) — not switchgear in the usual
@@ -669,7 +670,8 @@ type Element struct {
 	// on that fallback. Also used by PostPole (shape 292) for its own
 	// drawn circle radius, doubling as the Square variant's own
 	// half-width — the real source's own Radius/w constants always share
-	// one value, so this schema doesn't need a second field for it.
+	// one value, so this schema doesn't need a second field for it. Also a
+	// Circle's (shape 4) radius.
 	Radius float64 `xml:"radius,attr,omitempty" json:"radius,omitempty"`
 	// Fill is a Rectangle's (shape 3) or Circle's (shape 4) own interior
 	// color — free-text like Lamp's own FillOff/FillOn, not a VoltageClass
@@ -1186,6 +1188,26 @@ func (d *Diagram) Save(w io.Writer) error {
 	return err
 }
 
+// defaultCircleRadius is a Circle's radius when it has none.
+const defaultCircleRadius = 20
+
+// circleFromCorners converts a Circle stored the older way, by two
+// bounding-box corners in Points, to center (X/Y) and Radius: the box's
+// center and half its larger side. One with neither gets
+// defaultCircleRadius. Any other Circle is returned unchanged.
+func circleFromCorners(e Element) Element {
+	if len(e.Points) >= 2 {
+		p0, p1 := e.Points[0], e.Points[1]
+		e.X, e.Y = (p0.X+p1.X)/2, (p0.Y+p1.Y)/2
+		e.Radius = math.Max(math.Abs(p1.X-p0.X), math.Abs(p1.Y-p0.Y)) / 2
+		e.Points = nil
+	}
+	if e.Radius <= 0 {
+		e.Radius = defaultCircleRadius
+	}
+	return e
+}
+
 // Load reads a Diagram previously written by Save.
 func Load(r io.Reader) (*Diagram, error) {
 	var d Diagram
@@ -1212,6 +1234,9 @@ func Load(r io.Reader) (*Diagram, error) {
 	for i, e := range d.Elements {
 		if e.Shape == shapeDisconnectorLegacy {
 			d.Elements[i].Shape = shapeDisconnector
+		}
+		if e.Class == ClassCircle {
+			d.Elements[i] = circleFromCorners(e)
 		}
 	}
 	return &d, nil

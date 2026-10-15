@@ -1242,25 +1242,13 @@ func writeRect(w io.Writer, e Element, mode RenderMode, code, defaultStroke stri
 		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), code, editorAttr)
 }
 
-// writeCircle draws a Circle (shape 4) as a single flat <ellipse>, the
-// same "no wrapping <g>" convention writeRectangle uses — matching the
-// real xsde2svg source (internal/modus/element_4.go: canvas.Ellipse), which
-// likewise emits a bare <ellipse> rather than a <g>-wrapped symbol. Its own
-// two Points (any order, same as writeRectangle's own) are normalized into
-// a center (their own midpoint) plus a positive rx/ry, the same way that
-// source's own x0/y0/w/h computation does. Fill/Stroke/StrokeWidth fall
-// back exactly the same way writeRectangle's own do — this shape shares
-// that one's entire color/width model, just rendered as an ellipse instead
-// of a rect. A Circle with fewer than 2 Points draws nothing, same as
-// writeRectangle.
+// writeCircle draws a Circle (shape 4) as a bare <ellipse> with rx = ry =
+// Radius about its center X/Y, as xsde2svg's element_4.go emits it (no
+// wrapping <g>). A Circle still holding old bounding-box Points, or no
+// radius, is converted first (circleFromCorners). Fill/Stroke/StrokeWidth
+// fall back as writeRectangle's do.
 func writeCircle(w io.Writer, e Element, mode RenderMode) {
-	if len(e.Points) < 2 {
-		return
-	}
-	p0, p1 := e.Points[0], e.Points[1]
-	cx, cy := (p0.X+p1.X)/2, (p0.Y+p1.Y)/2
-	rx, ry := math.Abs(p1.X-p0.X)/2, math.Abs(p1.Y-p0.Y)/2
-
+	e = circleFromCorners(e)
 	fill := e.Fill
 	if fill == "" {
 		fill = "none"
@@ -1278,8 +1266,9 @@ func writeCircle(w io.Writer, e Element, mode RenderMode) {
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
+	r := fmtNum(e.Radius)
 	fmt.Fprintf(w, "<ellipse id=\"%d\" cx=\"%s\" cy=\"%s\" rx=\"%s\" ry=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"4\"%s />\n",
-		e.ID, fmtNum(cx), fmtNum(cy), fmtNum(rx), fmtNum(ry), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
+		e.ID, fmtNum(e.X), fmtNum(e.Y), r, r, esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
 }
 
 // buttonFontSize is a Button's (113) own PropertyText size — fixed, not

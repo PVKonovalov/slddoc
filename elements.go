@@ -1852,14 +1852,10 @@ func parseRect(n *rawNode, id int, class Class, shape string) (Element, error) {
 	}, nil
 }
 
-// parseCircle handles shape 4 (Circle): a purely decorative annotation
-// ellipse (see ClassCircle's own doc comment) — no Ports are ever created
-// for one. Real instances are a bare <ellipse cx cy rx ry style>, no
-// wrapping <g> (matching writeCircle's own convention). Its own two Points
-// are the ellipse's own bounding box corners, (cx-rx,cy-ry) and
-// (cx+rx,cy+ry) — the same "two opposite corners" convention
-// parseRectangle already uses, so Circle reuses every one of Rectangle's
-// own Points-based frontend/backend machinery unchanged.
+// parseCircle handles shape 4 (Circle): a decorative annotation circle (see
+// ClassCircle) with no Ports. Real instances are a bare <ellipse cx cy rx ry
+// style>, no wrapping <g>. The center is (cx, cy) and the radius the larger
+// of rx/ry, so the rare non-round one becomes a circle.
 func parseCircle(n *rawNode) (Element, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -1885,7 +1881,7 @@ func parseCircle(n *rawNode) (Element, error) {
 		Fill:        styleProp(style, "fill"),
 		Stroke:      styleProp(style, "stroke"),
 		StrokeWidth: strokeWidth,
-		Points:      []Point{{X: cx - rx, Y: cy - ry}, {X: cx + rx, Y: cy + ry}},
+		Radius:      math.Max(rx, ry),
 	}, nil
 }
 

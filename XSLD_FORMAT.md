@@ -332,8 +332,12 @@ instead of a symbol template around `x`/`y`:
 | Line (1), Road (335) | 2+ vertices, polyline |
 | Polygon (16), Container (310) | 3+ vertices, closed polygon |
 | Arc (9) | exactly 2: start, end (see `rx`/`ry`/`largeArc`/`sweep`) |
-| Rectangle (3), SmallWindow (319), Picture (11), Circle (4), Button (113), WindowIcon (302), Table (312) | 2 opposite corners of the bounding box, any order |
+| Rectangle (3), SmallWindow (319), Picture (11), Button (113), WindowIcon (302), Table (312) | 2 opposite corners of the bounding box, any order |
 | Arrow (2) | start, end — order matters, the arrowhead is at the second point |
+
+A Circle (4) has no `<geometry>`: its center is `x`/`y` and its size `radius` (any positive value, e.g. `0.5`;
+0 = 20). Older files store it by two bounding-box corners; `Load` converts them to the box's center and half its
+larger side.
 
 ### 6.3 Decorative styling
 
@@ -347,7 +351,7 @@ instead of a symbol template around `x`/`y`:
 | `rx`, `ry` | number | Arc | The SVG arc's own radii |
 | `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
-| `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10) | Circle radius (PostPole square: half-width) |
+| `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10), Circle (default 20) | Circle radius (PostPole square: half-width) |
 | `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), Button, WindowIcon, Table, Container (caption) | Centered overlay text |
 | `textColor` | color | Button (default white), WindowIcon (default black), Container (default white; `none` is an invisible caption), PowerflowIndicator, Table (default black) | Text / glyph color |
 | `bold` | bool | Button, WindowIcon | Bold overlay text |
@@ -459,7 +463,8 @@ extendable per site); this is the default set.
 | Polygon | 16 | — | decorative; `<geometry>` |
 | Container | 310 | — | decorative; `<geometry>`, caption `propertyText` + `text*` |
 | Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
-| Rectangle / Circle / Arrow | 3 / 4 / 2 | — | decorative; `<geometry>` |
+| Rectangle / Arrow | 3 / 2 | — | decorative; `<geometry>` |
+| Circle | 4 | — | decorative; center `x`/`y`, `radius` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText` |
 | AutomationDevice | 103 | — | decorative two-state tile; `<geometry>`, `state` (1 On, else Off), `fillOff`/`fillOn`, `propertyText`/`propertyTextOn`, `textColor`/`textColorOn`, `stroke` (border, default black), `textSize` (default 12), `bold` |
 | WindowIcon | 302 | — | decorative; `<geometry>`, `propertyText`; fixed 1px border |
