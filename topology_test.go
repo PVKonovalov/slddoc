@@ -175,9 +175,8 @@ func TestTapPortsOntoWires_LineEntrance(t *testing.T) {
 	}
 }
 
-// TestTapWireEndsOntoWires_TJunction checks a buswork T-junction from
-// PS_110kV_Lubnisa: wire 3953 ends on the middle of wire 3961, which runs on
-// unbroken. 3961 is split there and all three pieces share one node. Two
+// TestTapWireEndsOntoWires_TJunction checks a buswork T-junction: wire 3953
+// ends on the middle of wire 3961, which runs on unbroken. 3961 is split there and all three pieces share one node. Two
 // wires merely crossing (500 and 501) stay separate.
 func TestTapWireEndsOntoWires_TJunction(t *testing.T) {
 	const svg = `<?xml version="1.0"?>
@@ -218,8 +217,8 @@ func TestTapWireEndsOntoWires_TJunction(t *testing.T) {
 	}
 }
 
-// TestTapWiresThroughJunctions checks a junction point (PS_110kV_Lubnisa 1959)
-// whose dot sits where wire 1997 crosses busbar 2018: the wire is split at the
+// TestTapWiresThroughJunctions checks a junction point (1959) whose dot sits
+// where wire 1997 crosses busbar 2018: the wire is split at the
 // dot and both pieces join the busbar. An overhead line through a dot is split
 // too; wire 1600 crossing the busbar with no dot stays unconnected.
 func TestTapWiresThroughJunctions(t *testing.T) {
@@ -263,5 +262,40 @@ func TestTapWiresThroughJunctions(t *testing.T) {
 		if c.ID == 1600 && (c.From == junction[1959] || c.To == junction[1959]) {
 			t.Errorf("wire 1600 crossing the busbar without a dot was joined to it")
 		}
+	}
+}
+
+// TestTapWireEndsOntoWires_PortAndEnd checks a ground switch (3421) whose port
+// and the end of wire 3429 meet on the middle of wire 964, which runs on
+// unbroken. Neither is a lone point, which the
+// tapping rules used to require; now the wire is split there and all of them
+// share one node.
+func TestTapWireEndsOntoWires_PortAndEnd(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="3000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<polyline points="1530,600 1530,700" style="fill:none;stroke:#965000;stroke-width:1" data-type="21" id="964" data-voltage="#965000" />
+<polyline points="1480,600 1480,650 1530,650" style="fill:none;stroke:#965000;stroke-width:1" data-type="21" id="3429" data-voltage="#965000" />
+<g id="3421" data-voltage="#965000" data-type="54" data-name="GS-110" transform="rotate(180,1530,660)" >
+<path d="M 1530 672 v -9 m -4 0 h 8 m -8 -20 h 8 m -4 0 v -8 m -8 0 h 16 m -2 -3 h -12 m 2 -3 h 8" style="fill:none;stroke:#965000;stroke-width:1" />
+<path d="M 1536 652 h -12" data-state="0" style="fill:none;stroke:#965000;stroke-width:1" />
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(d.Elements) != 1 {
+		t.Fatalf("failed=%v elements=%d", report.Failed, len(d.Elements))
+	}
+	port := d.Elements[0].Ports[0].Node
+	var on []int
+	for _, c := range d.Connectors {
+		if c.From == port || c.To == port {
+			on = append(on, c.ID)
+		}
+	}
+	slices.Sort(on)
+	if len(d.Connectors) != 3 || len(on) != 3 || !slices.Contains(on, 964) || !slices.Contains(on, 3429) {
+		t.Errorf("wires on the ground switch's node %d: %v, want 3429 and both pieces of 964 (%+v)", port, on, d.Connectors)
 	}
 }

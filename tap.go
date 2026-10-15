@@ -263,105 +263,88 @@ func tapPortsOntoWires(d *Diagram, bindings []portBinding, nextID int) int {
 	return nextID
 }
 
-// tapWireEndsOntoWires joins each wire end that would otherwise connect to
-// nothing to the wire passing mid-span within snapTolerance of it: a T-junction
-// in buswork, which xsde2svg draws as one wire ending on another that runs on
-// unbroken. An end is free when no port, no other wire end and no busbar lies
-// within snapTolerance of it. The nearest wire (any kind but an overhead line,
-// never the end's own wire) is split there into two connectors, the second
-// with a fresh id (nextID, returned advanced) and the wire's kind, name,
-// voltage, layer and style, and the end moves onto the split point, so
-// buildTopology joins all three. A wire merely crossing another, with no end
-// on it, stays separate. Runs after tapPortsOntoWires.
+// tapWireEndsOntoWires joins each connection point made of a wire end, plus
+// any ports and other wire ends within snapTolerance of it, to the wire passing
+// mid-span within snapTolerance of it: a T-junction in buswork, which xsde2svg
+// draws as one wire (and maybe a device's lead) ending on another that runs on
+// unbroken. The nearest such wire with no end there (any kind but an overhead
+// line, never one of the point's own wires, and never one touching another
+// port of a device at the point, so a device isn't shorted across its own
+// leads) is split there into two connectors, the second with a fresh id
+// (nextID, returned advanced) and the wire's kind, name, voltage, layer and
+// style; every wire end and port of the point moves onto the split point, so
+// buildTopology joins them all. A point on a busbar is left to buildTopology,
+// and a wire merely crossing another, with no end on it, stays separate. Runs
+// after tapPortsOntoWires.
 func tapWireEndsOntoWires(d *Diagram, bindings []portBinding, nextID int) int {
-	type end struct {
-		conn int
-		last bool
-	}
-	pointOf := func(e end) Point {
-		pts := d.Connectors[e.conn].Points
-		if e.last {
-			return pts[len(pts)-1]
-		}
-		return pts[0]
-	}
-	var ends []end
-	for ci, c := range d.Connectors {
-		if len(c.Points) >= 2 {
-			ends = append(ends, end{ci, false}, end{ci, true})
-		}
-	}
-
-	type cellKey struct{ x, y int }
-	cellOf := func(p Point) cellKey {
-		return cellKey{int(math.Floor(p.X / snapTolerance)), int(math.Floor(p.Y / snapTolerance))}
-	}
-	cells := map[cellKey][]Point{}
-	for _, b := range bindings {
-		cells[cellOf(b.p)] = append(cells[cellOf(b.p)], b.p)
-	}
-	for _, e := range ends {
-		p := pointOf(e)
-		cells[cellOf(p)] = append(cells[cellOf(p)], p)
-	}
+	near := func(a, b Point) bool { return distance(a, b) <= snapTolerance }
 	var buses [][]Point
 	for _, e := range d.Elements {
 		if e.Class == ClassBusBarSection {
 			buses = append(buses, e.Points)
 		}
 	}
-	// The end's own point is in cells too, so a free end finds exactly one
-	// point near it.
-	isFree := func(p Point) bool {
-		k := cellOf(p)
-		n := 0
-		for dx := -1; dx <= 1; dx++ {
-			for dy := -1; dy <= 1; dy++ {
-				for _, q := range cells[cellKey{k.x + dx, k.y + dy}] {
-					if distance(p, q) <= snapTolerance {
-						n++
-					}
-				}
-			}
-		}
-		if n != 1 {
-			return false
-		}
+	onBus := func(p Point) bool {
 		for _, pts := range buses {
 			for i := 0; i+1 < len(pts); i++ {
 				if onSegment(p, pts[i], pts[i+1]) {
-					return false
+					return true
 				}
 			}
 		}
-		return true
+		return false
+	}
+	ownPorts := map[int][]int{}
+	for bi, b := range bindings {
+		ownPorts[b.elemIdx] = append(ownPorts[b.elemIdx], bi)
 	}
 
-	// Decided up front, from the drawing as it is, as in tapPortsOntoWires.
 	// Kept as points: a split made below may leave an end on another piece
 	// of its wire.
-	var free []Point
-	for _, e := range ends {
-		if p := pointOf(e); isFree(p) {
-			free = append(free, p)
-		}
-	}
-	for _, p := range free {
-		self := end{conn: -1}
-		for ci, c := range d.Connectors {
-			if n := len(c.Points); n >= 2 && (c.Points[0] == p || c.Points[n-1] == p) {
-				self = end{ci, c.Points[n-1] == p}
-				break
+	var candidates []Point
+	for _, c := range d.Connectors {
+		if n := len(c.Points); n >= 2 {
+			for _, p := range []Point{c.Points[0], c.Points[n-1]} {
+				if !onBus(p) {
+					candidates = append(candidates, p)
+				}
 			}
 		}
-		if self.conn < 0 {
-			continue
+	}
+	for _, p := range candidates {
+		// The point's ports, and every port of their devices that isn't at it.
+		var here []int
+		var others []Point
+		for bi, b := range bindings {
+			if near(b.p, p) {
+				here = append(here, bi)
+			}
 		}
+		for _, bi := range here {
+			for _, oi := range ownPorts[bindings[bi].elemIdx] {
+				if !near(bindings[oi].p, p) {
+					others = append(others, bindings[oi].p)
+				}
+			}
+		}
+		touches := func(c Connector) bool {
+			n := len(c.Points)
+			if near(c.Points[0], p) || near(c.Points[n-1], p) {
+				return true
+			}
+			for _, q := range others {
+				if near(c.Points[0], q) || near(c.Points[n-1], q) {
+					return true
+				}
+			}
+			return false
+		}
+
 		best := snapTolerance + onSegmentEpsilon
 		var at Point
 		hitConn, hitSeg := -1, -1
 		for ci, c := range d.Connectors {
-			if ci == self.conn || c.Kind == KindOverheadLine || len(c.Points) < 2 {
+			if c.Kind == KindOverheadLine || len(c.Points) < 2 || touches(c) {
 				continue
 			}
 			for i := 0; i+1 < len(c.Points); i++ {
@@ -378,19 +361,29 @@ func tapWireEndsOntoWires(d *Diagram, bindings []portBinding, nextID int) int {
 		if len(head) < 2 || len(tail) < 2 {
 			continue
 		}
+		// Gather the point onto the split before adding the second piece, whose
+		// first point is already at.
+		for ci := range d.Connectors {
+			pts := d.Connectors[ci].Points
+			if ci == hitConn || len(pts) < 2 {
+				continue
+			}
+			if near(pts[0], p) {
+				pts[0] = at
+			}
+			if near(pts[len(pts)-1], p) {
+				pts[len(pts)-1] = at
+			}
+		}
+		for _, bi := range here {
+			bindings[bi].p = at
+		}
 		second := d.Connectors[hitConn]
 		second.ID = nextID
 		nextID++
 		second.Points = tail
 		d.Connectors[hitConn].Points = head
 		d.Connectors = append(d.Connectors, second)
-
-		own := d.Connectors[self.conn].Points
-		if self.last {
-			own[len(own)-1] = at
-		} else {
-			own[0] = at
-		}
 	}
 	return nextID
 }
