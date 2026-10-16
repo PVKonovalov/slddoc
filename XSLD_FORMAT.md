@@ -302,7 +302,9 @@ The electrical graph is expressed **only through node ids**:
     `<port name="k" node="N"/>` to the busbar (k = 1, 2, ...);
   - in `Extract` output, a busbar has **no ports**; every wire end lying on the
     busbar's geometry is merged into one shared node whose position is the
-    busbar's first point.
+    busbar's first point. `Repair` (run by the editor on open and import)
+    turns that into the editor's form: each point where a wire end or device
+    terminal meets the busbar gets its own node there, a port of the busbar.
   A consumer that builds a network model should therefore treat a busbar as
   connected to (a) every node in its own ports and (b) every node that lies on
   its geometry.
@@ -313,7 +315,8 @@ The electrical graph is expressed **only through node ids**:
   connectivity from coordinates. `Extract` does, once, when building the file,
   and so does `Repair`, which the editor runs when it opens or imports a
   diagram: zero-length wires are removed, every device gets exactly its
-  shape's fixed ports (one per terminal, `"1"`…`"N"`), a port Node is joined to
+  shape's fixed ports (one per terminal, `"1"`…`"N"`), a busbar's shared node
+  is split into one port node per connection point, a port Node is joined to
   a Node, wire or busbar lying exactly on it, wires are split at junction dots
   and at wire ends lying mid-span on them, and unused nodes are dropped.
   Existing nodes are otherwise never moved. `EnsureIDs` backfills `lastId` and

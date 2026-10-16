@@ -116,3 +116,41 @@ func TestMostUsedVoltage(t *testing.T) {
 		t.Errorf("MostUsedVoltage = %d, want 2 (a tie goes to the lower id)", v)
 	}
 }
+
+func TestRepair_SplitsSharedBusbarNode(t *testing.T) {
+	// As Extract builds it: every wire end along the busbar on one Node at its first point.
+	d := &Diagram{
+		LastID: 10,
+		Nodes:  []Node{{ID: 2, X: 0, Y: 0}, {ID: 3, X: 30, Y: -40}, {ID: 4, X: 70, Y: 40}, {ID: 5, X: 0, Y: -40}},
+		Elements: []Element{
+			{ID: 1, Class: ClassBusBarSection, Shape: "24", Points: []Point{{X: 0, Y: 0}, {X: 100, Y: 0}}},
+		},
+		Connectors: []Connector{
+			{ID: 6, Kind: KindBusWork, From: 3, To: 2, Points: []Point{{X: 30, Y: -40}, {X: 30, Y: 0}}},
+			{ID: 7, Kind: KindBusWork, From: 2, To: 4, Points: []Point{{X: 70, Y: 0}, {X: 70, Y: 40}}},
+			{ID: 8, Kind: KindBusWork, From: 5, To: 2, Points: []Point{{X: 0, Y: -40}, {X: 0, Y: 0}}},
+		},
+	}
+	if !Repair(d, repairTerminals) {
+		t.Fatal("Repair reported no change")
+	}
+	at := map[int]Point{}
+	for _, n := range d.Nodes {
+		at[n.ID] = Point{X: n.X, Y: n.Y}
+	}
+	ends := []struct {
+		node int
+		want Point
+	}{{d.Connectors[0].To, Point{X: 30}}, {d.Connectors[1].From, Point{X: 70}}, {d.Connectors[2].To, Point{}}}
+	for i, e := range ends {
+		if at[e.node] != e.want {
+			t.Errorf("wire %d ends on node %d at %v, want a node at %v", i, e.node, at[e.node], e.want)
+		}
+	}
+	if ports := d.Elements[0].Ports; len(ports) != 3 {
+		t.Errorf("busbar ports = %+v, want one per connection point", ports)
+	}
+	if Repair(d, repairTerminals) {
+		t.Error("a second Repair should change nothing")
+	}
+}

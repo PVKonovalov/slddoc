@@ -32,31 +32,48 @@ var legacyTerminals = map[string][]Point{
 
 // Repair repairs d's topology in place, as the editor does on open and import: zero-length wires removed, ports at
 // legacy terminal positions moved, every device given exactly its shape's fixed ports (terminals maps a symbol
-// shape to its local terminals, the library's <terminals>), stray port Nodes moved onto their terminals, wire ends
+// shape to its local terminals, the library's <terminals>), a busbar's shared Node split into one port Node per
+// point where something meets the bus (splitBusbarNodes), stray port Nodes moved onto their terminals, wire ends
 // lying on a port joined to it, wires split at junction dots and at wire ends lying on them, and unused Nodes
-// dropped. Existing Nodes and wires are otherwise never moved. Returns whether anything changed.
+// dropped, pass after pass until one changes nothing. Existing Nodes and wires are otherwise never moved. Returns
+// whether anything changed.
 func Repair(d *Diagram, terminals map[string][]Point) bool {
 	if len(terminals) == 0 {
 		return false
 	}
-	return changes(d, func() {
-		r := repairer{d: d, terminals: terminals}
-		r.removeDegenerateConnectors()
-		r.moveLegacyTerminalNodes()
-		ids := make([]int, len(d.Elements))
-		for i, e := range d.Elements {
-			ids[i] = e.ID
+	// A pass can leave work for the next (a wire is tapped at one Node per pass, a Node one pass creates may lie on
+	// another wire), so passes repeat until one changes nothing.
+	changed := false
+	for range maxRepairPasses {
+		if !changes(d, func() { repairPass(d, terminals) }) {
+			break
 		}
-		for _, id := range ids {
-			r.fitElementPorts(id)
-		}
-		r.removeDegenerateConnectors()
-		r.moveStrayPortNodes()
-		r.mergeNodesOntoPorts()
-		r.tapWiresThroughJunctions()
-		r.tapWireNodesOntoWires()
-		r.dropUnusedNodes()
-	})
+		changed = true
+	}
+	return changed
+}
+
+// maxRepairPasses bounds Repair's passes; a real diagram settles in two.
+const maxRepairPasses = 5
+
+func repairPass(d *Diagram, terminals map[string][]Point) {
+	r := repairer{d: d, terminals: terminals}
+	r.removeDegenerateConnectors()
+	r.moveLegacyTerminalNodes()
+	ids := make([]int, len(d.Elements))
+	for i, e := range d.Elements {
+		ids[i] = e.ID
+	}
+	for _, id := range ids {
+		r.fitElementPorts(id)
+	}
+	r.splitBusbarNodes()
+	r.removeDegenerateConnectors()
+	r.moveStrayPortNodes()
+	r.mergeNodesOntoPorts()
+	r.tapWiresThroughJunctions()
+	r.tapWireNodesOntoWires()
+	r.dropUnusedNodes()
 }
 
 // EnsureIDs backfills d.LastID from the highest id in use, gives every label with id 0 a fresh id, and renumbers
@@ -421,10 +438,14 @@ func joinPoints(a []Point, b ...Point) []Point {
 	return append(append(out, a...), b...)
 }
 
-// rerouteEnd moves one end of a wire's path to p, keeping the segment touching it orthogonal.
+// rerouteEnd moves one end of a wire's path to p, keeping the segment touching it orthogonal. Repeated points and
+// points inside a straight run are dropped first, so the vertex that slides is a real bend.
 func rerouteEnd(points []Point, from bool, p Point) []Point {
 	if len(points) < 2 {
 		return points
+	}
+	if simple := simplifyPath(points); len(simple) >= 2 {
+		points = simple
 	}
 	n := len(points)
 	if from {
@@ -952,6 +973,78 @@ func (r *repairer) cutWireThroughDevice(ports []Port) {
 		d.Connectors[ci].To, d.Connectors[ci].Points = first.ID, head
 		d.Connectors = append(d.Connectors, second2)
 		return
+	}
+}
+
+// splitBusbarNodes gives each point where a wire end or device terminal meets a busbar its own port Node there.
+// Extract (as xsde2svg draws it) joins everything along a busbar on one Node at the busbar's first point, while
+// the editor's convention is one port per connection point, each on its own Node: a wire end or terminal on one of
+// the busbar's port Nodes but lying elsewhere on its line moves to a Node at its own point (a busbar port Node
+// already there, or a new one added as a port). Ends at the same point share it. The busbar stays one electrical
+// node either way, so the topology is unchanged; dropUnusedNodes then removes a shared Node nothing uses any more.
+func (r *repairer) splitBusbarNodes() {
+	d := r.d
+	for b := range d.Elements {
+		if d.Elements[b].Class != ClassBusBarSection || len(d.Elements[b].Points) < 2 {
+			continue
+		}
+		busID := d.Elements[b].ID
+		line := d.Elements[b].Points
+		nodes := nodeIndex(d)
+		atPoint := map[Point]int{}
+		isPort := map[int]bool{}
+		for _, p := range d.Elements[b].Ports {
+			isPort[p.Node] = true
+			if n, ok := nodes[p.Node]; ok {
+				atPoint[Point{X: n.X, Y: n.Y}] = n.ID
+			}
+		}
+		nodeAt := func(q Point) int {
+			if id, ok := atPoint[q]; ok {
+				return id
+			}
+			n := Node{ID: r.takeID(), X: q.X, Y: q.Y}
+			d.Nodes = append(d.Nodes, n)
+			bus := &d.Elements[b]
+			bus.Ports = append(bus.Ports, Port{Name: fmt.Sprint(len(bus.Ports) + 1), Node: n.ID})
+			atPoint[q], isPort[n.ID] = n.ID, true
+			return n.ID
+		}
+		// moved reports whether q, an attachment of Node id, belongs on its own Node.
+		moved := func(id int, q Point) bool {
+			n, ok := nodes[id]
+			return ok && isPort[id] && !samePt(q, Point{X: n.X, Y: n.Y}) && segmentWith(line, q) >= 0
+		}
+		for i := range d.Connectors {
+			c := &d.Connectors[i]
+			if len(c.Points) == 0 {
+				continue
+			}
+			if q := c.Points[0]; moved(c.From, q) {
+				c.From = nodeAt(q)
+			}
+			if q := c.Points[len(c.Points)-1]; moved(c.To, q) {
+				c.To = nodeAt(q)
+			}
+		}
+		for i := range d.Elements {
+			el := &d.Elements[i]
+			if el.ID == busID {
+				continue
+			}
+			terminals := fixedTerminals(el, r.terminals)
+			for k := range el.Ports {
+				if k < len(terminals) && moved(el.Ports[k].Node, terminals[k]) {
+					el.Ports[k].Node = nodeAt(terminals[k])
+				}
+			}
+		}
+	}
+	// A new Node can also lie on another busbar touching this one: it becomes a port of that one too.
+	for b := range d.Elements {
+		if d.Elements[b].Class == ClassBusBarSection {
+			r.joinBusbar(b)
+		}
 	}
 }
 
