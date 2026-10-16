@@ -309,9 +309,16 @@ The electrical graph is expressed **only through node ids**:
 - Switching devices are **not** open in the topology: a breaker in state `0`
   still has both ports connected to their nodes. Whether current flows is
   determined by the device's `state`, not by the graph.
-- Node `x`/`y` and connector points are geometry only; connectivity is never
-  inferred from coordinates when loading a saved file (only `Extract` does
-  that, once, when building the file).
+- Node `x`/`y` and connector points are geometry only; `Load` never infers
+  connectivity from coordinates. `Extract` does, once, when building the file,
+  and so does `Repair`, which the editor runs when it opens or imports a
+  diagram: zero-length wires are removed, every device gets exactly its
+  shape's fixed ports (one per terminal, `"1"`…`"N"`), a port Node is joined to
+  a Node, wire or busbar lying exactly on it, wires are split at junction dots
+  and at wire ends lying mid-span on them, and unused nodes are dropped.
+  Existing nodes are otherwise never moved. `EnsureIDs` backfills `lastId` and
+  renumbers colliding ids, and `InferSizeSteps` recovers an extracted
+  element's `scale` from where its ports lie.
 
 ## 6. Class-specific attributes
 
