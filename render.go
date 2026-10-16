@@ -1001,48 +1001,49 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 }
 
 // The *Layered writers are Render/RenderFragments' entry points for one
-// item: the item's own markup with data-layer added to its root node
-// (withLayerAttr), in both modes, so a viewer can toggle layers on the
-// exported SVG and the canvas can hide them while editing.
+// item: the item's own markup with data-layer and data-group added to its
+// root node (withItemAttrs), in both modes, so a viewer can toggle layers or
+// pick a group on the exported SVG and the canvas can hide layers while
+// editing.
 
 func renderElementLayered(w io.Writer, lib *SymbolLibrary, voltageColor map[int]string, stateColors, fpiColors stateColorSet, defaultFPIText, background string, e Element, missing *[]string, seenMissing map[string]bool, mode RenderMode) {
-	if e.Layer == BaseLayer {
+	if e.Layer == BaseLayer && e.Group == 0 {
 		renderElement(w, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, missing, seenMissing, mode)
 		return
 	}
 	var buf bytes.Buffer
 	renderElement(&buf, lib, voltageColor, stateColors, fpiColors, defaultFPIText, background, e, missing, seenMissing, mode)
-	io.WriteString(w, withLayerAttr(buf.String(), e.Layer))
+	io.WriteString(w, withItemAttrs(buf.String(), e.Layer, e.Group))
 }
 
 func renderConnectorLayered(w io.Writer, c Connector, voltageColor map[int]string, mode RenderMode) {
-	if c.Layer == BaseLayer {
+	if c.Layer == BaseLayer && c.Group == 0 {
 		renderConnector(w, c, voltageColor, mode)
 		return
 	}
 	var buf bytes.Buffer
 	renderConnector(&buf, c, voltageColor, mode)
-	io.WriteString(w, withLayerAttr(buf.String(), c.Layer))
+	io.WriteString(w, withItemAttrs(buf.String(), c.Layer, c.Group))
 }
 
 func writeLabelLayered(w io.Writer, l Label, mode RenderMode) {
-	if l.Layer == BaseLayer {
+	if l.Layer == BaseLayer && l.Group == 0 {
 		writeLabel(w, l, mode)
 		return
 	}
 	var buf bytes.Buffer
 	writeLabel(&buf, l, mode)
-	io.WriteString(w, withLayerAttr(buf.String(), l.Layer))
+	io.WriteString(w, withItemAttrs(buf.String(), l.Layer, l.Group))
 }
 
 func writeDigitalDeviceLayered(w io.Writer, dd DigitalDevice, mode RenderMode) {
-	if dd.Layer == BaseLayer {
+	if dd.Layer == BaseLayer && dd.Group == 0 {
 		writeDigitalDevice(w, dd, mode)
 		return
 	}
 	var buf bytes.Buffer
 	writeDigitalDevice(&buf, dd, mode)
-	io.WriteString(w, withLayerAttr(buf.String(), dd.Layer))
+	io.WriteString(w, withItemAttrs(buf.String(), dd.Layer, dd.Group))
 }
 
 // renderConnector writes one Connector's own rendered markup — the
@@ -1165,14 +1166,14 @@ func writePolyline(w io.Writer, id int, kind string, pts []Point, color string, 
 // but a hand-edited or corrupt file could carry one) draws nothing rather
 // than guessing a size.
 func writeRectangle(w io.Writer, e Element, mode RenderMode) {
-	writeRect(w, e, mode, "3", "white", e.StrokeWidth)
+	writeRect(w, e, mode, "3", "white", e.StrokeWidth, e.RadiusX)
 }
 
 // writeSmallWindow draws a Small window (shape 319) as Rectangle's same bare
 // <rect>, with element_319.go's fixed 1px border and gray as the default
 // border color.
 func writeSmallWindow(w io.Writer, e Element, mode RenderMode) {
-	writeRect(w, e, mode, "319", "gray", 1)
+	writeRect(w, e, mode, "319", "gray", 1, 0)
 }
 
 // writePicture draws a Picture (shape 11). Static is real xsde2svg's own bare
@@ -1213,8 +1214,9 @@ func writePicture(w io.Writer, e Element, mode RenderMode) {
 
 // writeRect is writeRectangle/writeSmallWindow's shared writer: code is the
 // data-type, defaultStroke the unset-Stroke fallback, strokeWidth the
-// border width (0 = 1).
-func writeRect(w io.Writer, e Element, mode RenderMode, code, defaultStroke string, strokeWidth float64) {
+// border width (0 = 1), radius the corner radius (0 = square, capped at half
+// the shorter side).
+func writeRect(w io.Writer, e Element, mode RenderMode, code, defaultStroke string, strokeWidth, radius float64) {
 	if len(e.Points) < 2 {
 		return
 	}
@@ -1234,12 +1236,16 @@ func writeRect(w io.Writer, e Element, mode RenderMode, code, defaultStroke stri
 		strokeWidth = 1
 	}
 
+	corner := ""
+	if radius = math.Min(radius, math.Min(width, height)/2); radius > 0 {
+		corner = fmt.Sprintf(" rx=\"%s\"", fmtNum(radius))
+	}
 	editorAttr := ""
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s />\n",
-		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), code, editorAttr)
+	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\"%s style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s />\n",
+		e.ID, fmtNum(x), fmtNum(y), fmtNum(width), fmtNum(height), corner, esc(fill), esc(stroke), fmtNum(strokeWidth), esc(e.Name), esc(stroke), code, editorAttr)
 }
 
 // writeCircle draws a Circle (shape 4) as a bare <ellipse> with rx = ry =
@@ -2437,7 +2443,7 @@ const objectLinkStrokeWidth = 2
 // rotated to continue the direction its last segment travels. The group
 // makes the pair one item, like an overhead/cable line's <g>: the canvas
 // hit-tests and selects the arrowhead too, a fragment patch or delete
-// replaces both, and data-layer (withLayerAttr, the root node) hides both.
+// replaces both, and data-layer (withItemAttrs, the root node) hides both.
 // xsde2svg (internal/modus/element_28.go) writes the same group since
 // 1.4.21; older exports draw the two as flat siblings, which Extract still
 // reads (parseConnector takes a <g>'s first <polyline> or a bare one).

@@ -144,15 +144,35 @@ var textEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 var firstStartTag = regexp.MustCompile(`<[A-Za-z][\w:.-]*`)
 
-// withLayerAttr adds data-layer="<layer>" to frag's first start tag (the
-// item's own root node), unless layer is BaseLayer, matching xsde2svg.
-func withLayerAttr(frag string, layer int) string {
-	if layer == BaseLayer {
+// withItemAttrs adds data-layer="<layer>" (unless layer is BaseLayer,
+// matching xsde2svg) and data-group="<group>" (unless 0) to frag's first
+// start tag, the item's own root node.
+func withItemAttrs(frag string, layer, group int) string {
+	var attrs string
+	if layer != BaseLayer {
+		attrs += fmt.Sprintf(` data-layer="%d"`, layer)
+	}
+	if group != 0 {
+		attrs += fmt.Sprintf(` data-group="%d"`, group)
+	}
+	if attrs == "" {
 		return frag
 	}
 	loc := firstStartTag.FindStringIndex(frag)
 	if loc == nil {
 		return frag
 	}
-	return frag[:loc[1]] + fmt.Sprintf(` data-layer="%d"`, layer) + frag[loc[1]:]
+	return frag[:loc[1]] + attrs + frag[loc[1]:]
+}
+
+// parseGroup reads a node's data-group; 0 when absent or invalid.
+func parseGroup(n *rawNode) int {
+	if n == nil {
+		return 0
+	}
+	g, err := strconv.Atoi(n.attr("data-group"))
+	if err != nil || g < 0 {
+		return 0
+	}
+	return g
 }

@@ -106,6 +106,7 @@ func parseLabel(n *rawNode) (Label, string, bool) {
 	lbl := textToLabel(t)
 	lbl.ID = parseOptionalID(n)
 	lbl.Layer = resolveLayer(n.attr("data-layer"))
+	lbl.Group = parseGroup(n)
 	return lbl, n.attr("data-name"), true
 }
 
@@ -129,6 +130,7 @@ func parseAttachedLabel(n *rawNode, forID int) (Label, bool) {
 	}
 	lbl := textToLabel(t)
 	lbl.Layer = resolveLayer(n.attr("data-layer"))
+	lbl.Group = parseGroup(n)
 	lbl.For = forID
 	return lbl, true
 }
@@ -165,6 +167,7 @@ func parseDigitalDevice(n *rawNode) (DigitalDevice, bool) {
 	return DigitalDevice{
 		ID:     parseOptionalID(n),
 		Layer:  resolveLayer(n.attr("data-layer")),
+		Group:  parseGroup(n),
 		X:      x,
 		Y:      y,
 		Size:   size,

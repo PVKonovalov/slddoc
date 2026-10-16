@@ -1323,3 +1323,82 @@ func TestRender_ObjectLinkIsOneGroup(t *testing.T) {
 		t.Errorf("extracted connector = %+v", c)
 	}
 }
+
+func TestRender_RectangleRoundedCornersRoundTrip(t *testing.T) {
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{
+			{ID: 1, Class: ClassRectangle, Shape: "3", RadiusX: 50, Points: []Point{{X: 10, Y: 10}, {X: 50, Y: 30}}},
+			{ID: 2, Class: ClassRectangle, Shape: "3", Points: []Point{{X: 60, Y: 10}, {X: 90, Y: 30}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `<rect id="1" x="10" y="10" width="40" height="20" rx="10" `) {
+		t.Errorf("radius should be capped at half the shorter side: %s", out)
+	}
+	if strings.Contains(out, `<rect id="2" x="60" y="10" width="30" height="20" rx=`) {
+		t.Errorf("square rectangle must not carry rx: %s", out)
+	}
+
+	got, _, err := Extract(buf.Bytes(), "test.svg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	radii := map[int]float64{}
+	for _, e := range got.Elements {
+		if e.Class == ClassRectangle {
+			radii[e.ID] = e.RadiusX
+		}
+	}
+	if radii[1] != 10 || radii[2] != 0 {
+		t.Errorf("extracted radii = %v, want {1:10 2:0}", radii)
+	}
+}
+
+func TestRender_GroupRoundTrip(t *testing.T) {
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Layers: []Layer{{ID: BaseLayer, Name: "Base"}, {ID: 9, Name: "Top", Z: 1}},
+		Elements: []Element{
+			{ID: 1, Class: ClassRectangle, Shape: "3", Layer: BaseLayer, Group: 5, Points: []Point{{X: 10, Y: 10}, {X: 50, Y: 30}}},
+			{ID: 2, Class: ClassRectangle, Shape: "3", Layer: 9, Group: 5, Points: []Point{{X: 60, Y: 10}, {X: 90, Y: 30}}},
+			{ID: 3, Class: ClassRectangle, Shape: "3", Layer: BaseLayer, Points: []Point{{X: 60, Y: 60}, {X: 90, Y: 90}}},
+		},
+		Labels: []Label{{ID: 4, Layer: BaseLayer, Group: 5, X: 10, Y: 50, Size: 12, Text: "caption"}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{`<rect data-group="5" id="1"`, `<rect data-layer="9" data-group="5" id="2"`, `<g data-group="5" data-type="5"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %s", want, out)
+		}
+	}
+	if strings.Contains(out, `<rect data-group`+`="5" id="3"`) || strings.Count(out, "data-group") != 3 {
+		t.Errorf("only group members should carry data-group: %s", out)
+	}
+
+	got, _, err := Extract(buf.Bytes(), "test.svg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := map[int]int{}
+	for _, e := range got.Elements {
+		groups[e.ID] = e.Group
+	}
+	for _, l := range got.Labels {
+		groups[-1] = l.Group
+	}
+	if groups[1] == 0 || groups[1] != groups[2] || groups[1] != groups[-1] || groups[3] != 0 {
+		t.Errorf("extracted groups = %v, want 1, 2 and the label sharing one non-zero id, 3 ungrouped", groups)
+	}
+	if groups[1] <= 4 || groups[1] > got.LastID {
+		t.Errorf("group id %d should be fresh (above every item id) and within LastID %d", groups[1], got.LastID)
+	}
+}

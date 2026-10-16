@@ -130,6 +130,13 @@ defaults) are this package's additions, ignored by viewers. `Extract` reads
 them back, and gives any layer id an item uses without a `<metadata>` entry a
 layer named "Layer N".
 
+Items may also share a `group` (an id from the shared id space; absent or `0` =
+not grouped). A group is an editor selection aid only: it changes neither
+drawing order nor topology, its members may sit on different layers, and
+groups do not nest. In the rendered SVG each member carries
+`data-group="<id>"` on its root node, after `data-layer`, with no wrapping
+`<g>`; `Extract` reads it back and gives each group a fresh id.
+
 ### 4.2 `<voltageClasses>` / `<class>`
 
 A logical voltage level and the color it is drawn with. Voltage is a property of
@@ -166,6 +173,7 @@ decorative shape (rectangle, line, table, ...).
 | `name` | string | no | Dispatch name, e.g. `В-10 Л-11`. Rendered as `data-name` |
 | `voltage` | id → `class` | no | Voltage class (0 = unassigned) |
 | `layer` | id → `layer` | yes | Layer (default 0) |
+| `group` | id | no | Group (0 = none, see §4.1). Rendered as `data-group` |
 | `x`, `y` | number | yes | Anchor: the symbol's rotation center (for points-based shapes, informational — the midpoint of its geometry) |
 | `orient` | int | no | Rotation around the anchor, in degrees, clockwise (SVG `rotate`). Multiples of 90; negative values and ±270 occur in extracted files |
 | `mirror` | bool | no | Flip the symbol horizontally in its local frame, before rotation. Editor-only; Extract never sets it |
@@ -205,6 +213,7 @@ A drawn wire: a polyline whose two ends are nodes.
 | `name` | string | no | Line name, e.g. `Line2`. Rendered as `data-name` for `OverheadLine`/`CableLine` only |
 | `voltage` | id → `class` | no | Voltage class |
 | `layer` | id → `layer` | yes | Layer |
+| `group` | id | no | Group (0 = none, see §4.1). Rendered as `data-group` |
 | `dashed` | bool | no | Draw dashed |
 | `lineStyle` | enum | no | `CableLine` only: `solid`, `dashed` (default), `dashDot`, `dotted` |
 | `from` | id → `node` | yes | Node at the first point |
@@ -225,6 +234,7 @@ newline (`&#xA;` or a literal line break) starts a new line.
 | `id` | int | yes | Label id. Older files may have `0` on every label; the editor assigns fresh ids on open |
 | `for` | id → `element` | no | Element this label annotates. Informational only — it is not a live link and the label does not follow the element |
 | `layer` | id → `layer` | yes | Layer |
+| `group` | id | no | Group (0 = none, see §4.1). Rendered as `data-group` |
 | `x`, `y` | number | yes | Text anchor point |
 | `size` | number | yes | Font size in diagram units |
 | `anchor` | enum | no | Horizontal anchor: `start` (default), `middle`, `end` |
@@ -240,7 +250,7 @@ newline (`&#xA;` or a literal line break) starts a new line.
 ### 4.7 `<digitalDevices>` / `<digitalDevice>`
 
 A SCADA analog readout (xsde2svg shape 134, digital instrument). Has the same
-text-style attributes as `<label>` (`id`, `layer`, `x`, `y`, `size`, `anchor`,
+text-style attributes as `<label>` (`id`, `layer`, `group`, `x`, `y`, `size`, `anchor`,
 `valign`, `bold`, `color`, `font`), plus:
 
 | Attribute | Type | Req. | Meaning |
@@ -349,6 +359,7 @@ larger side.
 | `lineStyle` | enum | Line, Polygon, Container, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`; Container: `solid`, `dotted` (3,2), `dashed` (6,5)) |
 | `doubleHeaded` | bool | Arrow | Arrowhead at both ends |
 | `rx`, `ry` | number | Arc | The SVG arc's own radii |
+| `rx` | number | Rectangle | Corner radius; 0 = square corners, capped at half the shorter side |
 | `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
 | `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10), Circle (default 20) | Circle radius (PostPole square: half-width) |
@@ -463,7 +474,7 @@ extendable per site); this is the default set.
 | Polygon | 16 | — | decorative; `<geometry>` |
 | Container | 310 | — | decorative; `<geometry>`, caption `propertyText` + `text*` |
 | Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
-| Rectangle / Arrow | 3 / 2 | — | decorative; `<geometry>` |
+| Rectangle / Arrow | 3 / 2 | — | decorative; `<geometry>` (Rectangle: + `rx` corner radius) |
 | Circle | 4 | — | decorative; center `x`/`y`, `radius` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText` |
 | AutomationDevice | 103 | — | decorative two-state tile; `<geometry>`, `state` (1 On, else Off), `fillOff`/`fillOn`, `propertyText`/`propertyTextOn`, `textColor`/`textColorOn`, `stroke` (border, default black), `textSize` (default 12), `bold` |

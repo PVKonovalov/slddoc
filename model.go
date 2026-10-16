@@ -602,6 +602,10 @@ type Element struct {
 	Voltage int `xml:"voltage,attr,omitempty" json:"voltage,omitempty"`
 	// Layer references a Layer.ID; always set (defaults to BaseLayer).
 	Layer int `xml:"layer,attr" json:"layer"`
+	// Group is the editor's group id (from the shared id space; 0 = not
+	// grouped). It changes only selection, and is written to the SVG as
+	// data-group on the item's root node.
+	Group int `xml:"group,attr,omitempty" json:"group,omitempty"`
 
 	// X, Y is the element's anchor: its rotation center for a rotated
 	// symbol, or the midpoint of its ports otherwise.
@@ -828,7 +832,8 @@ type Element struct {
 	// RadiusX/RadiusY/LargeArc/Sweep are an Arc's (shape 9, see
 	// ClassArc) own SVG elliptical-arc parameters, stored exactly as the
 	// arc's own "A rx,ry rotation large-arc sweep x,y" command carries them
-	// — Points holds its start and end point.
+	// — Points holds its start and end point. A Rectangle's (shape 3)
+	// RadiusX is its corner radius (0 = square corners).
 	RadiusX  float64 `xml:"rx,attr,omitempty" json:"rx,omitempty"`
 	RadiusY  float64 `xml:"ry,attr,omitempty" json:"ry,omitempty"`
 	LargeArc bool    `xml:"largeArc,attr,omitempty" json:"largeArc,omitempty"`
@@ -1041,6 +1046,7 @@ type Connector struct {
 	Name    string `xml:"name,attr,omitempty" json:"name,omitempty"`
 	Voltage int    `xml:"voltage,attr,omitempty" json:"voltage,omitempty"`
 	Layer   int    `xml:"layer,attr" json:"layer"`
+	Group   int    `xml:"group,attr,omitempty" json:"group,omitempty"`
 	Dashed  bool   `xml:"dashed,attr,omitempty" json:"dashed,omitempty"`
 	// LineStyle is a KindCableLine connector's own dash pattern — see
 	// ConnectorLineStyle's own doc comment. Ignored for every other Kind
@@ -1072,6 +1078,7 @@ type Label struct {
 	ID     int     `xml:"id,attr" json:"id"`
 	For    int     `xml:"for,attr,omitempty" json:"for,omitempty"`
 	Layer  int     `xml:"layer,attr" json:"layer"`
+	Group  int     `xml:"group,attr,omitempty" json:"group,omitempty"`
 	X      float64 `xml:"x,attr" json:"x"`
 	Y      float64 `xml:"y,attr" json:"y"`
 	Size   float64 `xml:"size,attr" json:"size"`
@@ -1106,6 +1113,7 @@ type Label struct {
 type DigitalDevice struct {
 	ID     int     `xml:"id,attr" json:"id"`
 	Layer  int     `xml:"layer,attr" json:"layer"`
+	Group  int     `xml:"group,attr,omitempty" json:"group,omitempty"`
 	X      float64 `xml:"x,attr" json:"x"`
 	Y      float64 `xml:"y,attr" json:"y"`
 	Size   float64 `xml:"size,attr" json:"size"`

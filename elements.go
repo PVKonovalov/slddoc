@@ -1783,7 +1783,9 @@ func parseRectangle(n *rawNode) (Element, error) {
 	if err != nil {
 		return Element{}, err
 	}
-	return parseRect(n, id, ClassRectangle, "3")
+	el, err := parseRect(n, id, ClassRectangle, "3")
+	el.RadiusX, _ = strconv.ParseFloat(n.attr("rx"), 64)
+	return el, err
 }
 
 // parseSmallWindow handles shape 319 (Окошко/Small window, see

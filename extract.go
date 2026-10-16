@@ -283,6 +283,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 	var cur *rawNode
 	addElement := func(el Element, ports []Point, voltage string) {
 		inferLeads(&el, cur, ports)
+		el.Group = parseGroup(cur)
 		colors = append(colors, voltage)
 		elementVoltage = append(elementVoltage, voltage)
 		idx := len(d.Elements)
@@ -340,6 +341,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 					lbl.ID = nextSynthID
 					nextSynthID++
 					lbl.Layer = resolveLayer(n.attr("data-layer"))
+					lbl.Group = parseGroup(n)
 					d.Labels = append(d.Labels, lbl)
 				}
 			}
@@ -557,6 +559,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 			}
 			colors = append(colors, voltage)
 			connectorVoltage = append(connectorVoltage, voltage)
+			c.Group = parseGroup(n)
 			d.Connectors = append(d.Connectors, c)
 
 		case "7":

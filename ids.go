@@ -8,8 +8,9 @@ package slddoc
 // following. Then an element, connector, digital device or label whose id
 // is unset or already taken (the source writes a Powerflow arrow and its
 // reading under one id) gets a fresh one; elements come first, so a label's
-// For keeps pointing at the element it was matched to. Layer ids are kept
-// and never reused. Returns the next free id.
+// For keeps pointing at the element it was matched to. Group ids (read from
+// data-group) get fresh ids last, members of one group keeping one shared
+// id. Layer ids are kept and never reused. Returns the next free id.
 func assignUniqueIDs(d *Diagram, next int) int {
 	used := map[int]bool{}
 	for _, l := range d.Layers {
@@ -93,6 +94,31 @@ func assignUniqueIDs(d *Diagram, next int) int {
 	}
 	for i := range d.Labels {
 		unique(&d.Labels[i].ID)
+	}
+
+	groupID := map[int]int{}
+	regroup := func(g *int) {
+		if *g == 0 {
+			return
+		}
+		id, ok := groupID[*g]
+		if !ok {
+			id = fresh()
+			groupID[*g] = id
+		}
+		*g = id
+	}
+	for i := range d.Elements {
+		regroup(&d.Elements[i].Group)
+	}
+	for i := range d.Connectors {
+		regroup(&d.Connectors[i].Group)
+	}
+	for i := range d.DigitalDevices {
+		regroup(&d.DigitalDevices[i].Group)
+	}
+	for i := range d.Labels {
+		regroup(&d.Labels[i].Group)
 	}
 	return next
 }
