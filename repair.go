@@ -301,6 +301,21 @@ func changes(d *Diagram, f func()) bool {
 type repairer struct {
 	d         *Diagram
 	terminals map[string][]Point
+	// nodes caches nodeIndex(d) for nodeMap until nodesChanged marks it stale.
+	nodes map[int]Node
+}
+
+// nodeMap is nodeIndex(r.d), rebuilt only after nodesChanged.
+func (r *repairer) nodeMap() map[int]Node {
+	if r.nodes == nil {
+		r.nodes = nodeIndex(r.d)
+	}
+	return r.nodes
+}
+
+// nodesChanged must follow every write to r.d.Nodes.
+func (r *repairer) nodesChanged() {
+	r.nodes = nil
 }
 
 func (r *repairer) takeID() int {
@@ -567,6 +582,7 @@ func (r *repairer) mergeNode(drop, keep int) {
 		}
 	}
 	d.Nodes = nodes
+	r.nodesChanged()
 	for i := range d.Elements {
 		for j := range d.Elements[i].Ports {
 			if d.Elements[i].Ports[j].Node == drop {
@@ -620,6 +636,7 @@ func (r *repairer) removeDegenerateConnectors() {
 		}
 	}
 	d.Nodes = nodes
+	r.nodesChanged()
 }
 
 // moveNodesTo moves each Node in target onto its point, rerouting the wire ends on it.
@@ -630,6 +647,7 @@ func (r *repairer) moveNodesTo(target map[int]Point) {
 			d.Nodes[i].X, d.Nodes[i].Y = p.X, p.Y
 		}
 	}
+	r.nodesChanged()
 	for i := range d.Connectors {
 		c := &d.Connectors[i]
 		from, okFrom := target[c.From]
@@ -707,7 +725,7 @@ func (r *repairer) fitElementPorts(id int) {
 	if len(terminals) == 0 {
 		return
 	}
-	nodes := nodeIndex(d)
+	nodes := r.nodeMap()
 	slots := make([][]int, len(terminals))
 	var leftover []int
 	for _, port := range el.Ports {
@@ -786,6 +804,7 @@ func (r *repairer) fitElementPorts(id int) {
 		if len(s) == 0 {
 			n := Node{ID: r.takeID(), X: terminals[i].X, Y: terminals[i].Y}
 			d.Nodes = append(d.Nodes, n)
+			r.nodesChanged()
 			portNodes[i] = n.ID
 			added = true
 			continue
@@ -1005,6 +1024,7 @@ func (r *repairer) splitBusbarNodes() {
 			}
 			n := Node{ID: r.takeID(), X: q.X, Y: q.Y}
 			d.Nodes = append(d.Nodes, n)
+			r.nodesChanged()
 			bus := &d.Elements[b]
 			bus.Ports = append(bus.Ports, Port{Name: fmt.Sprint(len(bus.Ports) + 1), Node: n.ID})
 			atPoint[q], isPort[n.ID] = n.ID, true
@@ -1109,6 +1129,7 @@ func (r *repairer) moveStrayPortNodes() {
 			d.Nodes[i].X, d.Nodes[i].Y = p.X, p.Y
 		}
 	}
+	r.nodesChanged()
 }
 
 // mergeNodesOntoPorts merges every Node that isn't a port but sits exactly on a port Node into it, unless a wire
@@ -1227,6 +1248,20 @@ func (r *repairer) tapWireNodesOntoWires() {
 		}
 		return false
 	}
+	first := map[int]Node{}
+	for _, n := range d.Nodes {
+		if _, ok := first[n.ID]; !ok {
+			first[n.ID] = n
+		}
+	}
+	owners := map[int][]int{}
+	for i, e := range d.Elements {
+		for _, p := range e.Ports {
+			if o := owners[p.Node]; len(o) == 0 || o[len(o)-1] != i {
+				owners[p.Node] = append(o, i)
+			}
+		}
+	}
 	var ends []int
 	seen := map[int]bool{}
 	for _, c := range d.Connectors {
@@ -1237,38 +1272,32 @@ func (r *repairer) tapWireNodesOntoWires() {
 			}
 		}
 	}
+	wires := newWireGrid(d.Connectors)
 	for _, id := range ends {
 		n, ok := nodes[id]
 		if !ok || busNodes[id] || onBus(Point{X: n.X, Y: n.Y}) {
 			continue
 		}
 		avoid := map[int]bool{}
-		for _, e := range d.Elements {
-			has := false
-			for _, p := range e.Ports {
-				has = has || p.Node == id
-			}
-			if has {
-				for _, p := range e.Ports {
-					if p.Node != id {
-						avoid[p.Node] = true
-					}
+		for _, i := range owners[id] {
+			for _, p := range d.Elements[i].Ports {
+				if p.Node != id {
+					avoid[p.Node] = true
 				}
 			}
 		}
-		r.tapWireAt(id, avoid)
+		if at, ok := first[id]; ok {
+			r.tapWireAt(Point{X: at.X, Y: at.Y}, id, avoid, wires)
+		}
 	}
 }
 
 // tapWireAt splits the first wire (not an overhead line, not ending on Node nodeID or on a Node in avoid) whose
-// line passes through Node nodeID's point, away from its ends, into two wires meeting on that Node.
-func (r *repairer) tapWireAt(nodeID int, avoid map[int]bool) {
-	n, ok := r.node(nodeID)
-	if !ok {
-		return
-	}
-	at := Point{X: n.X, Y: n.Y}
-	for _, c := range r.d.Connectors {
+// line passes through at, Node nodeID's point, away from its ends, into two wires meeting on that Node. wires
+// indexes r.d.Connectors and is kept up to date.
+func (r *repairer) tapWireAt(at Point, nodeID int, avoid map[int]bool, wires *wireGrid) {
+	for _, i := range wires.near(at) {
+		c := r.d.Connectors[i]
 		if c.Kind == KindOverheadLine || len(c.Points) < 2 || c.From == nodeID || c.To == nodeID || avoid[c.From] || avoid[c.To] {
 			continue
 		}
@@ -1277,9 +1306,55 @@ func (r *repairer) tapWireAt(nodeID int, avoid map[int]bool) {
 		}
 		if k := segmentWith(c.Points, at); k >= 0 {
 			r.splitWireAt(c, k, at, nodeID)
+			wires.add(len(r.d.Connectors)-1, r.d.Connectors[len(r.d.Connectors)-1].Points)
 			return
 		}
 	}
+}
+
+// wireGridCell is the side of a wireGrid cell, in diagram units.
+const wireGridCell = 64
+
+// wireGrid finds the wires that may pass through a point: each wire's index in the connector list is filed under
+// every cell its bounding box (widened by twice repairEpsilon) overlaps. A wire split in place keeps its old,
+// larger box, which only adds candidates.
+type wireGrid struct {
+	cells map[[2]int][]int
+}
+
+func newWireGrid(connectors []Connector) *wireGrid {
+	g := &wireGrid{cells: map[[2]int][]int{}}
+	for i, c := range connectors {
+		g.add(i, c.Points)
+	}
+	return g
+}
+
+func wireGridKey(v float64) int {
+	return int(math.Floor(v / wireGridCell))
+}
+
+// add files wire i, whose points are pts; i must be above every index added before.
+func (g *wireGrid) add(i int, pts []Point) {
+	if len(pts) == 0 {
+		return
+	}
+	minX, minY, maxX, maxY := pts[0].X, pts[0].Y, pts[0].X, pts[0].Y
+	for _, p := range pts[1:] {
+		minX, minY = math.Min(minX, p.X), math.Min(minY, p.Y)
+		maxX, maxY = math.Max(maxX, p.X), math.Max(maxY, p.Y)
+	}
+	const pad = 2 * repairEpsilon
+	for x := wireGridKey(minX - pad); x <= wireGridKey(maxX+pad); x++ {
+		for y := wireGridKey(minY - pad); y <= wireGridKey(maxY+pad); y++ {
+			g.cells[[2]int{x, y}] = append(g.cells[[2]int{x, y}], i)
+		}
+	}
+}
+
+// near returns, in ascending order, the indices of the wires whose box may contain p.
+func (g *wireGrid) near(p Point) []int {
+	return g.cells[[2]int{wireGridKey(p.X), wireGridKey(p.Y)}]
 }
 
 // dropUnusedNodes drops a busbar's ports whose Node nothing else uses (renumbering the rest) and every Node nothing
@@ -1328,4 +1403,5 @@ func (r *repairer) dropUnusedNodes() {
 		}
 	}
 	d.Nodes = nodes
+	r.nodesChanged()
 }
