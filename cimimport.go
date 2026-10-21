@@ -1,0 +1,1323 @@
+package slddoc
+
+import (
+	"bytes"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// CIM import: CIM RDF/XML documents (CGMES 3.0 or 2.4.15; any set of profiles, read by class and property name
+// whatever their namespace) to one diagram per Diagram Layout (DL) Diagram. Equipment becomes elements placed at
+// their DiagramObject points, AC line segments become lines along theirs, and every ConnectivityNode is wired: the
+// wires the layout draws for it (DiagramObjects of the node itself, as ExportCIM writes them) are kept, and any part
+// of the node they leave unconnected gets an orthogonal wire to the rest (to its busbar when it has one). Repair is
+// then expected to turn wire ends and terminals into ports, as after any import.
+
+// CIMImportOptions tells ImportCIM about the editor: Terminals maps a symbol shape to its local terminals and Classes
+// a shape to its element class (from the element library); Grid is the grid step foreign layouts are snapped to.
+type CIMImportOptions struct {
+	Terminals map[string][]Point
+	Classes   map[string]Class
+	Grid      float64
+}
+
+// CIMPage is one imported diagram: Title is the DL Diagram's name, Report counts what was made (Skipped by CIM
+// class) and Messages notes what was guessed.
+type CIMPage struct {
+	Title    string
+	Diagram  *Diagram
+	Report   Report
+	Messages []string
+}
+
+// ErrNoDiagramLayout is returned when the documents hold equipment but no DL Diagram to place it with.
+var ErrNoDiagramLayout = errors.New("slddoc: no diagram layout (DL) in the CIM documents")
+
+type cimObject struct {
+	id    string
+	class string
+	props map[string][]string // property name after its class prefix → values (references normalized)
+}
+
+func (o *cimObject) get(name string) string {
+	if o == nil || len(o.props[name]) == 0 {
+		return ""
+	}
+	return o.props[name][0]
+}
+
+func (o *cimObject) num(name string) (float64, bool) {
+	v, err := strconv.ParseFloat(strings.TrimSpace(o.get(name)), 64)
+	return v, err == nil
+}
+
+func (o *cimObject) numPtr(name string) *float64 {
+	if v, ok := o.num(name); ok {
+		return &v
+	}
+	return nil
+}
+
+// cimRef normalizes an rdf:ID, rdf:about or rdf:resource to a bare id: "#_x", "_x", "urn:uuid:x" and "x" all give
+// "x".
+func cimRef(s string) string {
+	s = strings.TrimPrefix(s, "#")
+	s = strings.TrimPrefix(s, "urn:uuid:")
+	return strings.TrimPrefix(s, "_")
+}
+
+// parseCIM reads RDF/XML documents into one object store, merging objects that several profiles describe.
+func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
+	objs := map[string]*cimObject{}
+	for _, doc := range docs {
+		dec := xml.NewDecoder(bytes.NewReader(doc))
+		depth := 0
+		var cur *cimObject
+		var prop string
+		var text strings.Builder
+		for {
+			tok, err := dec.Token()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("slddoc: reading CIM: %w", err)
+			}
+			switch tk := tok.(type) {
+			case xml.StartElement:
+				depth++
+				switch depth {
+				case 2:
+					cur = nil
+					if strings.Contains(tk.Name.Space, "ModelDescription") || strings.Contains(tk.Name.Space, "rdf-syntax") {
+						continue
+					}
+					id := ""
+					for _, a := range tk.Attr {
+						if a.Name.Local == "ID" || a.Name.Local == "about" {
+							id = cimRef(a.Value)
+						}
+					}
+					if id == "" {
+						continue
+					}
+					o := objs[id]
+					if o == nil {
+						o = &cimObject{id: id, props: map[string][]string{}}
+						objs[id] = o
+					}
+					if o.class == "" {
+						o.class = tk.Name.Local
+					}
+					cur = o
+				case 3:
+					if cur == nil {
+						continue
+					}
+					prop = tk.Name.Local[strings.LastIndex(tk.Name.Local, ".")+1:]
+					text.Reset()
+					for _, a := range tk.Attr {
+						if a.Name.Local == "resource" {
+							v := a.Value
+							if i := strings.LastIndex(v, "#"); i >= 0 && strings.HasPrefix(v, "http") {
+								v = v[i+1:] // an enum value, e.g. WindingConnection.D
+							} else {
+								v = cimRef(v)
+							}
+							cur.props[prop] = append(cur.props[prop], v)
+							prop = ""
+						}
+					}
+				}
+			case xml.CharData:
+				if depth == 3 && cur != nil && prop != "" {
+					text.Write(tk)
+				}
+			case xml.EndElement:
+				if depth == 3 && cur != nil && prop != "" {
+					cur.props[prop] = append(cur.props[prop], strings.TrimSpace(text.String()))
+					prop = ""
+				}
+				depth--
+			}
+		}
+	}
+	return objs, nil
+}
+
+// cimEquipmentShapes maps a CIM equipment class to the element class and shape it is drawn with by default.
+var cimEquipmentShapes = map[string]struct {
+	class Class
+	shape string
+}{
+	"Breaker":                     {ClassBreaker, "41"},
+	"DisconnectingCircuitBreaker": {ClassBreaker, "41"},
+	"Disconnector":                {ClassDisconnector, "162"},
+	"LoadBreakSwitch":             {ClassLoadBreakSwitch, "42"},
+	"GroundDisconnector":          {ClassGroundSwitch, "54"},
+	"Fuse":                        {ClassFuse, "203"},
+	"Switch":                      {ClassSectionalizer, "164"},
+	"Ground":                      {ClassGround, "31"},
+	"SynchronousMachine":          {ClassGenerator, "173"},
+	"AsynchronousMachine":         {ClassSynchronousMotor, "39"},
+	"SeriesCompensator":           {ClassReactor, "37"},
+	"LinearShuntCompensator":      {ClassCapacitorBank, "172"},
+	"NonlinearShuntCompensator":   {ClassCapacitorBank, "172"},
+	"PetersenCoil":                {ClassReactorShunt, "397"},
+	"BusbarSection":               {ClassBusBarSection, "24"},
+	"PowerTransformer":            {ClassPowerTransformer, "47"},
+	"CurrentTransformer":          {ClassCurrentTransformer, "34"},
+	"PotentialTransformer":        {ClassVoltageTransformer, "55"},
+	"SurgeArrester":               {ClassSurgeArrester, "168"},
+	"FaultIndicator":              {ClassFaultPassageIndicator, "320003"},
+	"WaveTrap":                    {ClassBlockingFilter, "389"},
+	"Junction":                    {ClassJunctionPoint, "7"},
+	"EnergyConsumer":              {ClassLoad, "330001"},
+	"ConformLoad":                 {ClassLoad, "330001"},
+	"NonConformLoad":              {ClassLoad, "330001"},
+	"ExternalNetworkInjection":    {ClassNetworkInfeed, "330002"},
+	"EquivalentInjection":         {ClassNetworkInfeed, "330002"},
+	"EnergySource":                {ClassNetworkInfeed, "330002"},
+	"StaticVarCompensator":        {ClassStaticVarCompensator, "330003"},
+}
+
+var cimAuxiliaryClasses = map[string]bool{
+	"CurrentTransformer": true, "PotentialTransformer": true, "SurgeArrester": true, "FaultIndicator": true, "WaveTrap": true,
+}
+
+// cimImporter holds the parsed documents and their indexes.
+type cimImporter struct {
+	opt       CIMImportOptions
+	objs      map[string]*cimObject
+	byClass   map[string][]*cimObject
+	terminals map[string][]*cimObject // equipment id → its Terminals, by sequence number
+	points    map[string][]*cimObject // DiagramObject id → its points, in order
+	dos       map[string][]*cimObject // Diagram id → its DiagramObjects
+	layerOf   map[string]string       // DiagramObject id → VisibilityLayer id
+}
+
+// ImportCIM converts CIM documents to diagrams, one per DL Diagram that places at least one item.
+func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
+	if opt.Grid <= 0 {
+		opt.Grid = 10
+	}
+	objs, err := parseCIM(docs)
+	if err != nil {
+		return nil, err
+	}
+	im := &cimImporter{opt: opt, objs: objs, byClass: map[string][]*cimObject{}, terminals: map[string][]*cimObject{},
+		points: map[string][]*cimObject{}, dos: map[string][]*cimObject{}, layerOf: map[string]string{}}
+	ids := make([]string, 0, len(objs))
+	for id := range objs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		o := objs[id]
+		im.byClass[o.class] = append(im.byClass[o.class], o)
+		switch o.class {
+		case "Terminal":
+			eq := o.get("ConductingEquipment")
+			im.terminals[eq] = append(im.terminals[eq], o)
+		case "DiagramObjectPoint":
+			do := o.get("DiagramObject")
+			im.points[do] = append(im.points[do], o)
+		case "DiagramObject", "TextDiagramObject":
+			im.dos[o.get("Diagram")] = append(im.dos[o.get("Diagram")], o)
+		case "VisibilityLayer":
+			for _, do := range o.props["VisibleObjects"] {
+				if _, ok := im.layerOf[do]; !ok {
+					im.layerOf[do] = id
+				}
+			}
+		}
+	}
+	seq := func(o *cimObject) float64 {
+		if v, ok := o.num("sequenceNumber"); ok {
+			return v
+		}
+		return math.MaxFloat64
+	}
+	for _, list := range im.terminals {
+		sort.SliceStable(list, func(i, j int) bool { return seq(list[i]) < seq(list[j]) })
+	}
+	for _, list := range im.points {
+		sort.SliceStable(list, func(i, j int) bool { return seq(list[i]) < seq(list[j]) })
+	}
+	if len(im.byClass["Diagram"]) == 0 {
+		return nil, ErrNoDiagramLayout
+	}
+	var pages []CIMPage
+	for _, dg := range im.byClass["Diagram"] {
+		if p, ok := im.page(dg); ok {
+			pages = append(pages, p)
+		}
+	}
+	if len(pages) == 0 {
+		return nil, ErrNoDiagramLayout
+	}
+	return pages, nil
+}
+
+// --- one page
+
+// cimAttach is one thing that must reach a ConnectivityNode: a terminal or line end at a point. Attachments sharing
+// a group are already connected (the ports of a junction, wire jump or current transformer); an optional one joins
+// when a wire reaches it but is never wired on its own.
+type cimAttach struct {
+	at       Point
+	optional bool
+	group    int
+}
+
+type cimPageBuilder struct {
+	im       *cimImporter
+	d        *Diagram
+	report   Report
+	messages []string
+	nextID   int
+	voltages map[string]int         // BaseVoltage id → VoltageClass id
+	layers   map[string]int         // VisibilityLayer id → Layer id
+	itemOf   map[string]int         // CIM object id → element/connector id, for labels
+	attach   map[string][]cimAttach // ConnectivityNode id → what must reach it
+	busbars  map[string][][2]Point  // ConnectivityNode id → busbar segments on it
+	wires    map[string][][]Point   // ConnectivityNode id → wires drawn for it
+	cnLayer  map[string]int
+	doFor    map[string]*cimObject // object id → its DiagramObject on this page
+	portAt   map[int][]Point       // element id → where its ports sit, when not at its symbol's terminals
+	glued    map[string]Point      // DiagramObjectGluePoint id → the point of a terminal glued there
+	pending  []cimPending          // junctions, jumps and auxiliary devices, joined once all else is placed
+	knives   map[string]*cimKnife
+	knifeKey []string
+	tf       func(Point) Point
+	own      bool
+}
+
+// cimPending is an element whose ports all join ConnectivityNode cn as one piece.
+type cimPending struct {
+	id       int
+	cn       string
+	optional bool
+}
+
+// cimKnife collects the two Disconnectors ExportCIM writes for one changeover knife switch.
+type cimKnife struct {
+	id                      int
+	pivot, left, right      string
+	leftClosed, rightClosed bool
+	at                      [3]Point // drawn pivot, left and right terminal points (zero when not drawn)
+}
+
+func (b *cimPageBuilder) take() int {
+	b.nextID++
+	return b.nextID
+}
+
+func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
+	dos := im.dos[dg.id]
+	b := &cimPageBuilder{im: im, d: &Diagram{Layers: []Layer{{ID: BaseLayer, Name: baseLayerName}}},
+		report: Report{Skipped: map[string]int{}}, voltages: map[string]int{}, layers: map[string]int{},
+		itemOf: map[string]int{}, attach: map[string][]cimAttach{}, busbars: map[string][][2]Point{},
+		wires: map[string][][]Point{}, cnLayer: map[string]int{}, knives: map[string]*cimKnife{},
+		doFor: map[string]*cimObject{}, portAt: map[int][]Point{}, glued: map[string]Point{}}
+	b.transform(dg, dos)
+	for _, do := range dos {
+		if ref := do.get("IdentifiedObject"); ref != "" && b.doFor[ref] == nil {
+			b.doFor[ref] = do
+		}
+	}
+
+	// A wire or line end glued to a terminal ends where the terminal is drawn.
+	for _, do := range dos {
+		if t := im.objs[do.get("IdentifiedObject")]; t != nil && t.class == "Terminal" {
+			pts := b.doPoints(do)
+			for k, p := range im.points[do.id] {
+				if g := p.get("DiagramObjectGluePoint"); g != "" && k < len(pts) {
+					if _, ok := b.glued[g]; !ok {
+						b.glued[g] = pts[k]
+					}
+				}
+			}
+		}
+	}
+
+	// Wires first: placing a device matches its terminals to their ends.
+	for _, do := range dos {
+		if obj := im.objs[do.get("IdentifiedObject")]; do.class == "DiagramObject" && obj != nil && obj.class == "ConnectivityNode" {
+			if pts := b.gluedEnds(do); len(pts) >= 2 {
+				b.wires[obj.id] = append(b.wires[obj.id], pts)
+				b.cnLayer[obj.id] = b.layer(do)
+			}
+		}
+	}
+	for _, do := range dos {
+		if do.class != "DiagramObject" {
+			continue
+		}
+		obj := im.objs[do.get("IdentifiedObject")]
+		if obj == nil {
+			continue
+		}
+		switch {
+		case obj.class == "ConnectivityNode":
+			if pts := b.doPoints(do); len(pts) == 1 {
+				b.passThrough(obj, do, pts[0])
+			}
+		case obj.class == "ACLineSegment":
+			b.line(obj, do)
+		case obj.class == "Terminal" || obj.class == "PowerTransformerEnd":
+		default:
+			if _, ok := cimEquipmentShapes[obj.class]; ok {
+				b.element(obj, do)
+			} else if _, isEq := im.terminals[obj.id]; isEq {
+				b.report.Skipped[obj.class]++
+			}
+		}
+	}
+	if b.report.Elements == 0 && b.report.Connectors == 0 {
+		return CIMPage{}, false
+	}
+	b.finishKnives()
+	b.joinPending()
+	b.wireNodes()
+	b.labels(dos)
+	b.d.LastID = b.nextID
+	b.report.Nodes = len(b.d.Nodes)
+	title := dg.get("name")
+	if title == "" {
+		title = "diagram"
+	}
+	return CIMPage{Title: title, Diagram: b.d, Report: b.report, Messages: b.messages}, true
+}
+
+// transform sets the page's coordinate mapping: y flipped for a y-up diagram; a layout this editor exported (its
+// "shape-" styles) kept 1:1; any other scaled so the median distance between neighbouring devices is six grid steps,
+// moved to a margin and snapped to the grid.
+func (b *cimPageBuilder) transform(dg *cimObject, dos []*cimObject) {
+	flip := strings.HasSuffix(dg.get("orientation"), "positive")
+	for _, do := range dos {
+		if s := b.im.objs[do.get("DiagramObjectStyle")]; s != nil && strings.HasPrefix(s.get("name"), "shape-") {
+			b.own = true
+			break
+		}
+	}
+	raw := func(p *cimObject) Point {
+		x, _ := p.num("xPosition")
+		y, _ := p.num("yPosition")
+		if flip {
+			y = -y
+		}
+		return Point{X: x, Y: y}
+	}
+	var all, centres []Point
+	for _, do := range dos {
+		pts := b.im.points[do.id]
+		for _, p := range pts {
+			all = append(all, raw(p))
+		}
+		if len(pts) == 1 && do.class == "DiagramObject" {
+			if o := b.im.objs[do.get("IdentifiedObject")]; o != nil && cimEquipmentShapes[o.class].shape != "" {
+				centres = append(centres, raw(pts[0]))
+			}
+		}
+	}
+	grid := b.im.opt.Grid
+	if b.own {
+		b.tf = func(p Point) Point { return p }
+		w, _ := dg.num("x2InitialView")
+		h, _ := dg.num("y2InitialView")
+		b.d.Width, b.d.Height = w, h
+		for _, p := range all {
+			b.d.Width, b.d.Height = math.Max(b.d.Width, p.X+2*grid), math.Max(b.d.Height, p.Y+2*grid)
+		}
+		return
+	}
+	scale := 1.0
+	if nn := medianNearest(centres); nn > 0 {
+		scale = 6 * grid / nn
+	}
+	minX, minY := math.Inf(1), math.Inf(1)
+	maxX, maxY := math.Inf(-1), math.Inf(-1)
+	for _, p := range all {
+		minX, minY = math.Min(minX, p.X), math.Min(minY, p.Y)
+		maxX, maxY = math.Max(maxX, p.X), math.Max(maxY, p.Y)
+	}
+	if len(all) == 0 {
+		minX, minY, maxX, maxY = 0, 0, 0, 0
+	}
+	margin := 6 * grid
+	snap := func(v float64) float64 { return math.Round(v/grid) * grid }
+	b.tf = func(p Point) Point {
+		return Point{X: snap((p.X-minX)*scale + margin), Y: snap((p.Y-minY)*scale + margin)}
+	}
+	b.d.Width = snap((maxX-minX)*scale + 2*margin)
+	b.d.Height = snap((maxY-minY)*scale + 2*margin)
+	if scale != 1 {
+		b.messages = append(b.messages, fmt.Sprintf("layout scaled by %.3g and snapped to the grid", scale))
+	}
+}
+
+// medianNearest is the median of each point's distance to its nearest other point (0 for fewer than two).
+func medianNearest(pts []Point) float64 {
+	if len(pts) < 2 {
+		return 0
+	}
+	ds := make([]float64, 0, len(pts))
+	for i, p := range pts {
+		best := math.Inf(1)
+		for j, q := range pts {
+			if i != j {
+				if d := math.Hypot(p.X-q.X, p.Y-q.Y); d > 0 && d < best {
+					best = d
+				}
+			}
+		}
+		if !math.IsInf(best, 1) {
+			ds = append(ds, best)
+		}
+	}
+	if len(ds) == 0 {
+		return 0
+	}
+	slices.Sort(ds)
+	return ds[len(ds)/2]
+}
+
+func (b *cimPageBuilder) doPoints(do *cimObject) []Point {
+	var out []Point
+	for _, p := range b.im.points[do.id] {
+		x, _ := p.num("xPosition")
+		y, _ := p.num("yPosition")
+		if dg := b.im.objs[do.get("Diagram")]; dg != nil && strings.HasSuffix(dg.get("orientation"), "positive") {
+			y = -y
+		}
+		q := b.tf(Point{X: x, Y: y})
+		if len(out) == 0 || out[len(out)-1] != q {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// gluedEnds is do's points with each end moved onto the terminal it is glued to, if any.
+func (b *cimPageBuilder) gluedEnds(do *cimObject) []Point {
+	raw := b.im.points[do.id]
+	pts := b.doPoints(do)
+	if len(raw) < 2 || len(pts) < 2 {
+		return pts
+	}
+	if g, ok := b.glued[raw[0].get("DiagramObjectGluePoint")]; ok {
+		pts[0] = g
+	}
+	if g, ok := b.glued[raw[len(raw)-1].get("DiagramObjectGluePoint")]; ok {
+		pts[len(pts)-1] = g
+	}
+	return pts
+}
+
+func (b *cimPageBuilder) layer(do *cimObject) int {
+	vl := b.im.layerOf[do.id]
+	if vl == "" {
+		return BaseLayer
+	}
+	if id, ok := b.layers[vl]; ok {
+		return id
+	}
+	o := b.im.objs[vl]
+	id := len(b.d.Layers)
+	for slices.ContainsFunc(b.d.Layers, func(l Layer) bool { return l.ID == id }) {
+		id++
+	}
+	z, _ := o.num("drawingOrder")
+	name := o.get("name")
+	if name == "" {
+		name = fmt.Sprintf("Layer %d", id)
+	}
+	b.d.Layers = append(b.d.Layers, Layer{ID: id, Name: name, Z: int(z)})
+	b.layers[vl] = id
+	return id
+}
+
+// voltage returns the VoltageClass of BaseVoltage bv (0 for none), creating it, named "<kV> kV", on first use.
+func (b *cimPageBuilder) voltage(bv string) int {
+	o := b.im.objs[bv]
+	if o == nil {
+		return 0
+	}
+	if id, ok := b.voltages[bv]; ok {
+		return id
+	}
+	kv, _ := o.num("nominalVoltage")
+	name := strconv.FormatFloat(kv, 'f', -1, 64) + " kV"
+	for _, vc := range b.d.VoltageClasses {
+		if vc.Name == name {
+			b.voltages[bv] = vc.ID
+			return vc.ID
+		}
+	}
+	id := b.take()
+	b.d.VoltageClasses = append(b.d.VoltageClasses, VoltageClass{ID: id, Name: name})
+	b.voltages[bv] = id
+	return id
+}
+
+// equipmentVoltage is obj's BaseVoltage: its own, else its container's (a VoltageLevel), else that of the
+// container of its first terminal's ConnectivityNode.
+func (b *cimPageBuilder) equipmentVoltage(obj *cimObject) int {
+	if v := obj.get("BaseVoltage"); v != "" {
+		return b.voltage(v)
+	}
+	if c := b.im.objs[obj.get("EquipmentContainer")]; c != nil && c.get("BaseVoltage") != "" {
+		return b.voltage(c.get("BaseVoltage"))
+	}
+	for _, t := range b.im.terminals[obj.id] {
+		if cn := b.im.objs[t.get("ConnectivityNode")]; cn != nil {
+			if c := b.im.objs[cn.get("ConnectivityNodeContainer")]; c != nil && c.get("BaseVoltage") != "" {
+				return b.voltage(c.get("BaseVoltage"))
+			}
+		}
+	}
+	return 0
+}
+
+func snapOrient(rotation float64) int {
+	o := int(math.Round(rotation/90)) * 90 % 360
+	if o < 0 {
+		o += 360
+	}
+	if o == 270 {
+		return -90
+	}
+	return o
+}
+
+// element places one equipment item and records what its terminals must reach.
+func (b *cimPageBuilder) element(obj, do *cimObject) {
+	def := cimEquipmentShapes[obj.class]
+	class, shape := def.class, def.shape
+	switch obj.class {
+	case "SynchronousMachine":
+		switch obj.get("type") {
+		case "SynchronousMachineKind.condenser":
+			class, shape = ClassSynchronousCompensator, "174"
+		case "SynchronousMachineKind.motor", "SynchronousMachineKind.motorOrCondenser":
+			class, shape = ClassSynchronousMotor, "39"
+		}
+	case "AsynchronousMachine":
+		if strings.HasSuffix(obj.get("asynchronousMachineType"), "generator") {
+			class, shape = ClassGenerator, "173"
+		}
+	case "LinearShuntCompensator", "NonlinearShuntCompensator":
+		if v, ok := obj.num("bPerSection"); ok && v < 0 {
+			class, shape = ClassReactorShunt, "397"
+		}
+	}
+	// A layout this editor exported names its shape; keep it when that shape can stand for this CIM class.
+	if st := b.im.objs[do.get("DiagramObjectStyle")]; st != nil {
+		if code, ok := strings.CutPrefix(st.get("name"), "shape-"); ok {
+			if c, ok := b.im.opt.Classes[code]; ok && slices.Contains(CIMClasses(c), obj.class) {
+				class, shape = c, code
+			}
+		}
+	}
+	if class == ClassKnifeSwitch || class == ClassKnifeSwitch3 {
+		b.knifeHalf(obj, do, class, shape)
+		return
+	}
+	pts := b.doPoints(do)
+	if len(pts) == 0 {
+		return
+	}
+	e := Element{ID: b.take(), Class: class, Shape: shape, Name: obj.get("name"), Layer: b.layer(do),
+		X: pts[0].X, Y: pts[0].Y, Voltage: b.equipmentVoltage(obj)}
+	if r, ok := do.num("rotation"); ok {
+		e.Orient = snapOrient(r)
+	}
+	if len(CIMClasses(class)) > 1 && CIMClasses(class)[0] != obj.class && slices.Contains(CIMClasses(class), obj.class) {
+		e.CIM = obj.class
+	}
+	if no := obj.get("normalOpen"); no != "" {
+		state := 1
+		if no == "true" {
+			state = 0
+		}
+		e.State = &state
+	}
+	b.electrical(&e, obj)
+	if class == ClassBooster {
+		b.boosterElectrical(&e, obj)
+	}
+	var cns []string
+	switch {
+	case class == ClassBusBarSection:
+		e.Orient = 0
+		if len(pts) < 2 {
+			pts = []Point{{pts[0].X - 5*b.im.opt.Grid, pts[0].Y}, {pts[0].X + 5*b.im.opt.Grid, pts[0].Y}}
+		}
+		e.Points = pts
+		e.X, e.Y = (pts[0].X+pts[len(pts)-1].X)/2, (pts[0].Y+pts[len(pts)-1].Y)/2
+		if ts := b.im.terminals[obj.id]; len(ts) > 0 {
+			cn := ts[0].get("ConnectivityNode")
+			for i := 1; i < len(pts); i++ {
+				b.busbars[cn] = append(b.busbars[cn], [2]Point{pts[i-1], pts[i]})
+			}
+		}
+	case class == ClassPowerTransformer:
+		cns = b.windings(&e, obj)
+	case cimAuxiliaryClasses[obj.class]:
+		if t := b.im.objs[obj.get("Terminal")]; t != nil {
+			cns = []string{t.get("ConnectivityNode")}
+		}
+	default:
+		for _, t := range b.im.terminals[obj.id] {
+			cns = append(cns, t.get("ConnectivityNode"))
+		}
+	}
+	var drawn []Point
+	if b.own && !cimAuxiliaryClasses[obj.class] {
+		drawn = b.terminalPoints(obj, class)
+		b.fit(&e, drawn, true)
+	}
+	ts := symbolTerminals(&e, b.im.opt.Terminals)
+	// This editor's own export draws each terminal where its port Node was, which need not be the symbol's
+	// terminal (two ports may share a Node); the port goes back there.
+	for i := range ts {
+		if i < len(drawn) && drawn[i] != (Point{}) && drawn[i] != roundPt(ts[i]) {
+			ts[i] = drawn[i]
+			b.portAt[e.ID] = ts
+		}
+	}
+	b.d.Elements = append(b.d.Elements, e)
+	b.itemOf[obj.id] = e.ID
+	b.report.Elements++
+	if cimAuxiliaryClasses[obj.class] {
+		if len(cns) > 0 && cns[0] != "" {
+			b.pending = append(b.pending, cimPending{id: e.ID, cn: cns[0]})
+		}
+		return
+	}
+	for i, p := range ts {
+		if i < len(cns) && cns[i] != "" {
+			b.attach[cns[i]] = append(b.attach[cns[i]], cimAttach{at: roundPt(p)})
+		}
+	}
+}
+
+// terminalPoints is where the layout draws each of obj's terminals (by port order; a transformer's by end number),
+// a zero point for one it doesn't draw.
+func (b *cimPageBuilder) terminalPoints(obj *cimObject, class Class) []Point {
+	terms := b.im.terminals[obj.id]
+	if class == ClassPowerTransformer {
+		terms = nil
+		var ends []*cimObject
+		for _, end := range b.im.byClass["PowerTransformerEnd"] {
+			if end.get("PowerTransformer") == obj.id {
+				ends = append(ends, end)
+			}
+		}
+		sort.SliceStable(ends, func(i, j int) bool {
+			a, _ := ends[i].num("endNumber")
+			c, _ := ends[j].num("endNumber")
+			return a < c
+		})
+		for _, end := range ends {
+			terms = append(terms, b.im.objs[end.get("Terminal")])
+		}
+	}
+	out := make([]Point, len(terms))
+	for i, t := range terms {
+		if t == nil {
+			continue
+		}
+		if do := b.doFor[t.id]; do != nil {
+			if pts := b.doPoints(do); len(pts) > 0 {
+				out[i] = pts[0]
+			}
+		}
+	}
+	return out
+}
+
+// wireEndsNear is every end of cn's drawn wires within three grid steps of at.
+func (b *cimPageBuilder) wireEndsNear(cn string, at Point) []Point {
+	var out []Point
+	r := 3 * b.im.opt.Grid
+	for _, w := range b.wires[cn] {
+		for _, p := range []Point{w[0], w[len(w)-1]} {
+			if math.Hypot(p.X-at.X, p.Y-at.Y) <= r {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// fit sets e's size step, mirror and lead spacing so its terminals land on targets: target i on terminal i when
+// ordered (a zero target is ignored), else each target on its nearest terminal. Nothing changes unless some
+// setting fits within a unit.
+func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered bool) {
+	if len(targets) == 0 {
+		return
+	}
+	worst := func(probe *Element) float64 {
+		ts := symbolTerminals(probe, b.im.opt.Terminals)
+		if len(ts) == 0 {
+			return math.Inf(1)
+		}
+		w := 0.0
+		for i, p := range targets {
+			if ordered {
+				if p == (Point{}) || i >= len(ts) {
+					continue
+				}
+				w = math.Max(w, math.Hypot(ts[i].X-p.X, ts[i].Y-p.Y))
+				continue
+			}
+			best := math.Inf(1)
+			for _, t := range ts {
+				best = math.Min(best, math.Hypot(t.X-p.X, t.Y-p.Y))
+			}
+			w = math.Max(w, best)
+		}
+		return w
+	}
+	steps := []int{0}
+	if UsesSizeStep(e.Class) {
+		steps = SizeSteps
+	}
+	spans := []float64{0}
+	if HasLeads(e.Shape) && len(targets) >= 2 && targets[0] != (Point{}) && targets[1] != (Point{}) {
+		spans = append(spans, math.Round(math.Hypot(targets[0].X-targets[1].X, targets[0].Y-targets[1].Y)))
+	}
+	best, bestErr := *e, worst(e)
+	for _, step := range steps {
+		for _, mirror := range []bool{false, true} {
+			for _, span := range spans {
+				probe := *e
+				probe.Scale, probe.Mirror, probe.Span = step, mirror, span
+				if w := worst(&probe); w < bestErr-1e-9 {
+					best, bestErr = probe, w
+				}
+			}
+		}
+	}
+	if bestErr <= 1 {
+		*e = best
+	}
+}
+
+// passThrough recreates a junction, wire jump, pole or cable joint this editor exported as a point of its
+// ConnectivityNode (its "shape-" style names it); its ports join the node as one connected piece.
+func (b *cimPageBuilder) passThrough(cn, do *cimObject, at Point) {
+	st := b.im.objs[do.get("DiagramObjectStyle")]
+	if st == nil {
+		return
+	}
+	code, ok := strings.CutPrefix(st.get("name"), "shape-")
+	class, known := b.im.opt.Classes[code]
+	if !ok || !known || cimClasses[class].role != rolePassThrough {
+		return
+	}
+	e := Element{ID: b.take(), Class: class, Shape: code, Layer: b.layer(do), X: at.X, Y: at.Y}
+	if r, ok := do.num("rotation"); ok {
+		e.Orient = snapOrient(r)
+	}
+	if c := b.im.objs[cn.get("ConnectivityNodeContainer")]; c != nil {
+		e.Voltage = b.voltage(c.get("BaseVoltage"))
+	}
+	b.d.Elements = append(b.d.Elements, e)
+	b.report.Elements++
+	b.pending = append(b.pending, cimPending{id: e.ID, cn: cn.id, optional: true})
+}
+
+// joinPending fits each junction, jump and auxiliary device to the wire and line ends around it (its ports moved
+// onto them, each within three grid steps, when its symbol alone doesn't fit) and joins its ports to its node.
+func (b *cimPageBuilder) joinPending() {
+	for _, pd := range b.pending {
+		i := slices.IndexFunc(b.d.Elements, func(e Element) bool { return e.ID == pd.id })
+		e := &b.d.Elements[i]
+		at := Point{X: e.X, Y: e.Y}
+		near := b.wireEndsNear(pd.cn, at)
+		for _, a := range b.attach[pd.cn] {
+			if a.group == 0 && math.Hypot(a.at.X-at.X, a.at.Y-at.Y) <= 3*b.im.opt.Grid {
+				near = append(near, a.at)
+			}
+		}
+		b.fit(e, near, false)
+		ts := symbolTerminals(e, b.im.opt.Terminals)
+		used := map[int]bool{}
+		for k, t := range ts {
+			best, bd := -1, 3*b.im.opt.Grid
+			for j, p := range near {
+				if d := math.Hypot(p.X-t.X, p.Y-t.Y); !used[j] && d <= bd {
+					best, bd = j, d
+				}
+			}
+			if best >= 0 && bd > 1e-6 {
+				used[best] = true
+				ts[k] = near[best]
+				b.portAt[e.ID] = ts
+			} else if best >= 0 {
+				used[best] = true
+			}
+		}
+		for _, p := range ts {
+			b.attach[pd.cn] = append(b.attach[pd.cn], cimAttach{at: roundPt(p), optional: pd.optional, group: e.ID})
+		}
+	}
+}
+
+// knifeHalf takes one of the two Disconnectors ("<name> L"/"<name> R", pivot then contact) of a knife switch
+// this editor exported, creating the switch on the first.
+func (b *cimPageBuilder) knifeHalf(obj, do *cimObject, class Class, shape string) {
+	pts := b.doPoints(do)
+	if len(pts) == 0 {
+		return
+	}
+	name, side := obj.get("name"), "L"
+	if n, ok := strings.CutSuffix(name, " L"); ok {
+		name = n
+	} else if n, ok := strings.CutSuffix(name, " R"); ok {
+		name, side = n, "R"
+	}
+	key := fmt.Sprintf("%s|%g|%g", name, pts[0].X, pts[0].Y)
+	k := b.knives[key]
+	if k == nil {
+		e := Element{ID: b.take(), Class: class, Shape: shape, Name: name, Layer: b.layer(do), X: pts[0].X, Y: pts[0].Y,
+			Voltage: b.equipmentVoltage(obj)}
+		if r, ok := do.num("rotation"); ok {
+			e.Orient = snapOrient(r)
+		}
+		if v := obj.numPtr("ratedCurrent"); v != nil {
+			e.Electrical = &Electrical{RatedCurrent: v}
+		}
+		b.d.Elements = append(b.d.Elements, e)
+		b.report.Elements++
+		k = &cimKnife{id: e.ID}
+		b.knives[key] = k
+		b.knifeKey = append(b.knifeKey, key)
+	}
+	b.itemOf[obj.id] = k.id
+	ts := b.im.terminals[obj.id]
+	if len(ts) < 2 {
+		return
+	}
+	k.pivot = ts[0].get("ConnectivityNode")
+	closed := obj.get("normalOpen") == "false"
+	contact := 1
+	if side == "R" {
+		k.right, k.rightClosed, contact = ts[1].get("ConnectivityNode"), closed, 2
+	} else {
+		k.left, k.leftClosed = ts[1].get("ConnectivityNode"), closed
+	}
+	if drawn := b.terminalPoints(obj, ClassDisconnector); len(drawn) >= 2 {
+		k.at[0], k.at[contact] = drawn[0], drawn[1]
+	}
+}
+
+// finishKnives gives each reassembled knife switch its state (the closed side) and its three connections.
+func (b *cimPageBuilder) finishKnives() {
+	for _, key := range b.knifeKey {
+		k := b.knives[key]
+		i := slices.IndexFunc(b.d.Elements, func(e Element) bool { return e.ID == k.id })
+		e := &b.d.Elements[i]
+		state := -1
+		switch {
+		case k.rightClosed:
+			state = 2
+		case k.leftClosed:
+			state = 0
+		case e.Class == ClassKnifeSwitch3:
+			state = 1
+		}
+		if state >= 0 {
+			e.State = &state
+		}
+		ts := symbolTerminals(e, b.im.opt.Terminals)
+		for j := range ts {
+			if j < 3 && k.at[j] != (Point{}) && k.at[j] != roundPt(ts[j]) {
+				ts[j] = k.at[j]
+				b.portAt[e.ID] = ts
+			}
+		}
+		for j, p := range ts {
+			if cn := [3]string{k.pivot, k.left, k.right}[min(j, 2)]; cn != "" {
+				b.attach[cn] = append(b.attach[cn], cimAttach{at: roundPt(p)})
+			}
+		}
+	}
+}
+
+// boosterElectrical takes a booster's rated values and impedance from its first transformer end.
+func (b *cimPageBuilder) boosterElectrical(e *Element, obj *cimObject) {
+	for _, end := range b.im.byClass["PowerTransformerEnd"] {
+		if end.get("PowerTransformer") == obj.id && end.get("endNumber") == "1" {
+			el := Electrical{RatedS: end.numPtr("ratedS"), RatedU: end.numPtr("ratedU"), R: end.numPtr("r"), X: end.numPtr("x")}
+			if el != (Electrical{}) {
+				e.Electrical = &el
+			}
+		}
+	}
+}
+
+// windings gives a transformer a winding per PowerTransformerEnd (2 to 4, by end number) and returns each one's
+// ConnectivityNode.
+func (b *cimPageBuilder) windings(e *Element, obj *cimObject) []string {
+	var ends []*cimObject
+	for _, end := range b.im.byClass["PowerTransformerEnd"] {
+		if end.get("PowerTransformer") == obj.id {
+			ends = append(ends, end)
+		}
+	}
+	sort.SliceStable(ends, func(i, j int) bool {
+		a, _ := ends[i].num("endNumber")
+		c, _ := ends[j].num("endNumber")
+		return a < c
+	})
+	if len(ends) > 4 {
+		b.messages = append(b.messages, fmt.Sprintf("transformer %q: only its first 4 of %d windings are drawn", e.Name, len(ends)))
+		ends = ends[:4]
+	}
+	schemes := map[string]WindingScheme{"WindingConnection.Y": SchemeWye, "WindingConnection.Yn": SchemeWyeN, "WindingConnection.D": SchemeDelta}
+	var cns []string
+	for _, end := range ends {
+		w := TransformerWinding{Voltage: b.voltage(end.get("BaseVoltage")), Scheme: schemes[end.get("connectionKind")],
+			RatedU: end.numPtr("ratedU"), RatedS: end.numPtr("ratedS"), R: end.numPtr("r"), X: end.numPtr("x"),
+			G: end.numPtr("g"), B: end.numPtr("b")}
+		if c, ok := end.num("phaseAngleClock"); ok {
+			clock := int(c)
+			w.PhaseAngleClock = &clock
+		}
+		e.Windings = append(e.Windings, w)
+		cn := ""
+		if t := b.im.objs[end.get("Terminal")]; t != nil {
+			cn = t.get("ConnectivityNode")
+		}
+		cns = append(cns, cn)
+	}
+	for len(e.Windings) < 2 {
+		e.Windings = append(e.Windings, TransformerWinding{Scheme: SchemeWye})
+	}
+	return cns
+}
+
+// electrical copies obj's nameplate attributes onto e.
+func (b *cimPageBuilder) electrical(e *Element, obj *cimObject) {
+	var el Electrical
+	set := false
+	pick := func(dst **float64, names ...string) {
+		for _, n := range names {
+			if v := obj.numPtr(n); v != nil {
+				*dst, set = v, true
+				return
+			}
+		}
+	}
+	pickInt := func(dst **int, name string) {
+		if v, ok := obj.num(name); ok {
+			n := int(v)
+			*dst, set = &n, true
+		}
+	}
+	switch obj.class {
+	case "Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Fuse", "Switch":
+		pick(&el.RatedCurrent, "ratedCurrent")
+	case "BusbarSection":
+		pick(&el.IpMax, "ipMax")
+	case "SeriesCompensator":
+		pick(&el.R, "r")
+		pick(&el.X, "x")
+	case "SynchronousMachine", "AsynchronousMachine":
+		pick(&el.RatedS, "ratedS")
+		pick(&el.RatedU, "ratedU")
+		pick(&el.MinQ, "minQ")
+		pick(&el.MaxQ, "maxQ")
+		if gu := b.im.objs[obj.get("GeneratingUnit")]; gu != nil {
+			if v := gu.numPtr("minOperatingP"); v != nil {
+				el.MinP, set = v, true
+			}
+			if v := gu.numPtr("maxOperatingP"); v != nil {
+				el.MaxP, set = v, true
+			}
+		}
+	case "LinearShuntCompensator", "NonlinearShuntCompensator", "PetersenCoil":
+		pick(&el.NomU, "nomU", "nominalU")
+		pick(&el.BPerSection, "bPerSection")
+		pick(&el.GPerSection, "gPerSection")
+		pickInt(&el.MaximumSections, "maximumSections")
+		pickInt(&el.NormalSections, "normalSections")
+	case "EnergyConsumer", "ConformLoad", "NonConformLoad":
+		pick(&el.P, "pfixed")
+		pick(&el.Q, "qfixed")
+	case "ExternalNetworkInjection", "EquivalentInjection":
+		pick(&el.MinP, "minP")
+		pick(&el.MaxP, "maxP")
+		pick(&el.MinQ, "minQ")
+		pick(&el.MaxQ, "maxQ")
+	case "StaticVarCompensator":
+		pick(&el.CapacitiveRating, "capacitiveRating")
+		pick(&el.InductiveRating, "inductiveRating")
+	}
+	if set {
+		e.Electrical = &el
+	}
+}
+
+// line adds an AC line segment along its layout points; a "CableLine" style makes it a cable line.
+func (b *cimPageBuilder) line(obj, do *cimObject) {
+	pts := b.gluedEnds(do)
+	if len(pts) < 2 {
+		return
+	}
+	kind := KindOverheadLine
+	if st := b.im.objs[do.get("DiagramObjectStyle")]; st != nil && st.get("name") == string(KindCableLine) {
+		kind = KindCableLine
+	}
+	c := Connector{ID: b.take(), Kind: kind, Name: obj.get("name"), Voltage: b.equipmentVoltage(obj), Layer: b.layer(do), Points: pts}
+	el := Electrical{Length: obj.numPtr("length"), R: obj.numPtr("r"), X: obj.numPtr("x"), Bch: obj.numPtr("bch"),
+		Gch: obj.numPtr("gch"), R0: obj.numPtr("r0"), X0: obj.numPtr("x0"), B0ch: obj.numPtr("b0ch"), G0ch: obj.numPtr("g0ch")}
+	if el != (Electrical{}) {
+		c.Electrical = &el
+	}
+	ts := b.im.terminals[obj.id]
+	ends := [2]Point{pts[0], pts[len(pts)-1]}
+	if len(ts) >= 2 {
+		// Terminal 1 takes the end nearer what else is on its node.
+		near := func(cn string, p Point) float64 {
+			best := math.Inf(1)
+			for _, a := range b.attach[cn] {
+				best = math.Min(best, math.Hypot(a.at.X-p.X, a.at.Y-p.Y))
+			}
+			return best
+		}
+		cn1, cn2 := ts[0].get("ConnectivityNode"), ts[1].get("ConnectivityNode")
+		if near(cn1, ends[1])+near(cn2, ends[0]) < near(cn1, ends[0])+near(cn2, ends[1]) {
+			ends[0], ends[1] = ends[1], ends[0]
+		}
+		b.attach[cn1] = append(b.attach[cn1], cimAttach{at: ends[0]})
+		b.attach[cn2] = append(b.attach[cn2], cimAttach{at: ends[1]})
+	}
+	b.d.Connectors = append(b.d.Connectors, c)
+	b.itemOf[obj.id] = c.ID
+	b.report.Connectors++
+}
+
+// --- wiring
+
+// wireNodes makes the wires of every ConnectivityNode: those the layout draws, then an orthogonal wire from each
+// part still apart to the nearest point of the main part (the busbar's part when there is one).
+func (b *cimPageBuilder) wireNodes() {
+	cns := make([]string, 0, len(b.attach))
+	for cn := range b.attach {
+		cns = append(cns, cn)
+	}
+	sort.Strings(cns)
+	routed := 0
+	for _, cn := range cns {
+		routed += b.wireNode(cn)
+	}
+	if routed > 0 {
+		b.messages = append(b.messages, fmt.Sprintf("%d connections were not drawn in the layout and were routed automatically", routed))
+	}
+	// A wire end and a terminal on one spot share a Node; Repair then makes it the terminal's port.
+	nodes := map[Point]int{}
+	node := func(p Point) int {
+		p = roundPt(p)
+		if id, ok := nodes[p]; ok {
+			return id
+		}
+		id := b.take()
+		nodes[p] = id
+		b.d.Nodes = append(b.d.Nodes, Node{ID: id, X: p.X, Y: p.Y})
+		return id
+	}
+	for i := range b.d.Connectors {
+		c := &b.d.Connectors[i]
+		c.From, c.To = node(c.Points[0]), node(c.Points[len(c.Points)-1])
+	}
+	for i := range b.d.Elements {
+		e := &b.d.Elements[i]
+		ts := b.portAt[e.ID]
+		if ts == nil {
+			ts = symbolTerminals(e, b.im.opt.Terminals)
+		}
+		for k, p := range ts {
+			e.Ports = append(e.Ports, Port{Name: strconv.Itoa(k + 1), Node: node(p)})
+		}
+	}
+}
+
+// cimPart is a connected piece of one ConnectivityNode's drawing: its points and segments.
+type cimPart struct {
+	pts  []Point
+	segs [][2]Point
+	bus  bool
+	need bool
+}
+
+func (p *cimPart) touches(q Point) bool {
+	if slices.Contains(p.pts, q) {
+		return true
+	}
+	for _, s := range p.segs {
+		if onSeg(q, s[0], s[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *cimPart) meets(o *cimPart) bool {
+	if slices.ContainsFunc(o.pts, p.touches) {
+		return true
+	}
+	for _, s := range o.segs {
+		if p.touches(s[0]) || p.touches(s[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// nearest is the point of p closest to q (a segment's closest point when orthogonal) and its distance.
+func (p *cimPart) nearest(q Point) (Point, float64) {
+	best, bd := Point{}, math.Inf(1)
+	try := func(c Point) {
+		if d := math.Hypot(c.X-q.X, c.Y-q.Y); d < bd {
+			best, bd = c, d
+		}
+	}
+	for _, a := range p.pts {
+		try(a)
+	}
+	for _, s := range p.segs {
+		try(s[0])
+		try(s[1])
+		if s[0].Y == s[1].Y && q.X > math.Min(s[0].X, s[1].X) && q.X < math.Max(s[0].X, s[1].X) {
+			try(Point{X: q.X, Y: s[0].Y})
+		}
+		if s[0].X == s[1].X && q.Y > math.Min(s[0].Y, s[1].Y) && q.Y < math.Max(s[0].Y, s[1].Y) {
+			try(Point{X: s[0].X, Y: q.Y})
+		}
+	}
+	return best, bd
+}
+
+func (b *cimPageBuilder) wireNode(cn string) int {
+	var parts []*cimPart
+	groups := map[int]*cimPart{}
+	for _, a := range b.attach[cn] {
+		if g := groups[a.group]; g != nil && a.group != 0 {
+			g.pts = append(g.pts, a.at)
+			g.need = g.need || !a.optional
+			continue
+		}
+		p := &cimPart{pts: []Point{a.at}, need: !a.optional}
+		parts = append(parts, p)
+		if a.group != 0 {
+			groups[a.group] = p
+		}
+	}
+	for _, s := range b.busbars[cn] {
+		parts = append(parts, &cimPart{segs: [][2]Point{s}, bus: true, need: true})
+	}
+	layer := b.cnLayer[cn]
+	voltage := 0
+	if o := b.im.objs[cn]; o != nil {
+		if c := b.im.objs[o.get("ConnectivityNodeContainer")]; c != nil {
+			voltage = b.voltage(c.get("BaseVoltage"))
+		}
+	}
+	addWire := func(pts []Point) {
+		b.d.Connectors = append(b.d.Connectors, Connector{ID: b.take(), Kind: KindBusWork, Voltage: voltage, Layer: layer, Points: pts})
+		b.report.Connectors++
+	}
+	for _, w := range b.wires[cn] {
+		p := &cimPart{pts: []Point{w[0], w[len(w)-1]}}
+		for i := 1; i < len(w); i++ {
+			p.segs = append(p.segs, [2]Point{w[i-1], w[i]})
+		}
+		parts = append(parts, p)
+		addWire(w)
+	}
+	// Merge touching parts until none touch.
+	for merged := true; merged; {
+		merged = false
+		for i := 0; i < len(parts) && !merged; i++ {
+			for j := i + 1; j < len(parts); j++ {
+				if parts[i].meets(parts[j]) || parts[j].meets(parts[i]) {
+					parts[i].pts = append(parts[i].pts, parts[j].pts...)
+					parts[i].segs = append(parts[i].segs, parts[j].segs...)
+					parts[i].bus = parts[i].bus || parts[j].bus
+					parts[i].need = parts[i].need || parts[j].need
+					parts = slices.Delete(parts, j, j+1)
+					merged = true
+					break
+				}
+			}
+		}
+	}
+	parts = slices.DeleteFunc(parts, func(p *cimPart) bool { return !p.need })
+	if len(parts) < 2 {
+		return 0
+	}
+	hub := 0
+	for i, p := range parts {
+		if p.bus && !parts[hub].bus || p.bus == parts[hub].bus && len(p.pts)+len(p.segs) > len(parts[hub].pts)+len(parts[hub].segs) {
+			hub = i
+		}
+	}
+	main := parts[hub]
+	routed := 0
+	for i, p := range parts {
+		if i == hub {
+			continue
+		}
+		from, to, bd := Point{}, Point{}, math.Inf(1)
+		cands := slices.Clone(p.pts)
+		for _, s := range p.segs {
+			cands = append(cands, s[0], s[1])
+		}
+		for _, q := range cands {
+			if t, d := main.nearest(q); d < bd {
+				from, to, bd = q, t, d
+			}
+		}
+		route := []Point{from}
+		if from.X != to.X && from.Y != to.Y {
+			route = append(route, Point{X: from.X, Y: to.Y})
+		}
+		route = append(route, to)
+		addWire(route)
+		main.pts = append(main.pts, p.pts...)
+		main.segs = append(main.segs, p.segs...)
+		for k := 1; k < len(route); k++ {
+			main.segs = append(main.segs, [2]Point{route[k-1], route[k]})
+		}
+		routed++
+	}
+	return routed
+}
+
+// labels turns TextDiagramObjects into labels, linked to the item they name.
+func (b *cimPageBuilder) labels(dos []*cimObject) {
+	for _, do := range dos {
+		if do.class != "TextDiagramObject" {
+			continue
+		}
+		pts := b.doPoints(do)
+		if len(pts) == 0 || do.get("text") == "" {
+			continue
+		}
+		b.d.Labels = append(b.d.Labels, Label{ID: b.take(), For: b.itemOf[do.get("IdentifiedObject")], Layer: b.layer(do),
+			X: pts[0].X, Y: pts[0].Y, Size: 10, Text: do.get("text")})
+		b.report.Labels++
+	}
+}

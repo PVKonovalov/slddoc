@@ -405,9 +405,9 @@ func (x *cimExporter) node(n int) string {
 
 var voltageRe = regexp.MustCompile("(?i)([0-9]+(?:[.,][0-9]+)?)\\s*(kv|\u043a\u0432|mv|\u043c\u0432|v|\u0432)?")
 
-// parseVoltage reads a voltage class name such as "110 kV", "6,3 kV" or "400 V" as kV; the unit may also be in Cyrillic.
+// ParseVoltage reads a voltage class name such as "110 kV", "6,3 kV" or "400 V" as kV; the unit may also be in Cyrillic.
 // A bare number is kV.
-func parseVoltage(name string) (float64, bool) {
+func ParseVoltage(name string) (float64, bool) {
 	m := voltageRe.FindStringSubmatch(name)
 	if m == nil {
 		return 0, false
@@ -446,7 +446,7 @@ func (x *cimExporter) baseVoltage(v int) string {
 	if !ok {
 		return ""
 	}
-	kv, ok := parseVoltage(vc.Name)
+	kv, ok := ParseVoltage(vc.Name)
 	if !ok {
 		x.warnf("voltage", "voltageClass", v)
 	}
