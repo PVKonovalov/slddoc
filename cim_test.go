@@ -238,7 +238,7 @@ func TestExportCIM(t *testing.T) {
 }
 
 func TestParseVoltage(t *testing.T) {
-	for name, want := range map[string]float64{"110 kV": 110, "6,3 кВ": 6.3, "0.4kV": 0.4, "400 V": 0.4, "35": 35, "1,15 MV": 1150} {
+	for name, want := range map[string]float64{"110 kV": 110, "6,3 \u043a\u0412": 6.3, "0.4kV": 0.4, "400 V": 0.4, "35": 35, "1,15 MV": 1150} {
 		if got, ok := parseVoltage(name); !ok || got != want {
 			t.Errorf("parseVoltage(%q) = %v, %v; want %v", name, got, ok, want)
 		}
