@@ -897,6 +897,9 @@ type Element struct {
 	// self-contained like real xsde2svg output. Saved as an <image> child
 	// rather than an attribute, since it can run to megabytes.
 	Href string `xml:"image,omitempty" json:"href,omitempty"`
+
+	// Electrical holds the equipment's nameplate parameters (see Electrical).
+	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
 }
 
 // SubstationSector is one sector of a Substation pictogram: Voltage
@@ -977,6 +980,18 @@ type TransformerWinding struct {
 	// on; empty falls back to this winding's own conventional default for
 	// the transformer's winding count (see defaultTerminal in render.go).
 	Terminal TerminalDirection `xml:"terminal,attr,omitempty" json:"terminal,omitempty"`
+
+	// The winding's nameplate parameters, named as CIM's PowerTransformerEnd:
+	// rated voltage (kV) and power (MVA), series resistance/reactance (Ω),
+	// magnetizing conductance/susceptance (S), and the vector group clock
+	// number (0..11). Nil means unset.
+	RatedU          *float64 `xml:"ratedU,attr,omitempty" json:"ratedU,omitempty"`
+	RatedS          *float64 `xml:"ratedS,attr,omitempty" json:"ratedS,omitempty"`
+	R               *float64 `xml:"r,attr,omitempty" json:"r,omitempty"`
+	X               *float64 `xml:"x,attr,omitempty" json:"x,omitempty"`
+	G               *float64 `xml:"g,attr,omitempty" json:"g,omitempty"`
+	B               *float64 `xml:"b,attr,omitempty" json:"b,omitempty"`
+	PhaseAngleClock *int     `xml:"phaseAngleClock,attr,omitempty" json:"phaseAngleClock,omitempty"`
 }
 
 // shapeDisconnector is the Disconnector's own current Shape key.
@@ -1059,6 +1074,9 @@ type Connector struct {
 	To        int                `xml:"to,attr" json:"to"`
 
 	Points []Point `xml:"point" json:"points"`
+
+	// Electrical holds an OverheadLine's or CableLine's parameters (see Electrical).
+	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
 }
 
 // Point is one X,Y coordinate in the diagram's own coordinate space.

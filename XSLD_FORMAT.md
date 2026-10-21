@@ -187,6 +187,7 @@ decorative shape (rectangle, line, table, ...).
   <port name="1" node="7"/>          <!-- zero or more -->
   <geometry><point x=".." y=".."/>...</geometry>   <!-- points-based shapes only -->
   <windings>...</windings>           <!-- PowerTransformer only -->
+  <electrical .../>                  <!-- nameplate parameters, see §6.6 -->
   <rows>/<columns>/<cells>           <!-- Table2 only -->
 </element>
 ```
@@ -220,7 +221,8 @@ A drawn wire: a polyline whose two ends are nodes.
 | `to` | id → `node` | yes | Node at the last point |
 
 Children: two or more `<point x=".." y=".."/>`, **directly** inside
-`<connector>` (no `<geometry>` wrapper), in drawing order. The first point
+`<connector>` (no `<geometry>` wrapper), in drawing order, then an optional
+`<electrical .../>` (`OverheadLine`/`CableLine` only, see §6.6). The first point
 coincides with node `from`, the last with node `to`. Editor-drawn wires are
 orthogonal (horizontal/vertical segments only), but that is not a format rule.
 
@@ -407,6 +409,13 @@ larger side.
 | `grounding` | `wyeN` only: `solid`, `isolated`, `resistor` |
 | `tapChanger` | bool — regulated winding (only one arrow is drawn; the last wins) |
 | `terminal` | Side of the lead in the local frame: `top`, `bottom`, `left`, `right`; absent = default for the winding count |
+| `ratedU`, `ratedS` | Rated voltage (kV) and power (MVA) |
+| `r`, `x` | Series resistance and reactance (Ω) |
+| `g`, `b` | Magnetizing conductance and susceptance (S) |
+| `phaseAngleClock` | Vector group clock number, 0–11 |
+
+The last five rows are nameplate parameters (CIM `PowerTransformerEnd`); like
+§6.6, each is optional.
 
 ### 6.5 Table2 (313) — grid
 
@@ -427,6 +436,39 @@ larger side.
 - `<cell>`: `row`, `col` (0-based), `text` (single line), optional `fill` and
   `textColor` overrides. A grid position with no `<cell>` is not drawn.
 - Cell merging is not modeled.
+
+### 6.6 Electrical parameters — `<electrical>`
+
+```xml
+<connector id="30" kind="OverheadLine" voltage="1" layer="0" from="4" to="9">
+  <point x="100" y="40"/>
+  <point x="100" y="300"/>
+  <electrical length="12.5" r="3.1" x="5.2" bch="0.00004"/>
+</connector>
+<element id="31" class="Breaker" shape="41" x="200" y="100" layer="0">
+  <port name="1" node="5"/>
+  <port name="2" node="6"/>
+  <electrical ratedCurrent="1250"/>
+</element>
+```
+
+Optional nameplate data, used by the CIM export. Every attribute is optional
+and absent means unknown; an element or connector without any has no
+`<electrical>`. Names and units follow CIM (IEC 61970-301). A transformer
+keeps its parameters on each `<winding>` (§6.4) instead.
+
+| Used by | Attributes |
+|---|---|
+| `OverheadLine`, `CableLine` connectors | `length` (km); `r`, `x`, `r0`, `x0` (Ω); `bch`, `gch`, `b0ch`, `g0ch` (S); values for the whole line |
+| `Booster` | `ratedS` (MVA), `ratedU` (kV), `r`, `x` (Ω) |
+| `Generator`, `SynchronousCompensator`, `SynchronousMotor` | `ratedS` (MVA), `ratedU` (kV), `minP`, `maxP` (MW), `minQ`, `maxQ` (Mvar) |
+| `Capacitor`, `CapacitorBank`, `ReactorShunt` | `nomU` (kV), `bPerSection`, `gPerSection` (S), `maximumSections`, `normalSections` (int) |
+| `Reactor`, `ChokeCoil` | `r`, `x` (Ω) |
+| Switching devices and fuses | `ratedCurrent` (A) |
+| `BusBarSection` | `ipMax` (A) |
+
+When a wire is split, the piece that keeps the original id keeps its
+`<electrical>`; the new piece has none.
 
 ## 7. Code tables
 

@@ -1163,7 +1163,7 @@ func (r *repairer) mergeNodesOntoPorts() {
 }
 
 // splitWireAt splits wire c at point at on its segment k into two wires meeting on Node nodeID; the first keeps
-// c's id.
+// c's id and electrical parameters, the second gets none.
 func (r *repairer) splitWireAt(c Connector, k int, at Point, nodeID int) {
 	d := r.d
 	second := r.takeID()
@@ -1175,7 +1175,7 @@ func (r *repairer) splitWireAt(c Connector, k int, at Point, nodeID int) {
 		}
 	}
 	tail := c
-	tail.ID, tail.Name, tail.From = second, defaultConnectorName(c.Kind, second, c.Name), nodeID
+	tail.ID, tail.Name, tail.From, tail.Electrical = second, defaultConnectorName(c.Kind, second, c.Name), nodeID, nil
 	tail.Points = simplifyPath(joinPoints([]Point{at}, c.Points[k+1:]...))
 	d.Connectors = append(d.Connectors, tail)
 }
