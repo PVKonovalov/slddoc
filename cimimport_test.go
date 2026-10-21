@@ -114,9 +114,3 @@ func TestImportCIMForeignLayout(t *testing.T) {
 		t.Errorf("asynchronous machine = %+v", byName["M1"])
 	}
 }
-
-func TestImportCIMNoLayout(t *testing.T) {
-	if _, err := ImportCIM([][]byte{[]byte(foreignEQ)}, CIMImportOptions{Terminals: testCIMTerminals}); err != ErrNoDiagramLayout {
-		t.Errorf("err = %v, want ErrNoDiagramLayout", err)
-	}
-}
