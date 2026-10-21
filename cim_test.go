@@ -293,3 +293,76 @@ func TestExportCIMClassChoice(t *testing.T) {
 		t.Error("non-equipment classes have no CIM classes")
 	}
 }
+
+func TestExportCIMObjectLink(t *testing.T) {
+	src := "EnergySource"
+	d := &Diagram{
+		Width: 200, Height: 200,
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}},
+		Nodes:          []Node{{ID: 1, X: 0, Y: 0}, {ID: 2, X: 0, Y: 40}, {ID: 3, X: 0, Y: 100}, {ID: 4, X: 100, Y: 40}, {ID: 5, X: 100, Y: 100}, {ID: 6, X: 200, Y: 100}, {ID: 7, X: 100, Y: 140}},
+		Elements: []Element{
+			{ID: 10, Class: ClassBreaker, Shape: "41", Name: "Q1", Voltage: 1, X: 0, Y: 20, Ports: []Port{{"1", 1}, {"2", 2}}},
+			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "Q2", Voltage: 1, X: 200, Y: 80, Ports: []Port{{"1", 6}, {"2", 6}}},
+		},
+		Connectors: []Connector{
+			{ID: 20, Kind: KindLinkToObject, Name: "Load A", Voltage: 1, From: 2, To: 3, Points: []Point{{0, 40}, {0, 100}},
+				Electrical: &Electrical{P: new(1.2)}},
+			{ID: 21, Kind: KindLinkToObject, Name: "Feed B", Voltage: 1, CIM: src, From: 4, To: 5, Points: []Point{{100, 40}, {100, 100}}},
+			{ID: 22, Kind: KindLinkToObject, Name: "Busy", Voltage: 1, From: 7, To: 6, Points: []Point{{100, 140}, {200, 100}}},
+		},
+	}
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	eq := parseRDF(t, out.EQ)
+	byName := map[string]cimObj{}
+	terminals := map[string]int{}
+	for _, o := range eq {
+		if n := o.props["IdentifiedObject.name"]; len(n) > 0 {
+			byName[n[0]] = o
+		}
+		if o.class == "Terminal" {
+			terminals[o.props["Terminal.ConductingEquipment"][0]]++
+		}
+	}
+	if o := byName["Load A"]; o.class != "EnergyConsumer" || !slices.Equal(o.props["EnergyConsumer.pfixed"], []string{"1.2"}) || terminals["#"+o.id] != 1 {
+		t.Errorf("Load A = %+v, terminals %d", o, terminals["#"+o.id])
+	}
+	if o := byName["Feed B"]; o.class != "EnergySource" || !slices.Equal(o.props["EnergySource.nominalVoltage"], []string{"10"}) {
+		t.Errorf("Feed B = %+v", o)
+	}
+	if !bytes.Contains(out.DL, []byte("<cim:IdentifiedObject.name>LinkToObject</cim:IdentifiedObject.name>")) {
+		t.Error("no LinkToObject style in the layout")
+	}
+	open := 0
+	for _, w := range out.Warnings {
+		if w.Kind == "openEnd" {
+			open++
+			if w.ID != 22 {
+				t.Errorf("openEnd on %d, want 22 (its arrow end is on Q2)", w.ID)
+			}
+		}
+	}
+	if open != 1 {
+		t.Errorf("openEnd warnings = %d, want 1: %+v", open, out.Warnings)
+	}
+
+	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, CIMImportOptions{Terminals: map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}},
+		Classes: map[string]Class{"41": ClassBreaker}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]Connector{}
+	for _, c := range pages[0].Diagram.Connectors {
+		if c.Kind == KindLinkToObject {
+			links[c.Name] = c
+		}
+	}
+	if c := links["Load A"]; c.CIM != "" || c.Electrical == nil || *c.Electrical.P != 1.2 || !slices.Equal(c.Points, []Point{{0, 40}, {0, 100}}) {
+		t.Errorf("Load A back = %+v", c)
+	}
+	if c := links["Feed B"]; c.CIM != src {
+		t.Errorf("Feed B back = %+v", c)
+	}
+	if got := ConnectorCIMClasses(KindLinkToObject); !slices.Equal(got, []string{"EnergyConsumer", "EnergySource"}) || ConnectorCIMClasses(KindBusWork) != nil {
+		t.Errorf("ConnectorCIMClasses = %v", got)
+	}
+}

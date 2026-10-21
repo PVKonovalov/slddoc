@@ -375,6 +375,8 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 			}
 		case obj.class == "ACLineSegment":
 			b.line(obj, do)
+		case b.isObjectLink(obj, do):
+			b.objectLink(obj, do)
 		case obj.class == "Terminal" || obj.class == "PowerTransformerEnd":
 		default:
 			if _, ok := cimEquipmentShapes[obj.class]; ok {
@@ -1114,6 +1116,37 @@ func (b *cimPageBuilder) line(obj, do *cimObject) {
 		}
 		b.attach[cn1] = append(b.attach[cn1], cimAttach{at: ends[0]})
 		b.attach[cn2] = append(b.attach[cn2], cimAttach{at: ends[1]})
+	}
+	b.d.Connectors = append(b.d.Connectors, c)
+	b.itemOf[obj.id] = c.ID
+	b.report.Connectors++
+}
+
+// isObjectLink reports whether obj is a link to object this editor exported: a consumer or source drawn as a
+// "LinkToObject" polyline.
+func (b *cimPageBuilder) isObjectLink(obj, do *cimObject) bool {
+	st := b.im.objs[do.get("DiagramObjectStyle")]
+	return st != nil && st.get("name") == string(KindLinkToObject) && slices.Contains(connectorCIM[KindLinkToObject], obj.class) &&
+		len(b.im.points[do.id]) >= 2
+}
+
+// objectLink adds a link to object along its points, its first point on its terminal's node.
+func (b *cimPageBuilder) objectLink(obj, do *cimObject) {
+	pts := b.gluedEnds(do)
+	if len(pts) < 2 {
+		return
+	}
+	c := Connector{ID: b.take(), Kind: KindLinkToObject, Name: obj.get("name"), Voltage: b.equipmentVoltage(obj),
+		Layer: b.layer(do), Points: pts}
+	if obj.class != connectorCIM[KindLinkToObject][0] {
+		c.CIM = obj.class
+	}
+	if el := (Electrical{P: obj.numPtr("pfixed"), Q: obj.numPtr("qfixed")}); el != (Electrical{}) {
+		c.Electrical = &el
+	}
+	if ts := b.im.terminals[obj.id]; len(ts) > 0 && ts[0].get("ConnectivityNode") != "" {
+		cn := ts[0].get("ConnectivityNode")
+		b.attach[cn] = append(b.attach[cn], cimAttach{at: pts[0]})
 	}
 	b.d.Connectors = append(b.d.Connectors, c)
 	b.itemOf[obj.id] = c.ID

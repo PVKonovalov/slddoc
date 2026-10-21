@@ -218,6 +218,7 @@ A drawn wire: a polyline whose two ends are nodes.
 | `group` | id | no | Group (0 = none, see §4.1). Rendered as `data-group` |
 | `dashed` | bool | no | Draw dashed |
 | `lineStyle` | enum | no | `CableLine` only: `solid`, `dashed` (default), `dashDot`, `dotted` |
+| `cim` | string | no | `LinkToObject` only: the CIM class it exports as, `EnergyConsumer` (default, absent) or `EnergySource` |
 | `from` | id → `node` | yes | Node at the first point |
 | `to` | id → `node` | yes | Node at the last point |
 
@@ -468,6 +469,7 @@ keeps its parameters on each `<winding>` (§6.4) instead.
 | Switching devices and fuses | `ratedCurrent` (A) |
 | `BusBarSection` | `ipMax` (A) |
 | `Load` | `p` (MW), `q` (Mvar) |
+| `LinkToObject` connectors (as `EnergyConsumer`) | `p` (MW), `q` (Mvar) |
 | `NetworkInfeed` | `minP`, `maxP` (MW), `minQ`, `maxQ` (Mvar) |
 | `StaticVarCompensator` | `capacitiveRating`, `inductiveRating` (Ω) |
 

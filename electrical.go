@@ -12,7 +12,7 @@ package slddoc
 //   - Reactor/ChokeCoil (SeriesCompensator): R, X
 //   - switching devices and fuses: RatedCurrent
 //   - BusBarSection: IpMax
-//   - Load (EnergyConsumer): P, Q
+//   - Load (EnergyConsumer), and a LinkToObject connector exported as one: P, Q
 //   - NetworkInfeed (ExternalNetworkInjection and the like): MinP, MaxP, MinQ, MaxQ
 //   - StaticVarCompensator: CapacitiveRating, InductiveRating
 //

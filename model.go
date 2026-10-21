@@ -1084,8 +1084,10 @@ type Connector struct {
 
 	Points []Point `xml:"point" json:"points"`
 
-	// Electrical holds an OverheadLine's or CableLine's parameters (see Electrical).
+	// Electrical holds an OverheadLine's or CableLine's parameters, or a LinkToObject's load (see Electrical).
 	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
+	// CIM is the CIM class a LinkToObject exports as (see ConnectorCIMClasses); empty means the default.
+	CIM string `xml:"cim,attr,omitempty" json:"cim,omitempty"`
 }
 
 // Point is one X,Y coordinate in the diagram's own coordinate space.

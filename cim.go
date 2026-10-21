@@ -40,7 +40,8 @@ type CIMOptions struct {
 //   - "voltage": the voltage class's name holds no voltage, so its BaseVoltage is 0;
 //   - "noTerminal": an auxiliary device (CT, VT, arrester, fault indicator, wave trap) found no equipment
 //     terminal on its node to attach to;
-//   - "notExported": the element has connections but no CIM counterpart.
+//   - "notExported": the element has connections but no CIM counterpart;
+//   - "openEnd": a link to object has something at its arrow end, which is left unconnected.
 type CIMWarning struct {
 	Kind   string   `json:"kind"`
 	Item   string   `json:"item"`
@@ -145,6 +146,17 @@ func CIMClasses(c Class) []string {
 	return append([]string{info.class}, cimAlternatives[c]...)
 }
 
+// connectorCIM lists, per connector kind exported as equipment rather than as wiring, its CIM classes, default first.
+var connectorCIM = map[ConnectorKind][]string{
+	KindLinkToObject: {"EnergyConsumer", "EnergySource"},
+}
+
+// ConnectorCIMClasses returns the CIM classes a connector of kind k can be exported as, its default first; nil when
+// it is exported as wiring (or a line).
+func ConnectorCIMClasses(k ConnectorKind) []string {
+	return slices.Clone(connectorCIM[k])
+}
+
 // cimClassOf is e's CIM class: its own choice when its class allows it, else the default.
 func cimClassOf(e Element) string {
 	if e.CIM != "" && slices.Contains(CIMClasses(e.Class), e.CIM) {
@@ -216,6 +228,7 @@ type cimExporter struct {
 	termsAt  map[int][]string     // root node → equipment Terminal ids, in order
 	diagram  string
 	auxLater []func()
+	used     map[int]int // slddoc node → how many ports and connector ends use it
 }
 
 // ExportCIM converts d to CGMES 3.0 EQ and DL documents.
@@ -229,6 +242,16 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 	}
 	for _, n := range d.Nodes {
 		x.nodes[n.ID] = n
+	}
+	x.used = map[int]int{}
+	for _, e := range d.Elements {
+		for _, p := range e.Ports {
+			x.used[p.Node]++
+		}
+	}
+	for _, c := range d.Connectors {
+		x.used[c.From]++
+		x.used[c.To]++
 	}
 	for _, l := range d.Layers {
 		x.layerZ[l.ID] = l.Z
@@ -886,7 +909,57 @@ func (x *cimExporter) connector(c Connector) {
 		x.diagramObject(fmt.Sprintf("wire:%d", c.ID), x.node(c.From), string(c.Kind), 0, c.Layer, c.Points, glue...)
 	case KindOverheadLine, KindCableLine:
 		x.line(c)
+	case KindLinkToObject:
+		x.objectLink(c)
 	}
+}
+
+// objectLink exports a link to an outside object as an EnergyConsumer (or its chosen EnergySource) with one
+// Terminal on the node at its From end; the arrow end is the object itself. Its layout is the link's points, styled
+// "LinkToObject".
+func (x *cimExporter) objectLink(c Connector) {
+	classes := connectorCIM[c.Kind]
+	class := classes[0]
+	if slices.Contains(classes, c.CIM) {
+		class = c.CIM
+	}
+	key := fmt.Sprintf("link:%d", c.ID)
+	name := c.Name
+	if name == "" {
+		name = fmt.Sprintf("%s %d", c.Kind, c.ID)
+	}
+	v := c.Voltage
+	if v == 0 {
+		v = x.cnVolt[x.find(c.From)]
+	}
+	x.baseVoltage(v)
+	o := x.addEQ(class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(v))
+	ee := elec(c.Electrical)
+	switch class {
+	case "EnergyConsumer":
+		if ee.P != nil {
+			o.num("EnergyConsumer.pfixed", *ee.P)
+		}
+		if ee.Q != nil {
+			o.num("EnergyConsumer.qfixed", *ee.Q)
+		}
+	case "EnergySource":
+		if kv := x.nominal[v]; kv != 0 {
+			o.num("EnergySource.nominalVoltage", kv)
+		}
+	}
+	x.eqOf[c.ID] = o.id
+	x.terminal(key, name, 1, c.From, c.Layer)
+	glue := make([]int, len(c.Points))
+	if len(glue) > 0 {
+		glue[0] = c.From
+	}
+	x.diagramObject(key, o.id, string(KindLinkToObject), 0, c.Layer, c.Points, glue...)
+	x.auxLater = append(x.auxLater, func() {
+		if x.used[c.To] > 1 {
+			x.warnf("openEnd", "connector", c.ID)
+		}
+	})
 }
 
 func (x *cimExporter) line(c Connector) {
