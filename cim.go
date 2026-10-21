@@ -110,6 +110,9 @@ var cimClasses = map[Class]cimClassInfo{
 	ClassBlockingFilter:         {roleAuxiliary, "WaveTrap"},
 	ClassVoltageTransformer:     {roleAuxOnPort1, "PotentialTransformer"},
 	ClassSurgeArrester:          {roleAuxOnPort1, "SurgeArrester"},
+	ClassLoad:                   {roleEquipment, "EnergyConsumer"},
+	ClassNetworkInfeed:          {roleEquipment, "ExternalNetworkInjection"},
+	ClassStaticVarCompensator:   {roleEquipment, "StaticVarCompensator"},
 	ClassJunctionPoint:          {rolePassThrough, ""},
 	ClassConnectorPoint:         {rolePassThrough, ""},
 	ClassConnectorArrow:         {rolePassThrough, ""},
@@ -119,6 +122,35 @@ var cimClasses = map[Class]cimClassInfo{
 	ClassCableJoint:             {rolePassThrough, ""},
 	ClassPowerPole:              {rolePassThrough, ""},
 	ClassAnchorPole:             {rolePassThrough, ""},
+}
+
+// cimAlternatives lists, per element class, the CIM classes it may stand for besides its default.
+var cimAlternatives = map[Class][]string{
+	ClassBreaker:          {"DisconnectingCircuitBreaker"},
+	ClassStarter:          {"LoadBreakSwitch"},
+	ClassGenerator:        {"AsynchronousMachine"},
+	ClassSynchronousMotor: {"AsynchronousMachine"},
+	ClassReactorShunt:     {"PetersenCoil"},
+	ClassLoad:             {"ConformLoad", "NonConformLoad"},
+	ClassNetworkInfeed:    {"EquivalentInjection", "EnergySource"},
+}
+
+// CIMClasses returns the CIM classes an element of class c can be exported as, its default first; nil when
+// c is not exported as equipment.
+func CIMClasses(c Class) []string {
+	info, ok := cimClasses[c]
+	if !ok || info.class == "" {
+		return nil
+	}
+	return append([]string{info.class}, cimAlternatives[c]...)
+}
+
+// cimClassOf is e's CIM class: its own choice when its class allows it, else the default.
+func cimClassOf(e Element) string {
+	if e.CIM != "" && slices.Contains(CIMClasses(e.Class), e.CIM) {
+		return e.CIM
+	}
+	return cimClasses[e.Class].class
 }
 
 // Pictures of whole installations: skipped without a warning even when they have ports.
@@ -566,7 +598,7 @@ func (x *cimExporter) element(e Element) {
 			return
 		}
 		node := ports[0].Node
-		o := x.addEQ(info.class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
+		o := x.addEQ(cimClassOf(e), key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
 		x.eqOf[e.ID] = o.id
 		x.diagramObject(key, o.id, shapeStyle(e), rot, e.Layer, at)
 		if info.role == roleAuxOnPort1 {
@@ -599,9 +631,10 @@ func (x *cimExporter) element(e Element) {
 	case roleShunt:
 		x.shunt(e, key, name, ports)
 	default:
-		o := x.addEQ(info.class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
+		class := cimClassOf(e)
+		o := x.addEQ(class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
 		x.eqOf[e.ID] = o.id
-		x.equipmentParams(e, o, info.class)
+		x.equipmentParams(e, o, class)
 		for i, p := range ports {
 			x.terminal(key, name, i+1, p.Node, e.Layer)
 		}
@@ -616,29 +649,32 @@ func switchOpen(e Element) bool {
 func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 	ee := elec(e.Electrical)
 	var missing []string
-	switch class {
-	case "Breaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse":
-		o.lit("Switch.normalOpen", strconv.FormatBool(switchOpen(e))).lit("Switch.retained", "false")
-		if ee.RatedCurrent != nil {
-			o.num("Switch.ratedCurrent", *ee.RatedCurrent)
+	optional := func(name string, v *float64) {
+		if v != nil {
+			o.num(name, *v)
 		}
+	}
+	switch class {
+	case "Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse":
+		o.lit("Switch.normalOpen", strconv.FormatBool(switchOpen(e))).lit("Switch.retained", "false")
+		optional("Switch.ratedCurrent", ee.RatedCurrent)
 	case "SeriesCompensator":
 		o.num("SeriesCompensator.r", param(ee.R, 0, "r", &missing)).
 			num("SeriesCompensator.x", param(ee.X, 0, "x", &missing))
-	case "SynchronousMachine":
-		kind := map[Class]string{ClassGenerator: "generator", ClassSynchronousCompensator: "condenser", ClassSynchronousMotor: "motor"}[e.Class]
-		o.enum("SynchronousMachine.type", "SynchronousMachineKind."+kind).
-			num("RotatingMachine.ratedS", param(ee.RatedS, 0, "ratedS", &missing))
+	case "SynchronousMachine", "AsynchronousMachine":
+		if class == "SynchronousMachine" {
+			kind := map[Class]string{ClassGenerator: "generator", ClassSynchronousCompensator: "condenser", ClassSynchronousMotor: "motor"}[e.Class]
+			o.enum("SynchronousMachine.type", "SynchronousMachineKind."+kind)
+		}
+		o.num("RotatingMachine.ratedS", param(ee.RatedS, 0, "ratedS", &missing))
 		if ee.RatedU != nil {
 			o.num("RotatingMachine.ratedU", *ee.RatedU)
 		} else if kv := x.nominal[x.voltageOf(e)]; kv != 0 {
 			o.num("RotatingMachine.ratedU", kv)
 		}
-		if ee.MinQ != nil {
-			o.num("SynchronousMachine.minQ", *ee.MinQ)
-		}
-		if ee.MaxQ != nil {
-			o.num("SynchronousMachine.maxQ", *ee.MaxQ)
+		if class == "SynchronousMachine" {
+			optional("SynchronousMachine.minQ", ee.MinQ)
+			optional("SynchronousMachine.maxQ", ee.MaxQ)
 		}
 		if e.Class == ClassGenerator {
 			guKey := fmt.Sprintf("el:%d:gu", e.ID)
@@ -648,6 +684,24 @@ func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 				ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
 			o.ref("RotatingMachine.GeneratingUnit", gu.id)
 		}
+	case "EnergyConsumer", "ConformLoad", "NonConformLoad":
+		optional("EnergyConsumer.pfixed", ee.P)
+		optional("EnergyConsumer.qfixed", ee.Q)
+	case "ExternalNetworkInjection", "EquivalentInjection":
+		optional(class+".minP", ee.MinP)
+		optional(class+".maxP", ee.MaxP)
+		optional(class+".minQ", ee.MinQ)
+		optional(class+".maxQ", ee.MaxQ)
+		if class == "EquivalentInjection" {
+			o.lit("EquivalentInjection.regulationCapability", "false")
+		}
+	case "EnergySource":
+		if kv := x.nominal[x.voltageOf(e)]; kv != 0 {
+			o.num("EnergySource.nominalVoltage", kv)
+		}
+	case "StaticVarCompensator":
+		o.num("StaticVarCompensator.capacitiveRating", param(ee.CapacitiveRating, 0, "capacitiveRating", &missing)).
+			num("StaticVarCompensator.inductiveRating", param(ee.InductiveRating, 0, "inductiveRating", &missing))
 	}
 	if len(missing) > 0 {
 		x.warnf("missing", "element", e.ID, missing...)
@@ -655,6 +709,10 @@ func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 }
 
 func (x *cimExporter) shunt(e Element, key, name string, ports []Port) {
+	if cimClassOf(e) == "PetersenCoil" {
+		x.petersenCoil(e, key, name, ports)
+		return
+	}
 	v := x.voltageOf(e)
 	ee := elec(e.Electrical)
 	var missing []string
@@ -686,6 +744,27 @@ func (x *cimExporter) shunt(e Element, key, name string, ports []Port) {
 	if ee.GPerSection != nil {
 		o.num("LinearShuntCompensator.gPerSection", *ee.GPerSection)
 	}
+	x.eqOf[e.ID] = o.id
+	if len(ports) > 0 {
+		x.terminal(key, name, 1, ports[0].Node, e.Layer)
+	}
+	x.diagramObject(key, o.id, shapeStyle(e), normalizedRotation(e.Orient), e.Layer, []Point{{e.X, e.Y}})
+	if len(missing) > 0 {
+		x.warnf("missing", "element", e.ID, missing...)
+	}
+}
+
+// petersenCoil exports a shunt reactor chosen as an arc suppression coil: fixed mode, its nominal voltage
+// from nomU or the voltage class.
+func (x *cimExporter) petersenCoil(e Element, key, name string, ports []Port) {
+	v := x.voltageOf(e)
+	x.baseVoltage(v)
+	ee := elec(e.Electrical)
+	var missing []string
+	o := x.addEQ("PetersenCoil", key, name).
+		ref("Equipment.EquipmentContainer", x.voltageLevel(v)).
+		enum("PetersenCoil.mode", "PetersenCoilModeKind.fixed").
+		num("PetersenCoil.nominalU", param(ee.NomU, x.nominal[v], "nomU", &missing))
 	x.eqOf[e.ID] = o.id
 	if len(ports) > 0 {
 		x.terminal(key, name, 1, ports[0].Node, e.Layer)

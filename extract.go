@@ -56,6 +56,8 @@ var elementDataTypes = map[string]bool{
 	"103": true,
 	"50":  true,
 	"44":  true,
+	// This editor's own CIM symbols.
+	"330001": true, "330002": true, "330003": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -785,6 +787,16 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 
 		case "174":
 			el, ports, voltage, err := parseOnePortDevice(n, ClassSynchronousCompensator, "174")
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "330001", "330002", "330003":
+			class := map[string]Class{"330001": ClassLoad, "330002": ClassNetworkInfeed, "330003": ClassStaticVarCompensator}[dt]
+			el, ports, voltage, err := parseOnePortDevice(n, class, dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.attr("id"))
 				addMissingLabel(d, n, dt)

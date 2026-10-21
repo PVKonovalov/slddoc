@@ -179,6 +179,7 @@ decorative shape (rectangle, line, table, ...).
 | `mirror` | bool | no | Flip the symbol horizontally in its local frame, before rotation. Editor-only; Extract never sets it |
 | `scale` | int | no | xsde2svg size step: the symbol template is drawn √2^`scale` times its library size about the anchor, stroke width unchanged; a terminal (tx,ty) sits at (int(tx·√2^s), int(ty·√2^s)). Only for template-drawn classes (`UsesSizeStep`); 0 = library size. Extract sets it for lead shapes (from the drawn body); for the rest the editor infers it on SVG import from where the ports sit |
 | `span` | number | no | Lead shapes only (breakers 41, load-break switch 42, disconnectors 71/162, 163, 164, 166, fuse 203, 399 — `HasLeads`): distance between the two terminals in diagram units. The leads are drawn out to ±`span`/2 along the local y axis; the body keeps its size step. 0 = the library's spacing at that step. Extract reads it from the two port points |
+| `cim` | string | no | The CIM class the element exports as, when its class allows more than one (see §7.1); absent = the default |
 
 **Children**
 
@@ -466,6 +467,9 @@ keeps its parameters on each `<winding>` (§6.4) instead.
 | `Reactor`, `ChokeCoil` | `r`, `x` (Ω) |
 | Switching devices and fuses | `ratedCurrent` (A) |
 | `BusBarSection` | `ipMax` (A) |
+| `Load` | `p` (MW), `q` (Mvar) |
+| `NetworkInfeed` | `minP`, `maxP` (MW), `minQ`, `maxQ` (Mvar) |
+| `StaticVarCompensator` | `capacitiveRating`, `inductiveRating` (Ω) |
 
 When a wire is split, the piece that keeps the original id keeps its
 `<electrical>`; the new piece has none.
@@ -521,6 +525,9 @@ extendable per site); this is the default set.
 | ConnectorPoint | 10 | 1 | a connection point (a 10x10 square), its port at the center; `stroke` (its color, default magenta); no voltage |
 | ConnectorArrow | 83 | 1 | port at its tail (the anchor); `orient` (any angle, 0 = right), `length` (default 30), `stroke` (line, default coral), `headStroke`/`fill` (arrowhead, default dimgray/white); no voltage |
 | FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText` |
+| Load | 330001 | 1 | Editor's own symbol (consumer) |
+| NetworkInfeed | 330002 | 1 | Editor's own symbol (outside network) |
+| StaticVarCompensator | 330003 | 1 | Editor's own symbol |
 | PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor` |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |
 | Polygon | 16 | — | decorative; `<geometry>` |
@@ -539,6 +546,18 @@ extendable per site); this is the default set.
 | Table / Table2 | 312 / 313 | — | decorative; §6.2, §6.5 |
 
 The "Ports" column is the usual count (measured over the existing corpus); the format itself does not enforce it.
+
+**CIM classes.** An element exports to CIM as its class's default CIM class
+(slddoc `CIMClasses`); these classes allow another one, chosen with `cim`:
+
+| Class | Default | Alternatives |
+|---|---|---|
+| Breaker | Breaker | DisconnectingCircuitBreaker |
+| Starter | Switch | LoadBreakSwitch |
+| Generator, SynchronousMotor | SynchronousMachine | AsynchronousMachine |
+| ReactorShunt | LinearShuntCompensator | PetersenCoil |
+| Load | EnergyConsumer | ConformLoad, NonConformLoad |
+| NetworkInfeed | ExternalNetworkInjection | EquivalentInjection, EnergySource |
 
 ### 7.2 Connector kinds
 

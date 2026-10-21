@@ -247,3 +247,49 @@ func TestParseVoltage(t *testing.T) {
 		t.Error(`parseVoltage("aux") should fail`)
 	}
 }
+
+func TestExportCIMClassChoice(t *testing.T) {
+	d := &Diagram{
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}},
+		Nodes:          []Node{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5}},
+		Elements: []Element{
+			{ID: 10, Class: ClassLoad, Shape: "330001", Voltage: 1, CIM: "NonConformLoad", Ports: []Port{{"1", 1}},
+				Electrical: &Electrical{P: new(1.5)}},
+			{ID: 11, Class: ClassSynchronousMotor, Shape: "39", Voltage: 1, CIM: "Breaker", Ports: []Port{{"1", 2}}},
+			{ID: 12, Class: ClassStaticVarCompensator, Shape: "330003", Voltage: 1, Ports: []Port{{"1", 3}}},
+			{ID: 13, Class: ClassReactorShunt, Shape: "397", Voltage: 1, CIM: "PetersenCoil", Ports: []Port{{"1", 4}}},
+			{ID: 14, Class: ClassNetworkInfeed, Shape: "330002", Voltage: 1, Ports: []Port{{"1", 5}}},
+		},
+	}
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	classes := map[string]bool{}
+	for _, o := range parseRDF(t, out.EQ) {
+		classes[o.class] = true
+	}
+	for _, c := range []string{"NonConformLoad", "SynchronousMachine", "StaticVarCompensator", "PetersenCoil", "ExternalNetworkInjection"} {
+		if !classes[c] {
+			t.Errorf("no %s in EQ", c)
+		}
+	}
+	if classes["Breaker"] {
+		t.Error("a CIM class the element's class doesn't allow must fall back to the default")
+	}
+	if !bytes.Contains(out.EQ, []byte("<cim:EnergyConsumer.pfixed>1.5</cim:EnergyConsumer.pfixed>")) {
+		t.Error("load pfixed not written")
+	}
+	var svc []string
+	for _, w := range out.Warnings {
+		if w.ID == 12 {
+			svc = w.Fields
+		}
+	}
+	if !slices.Equal(svc, []string{"capacitiveRating", "inductiveRating"}) {
+		t.Errorf("SVC warnings = %v", svc)
+	}
+	if got := CIMClasses(ClassLoad); !slices.Equal(got, []string{"EnergyConsumer", "ConformLoad", "NonConformLoad"}) {
+		t.Errorf("CIMClasses(Load) = %v", got)
+	}
+	if CIMClasses(ClassRectangle) != nil || CIMClasses(ClassJunctionPoint) != nil {
+		t.Error("non-equipment classes have no CIM classes")
+	}
+}

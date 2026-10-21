@@ -558,6 +558,12 @@ const (
 	// implicitly got before this schema modeled them at all, not a
 	// regression.
 	ClassTable2 Class = "Table2"
+	// ClassLoad (shape 330001), ClassNetworkInfeed (330002) and ClassStaticVarCompensator (330003) are this
+	// editor's own one-terminal symbols for CIM equipment xsde2svg has no shape for: a consumer, a connection
+	// to an outside network, and an SVC.
+	ClassLoad                 Class = "Load"
+	ClassNetworkInfeed        Class = "NetworkInfeed"
+	ClassStaticVarCompensator Class = "StaticVarCompensator"
 )
 
 // TableCell is one real cell of a Table2 (shape 313) grid — see
@@ -900,6 +906,9 @@ type Element struct {
 
 	// Electrical holds the equipment's nameplate parameters (see Electrical).
 	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
+	// CIM is the CIM class this element stands for when its Class allows more than one (see CIMClasses);
+	// empty means the default.
+	CIM string `xml:"cim,attr,omitempty" json:"cim,omitempty"`
 }
 
 // SubstationSector is one sector of a Substation pictogram: Voltage

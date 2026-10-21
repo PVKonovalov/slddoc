@@ -12,6 +12,9 @@ package slddoc
 //   - Reactor/ChokeCoil (SeriesCompensator): R, X
 //   - switching devices and fuses: RatedCurrent
 //   - BusBarSection: IpMax
+//   - Load (EnergyConsumer): P, Q
+//   - NetworkInfeed (ExternalNetworkInjection and the like): MinP, MaxP, MinQ, MaxQ
+//   - StaticVarCompensator: CapacitiveRating, InductiveRating
 //
 // A PowerTransformer keeps its parameters on each TransformerWinding.
 type Electrical struct {
@@ -40,6 +43,14 @@ type Electrical struct {
 	GPerSection     *float64 `xml:"gPerSection,attr,omitempty" json:"gPerSection,omitempty"`
 	MaximumSections *int     `xml:"maximumSections,attr,omitempty" json:"maximumSections,omitempty"`
 	NormalSections  *int     `xml:"normalSections,attr,omitempty" json:"normalSections,omitempty"`
+
+	// P (MW) and Q (Mvar) are a load's fixed active and reactive power.
+	P *float64 `xml:"p,attr,omitempty" json:"p,omitempty"`
+	Q *float64 `xml:"q,attr,omitempty" json:"q,omitempty"`
+
+	// CapacitiveRating and InductiveRating are an SVC's reactances (Ω) at its limits.
+	CapacitiveRating *float64 `xml:"capacitiveRating,attr,omitempty" json:"capacitiveRating,omitempty"`
+	InductiveRating  *float64 `xml:"inductiveRating,attr,omitempty" json:"inductiveRating,omitempty"`
 
 	// RatedCurrent and IpMax are in A.
 	RatedCurrent *float64 `xml:"ratedCurrent,attr,omitempty" json:"ratedCurrent,omitempty"`
