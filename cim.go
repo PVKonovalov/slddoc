@@ -27,10 +27,11 @@ const (
 )
 
 // CIMOptions names the exported model: Name is the diagram's name (it seeds every mRID, so re-exporting the
-// same diagram keeps its ids), Created the export time.
+// same diagram keeps its ids), Created the export time; Classes is the CIM class table (nil: DefaultCIMClasses).
 type CIMOptions struct {
 	Name    string
 	Created time.Time
+	Classes CIMClassTable
 }
 
 // CIMWarning reports something the export had to fill in or leave out. Item is "element", "connector" or
@@ -140,31 +141,107 @@ var cimAlternatives = map[Class][]string{
 	ClassNetworkInfeed:    {"EquivalentInjection", "EnergySource"},
 }
 
-// CIMClasses returns the CIM classes an element of class c can be exported as, its default first; nil when
-// c is not exported as equipment.
-func CIMClasses(c Class) []string {
-	info, ok := cimClasses[c]
-	if !ok || info.class == "" {
-		return nil
+// CIMClassTable maps an element class, or LinkToObjectCIM for links to object, to the CIM classes it can be
+// exported as, its default first.
+type CIMClassTable map[Class][]string
+
+// LinkToObjectCIM is the CIMClassTable key of links to object.
+const LinkToObjectCIM = Class(KindLinkToObject)
+
+// DefaultCIMClasses is the built-in table.
+func DefaultCIMClasses() CIMClassTable {
+	t := CIMClassTable{LinkToObjectCIM: {"EnergyConsumer", "EnergySource"}}
+	for c, info := range cimClasses {
+		if info.class != "" {
+			t[c] = append([]string{info.class}, cimAlternatives[c]...)
+		}
 	}
-	return append([]string{info.class}, cimAlternatives[c]...)
+	return t
 }
 
-// connectorCIM lists, per connector kind exported as equipment rather than as wiring, its CIM classes, default first.
-var connectorCIM = map[ConnectorKind][]string{
-	KindLinkToObject: {"EnergyConsumer", "EnergySource"},
+// cimFamilies groups the CIM classes the export writes alike; an element can stand for any class of its default's
+// family (a class in no family stands for itself only).
+var cimFamilies = [][]string{
+	{"Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse", "Jumper"},
+	{"SynchronousMachine", "AsynchronousMachine"},
+	{"EnergyConsumer", "ConformLoad", "NonConformLoad", "ExternalNetworkInjection", "EquivalentInjection", "EnergySource"},
+	{"LinearShuntCompensator", "PetersenCoil"},
+	{"CurrentTransformer", "PotentialTransformer", "SurgeArrester", "FaultIndicator", "WaveTrap"},
 }
 
-// ConnectorCIMClasses returns the CIM classes a connector of kind k can be exported as, its default first; nil when
-// it is exported as wiring (or a line).
+func cimFamily(class string) []string {
+	for _, f := range cimFamilies {
+		if slices.Contains(f, class) {
+			return f
+		}
+	}
+	return []string{class}
+}
+
+// With returns t with the classes of overrides (element class → CIM classes, default first) put in, checked: every
+// key must be an element class exported as equipment (or LinkToObject), and every CIM class one the export writes
+// for that kind of equipment.
+func (t CIMClassTable) With(overrides map[string][]string) (CIMClassTable, error) {
+	out := CIMClassTable{}
+	for c, l := range t {
+		out[c] = slices.Clone(l)
+	}
+	keys := make([]string, 0, len(overrides))
+	for k := range overrides {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		classes := overrides[k]
+		def := ""
+		if Class(k) == LinkToObjectCIM {
+			def = "EnergyConsumer"
+		} else if info, ok := cimClasses[Class(k)]; ok {
+			def = info.class
+		}
+		if def == "" {
+			return nil, fmt.Errorf("cim.classes: %q is not an element class exported as CIM equipment", k)
+		}
+		if len(classes) == 0 {
+			return nil, fmt.Errorf("cim.classes: %q lists no CIM class", k)
+		}
+		family := cimFamily(def)
+		for i, c := range classes {
+			if !slices.Contains(family, c) {
+				return nil, fmt.Errorf("cim.classes: %q can't be exported as %q; choose from %s", k, c, strings.Join(family, ", "))
+			}
+			if slices.Contains(classes[:i], c) {
+				return nil, fmt.Errorf("cim.classes: %q lists %q twice", k, c)
+			}
+		}
+		out[Class(k)] = slices.Clone(classes)
+	}
+	return out, nil
+}
+
+// Of returns the CIM classes class c can be exported as, its default first; nil when it isn't exported as equipment.
+func (t CIMClassTable) Of(c Class) []string {
+	return slices.Clone(t[c])
+}
+
+// CIMClasses returns the built-in CIM classes of element class c (see DefaultCIMClasses).
+func CIMClasses(c Class) []string {
+	return DefaultCIMClasses().Of(c)
+}
+
+// ConnectorCIMClasses returns the built-in CIM classes of a connector kind exported as equipment (links to object).
 func ConnectorCIMClasses(k ConnectorKind) []string {
-	return slices.Clone(connectorCIM[k])
+	return DefaultCIMClasses().Of(Class(k))
 }
 
-// cimClassOf is e's CIM class: its own choice when its class allows it, else the default.
-func cimClassOf(e Element) string {
-	if e.CIM != "" && slices.Contains(CIMClasses(e.Class), e.CIM) {
+// classOf is e's CIM class: its own choice when the table allows it, else the table's default.
+func (t CIMClassTable) classOf(e Element) string {
+	l := t[e.Class]
+	if e.CIM != "" && slices.Contains(l, e.CIM) {
 		return e.CIM
+	}
+	if len(l) > 0 {
+		return l[0]
 	}
 	return cimClasses[e.Class].class
 }
@@ -233,6 +310,7 @@ type cimExporter struct {
 	auxLater []func()
 	subFind  func(int) int
 	used     map[int]int // slddoc node → how many ports and connector ends use it
+	table    CIMClassTable
 
 	subParent map[int]int    // node root → its substation's root (union-find over node roots)
 	subName   map[int]string // substation root → its name
@@ -252,6 +330,10 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 	}
 	for _, n := range d.Nodes {
 		x.nodes[n.ID] = n
+	}
+	x.table = opt.Classes
+	if x.table == nil {
+		x.table = DefaultCIMClasses()
 	}
 	x.used = map[int]int{}
 	for _, e := range d.Elements {
@@ -808,7 +890,7 @@ func (x *cimExporter) element(e Element) {
 			return
 		}
 		node := ports[0].Node
-		o := x.addEQ(cimClassOf(e), key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e), firstNode(e)))
+		o := x.addEQ(x.table.classOf(e), key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e), firstNode(e)))
 		x.eqOf[e.ID] = o.id
 		x.diagramObject(key, o.id, shapeStyle(e), rot, e.Layer, at)
 		if info.role == roleAuxOnPort1 {
@@ -841,7 +923,7 @@ func (x *cimExporter) element(e Element) {
 	case roleShunt:
 		x.shunt(e, key, name, ports)
 	default:
-		class := cimClassOf(e)
+		class := x.table.classOf(e)
 		if switchClasses[class] && len(ports) >= 2 && x.find(ports[0].Node) == x.find(ports[1].Node) {
 			x.warnf("shorted", "element", e.ID) // both ends on one node: no switch at all
 			return
@@ -857,7 +939,7 @@ func (x *cimExporter) element(e Element) {
 }
 
 var switchClasses = map[string]bool{"Breaker": true, "DisconnectingCircuitBreaker": true, "Disconnector": true,
-	"LoadBreakSwitch": true, "GroundDisconnector": true, "Switch": true, "Fuse": true}
+	"LoadBreakSwitch": true, "GroundDisconnector": true, "Switch": true, "Fuse": true, "Jumper": true}
 
 func switchOpen(e Element) bool {
 	return e.State != nil && *e.State != 1
@@ -872,7 +954,7 @@ func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 		}
 	}
 	switch class {
-	case "Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse":
+	case "Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse", "Jumper":
 		o.lit("Switch.normalOpen", strconv.FormatBool(switchOpen(e))).lit("Switch.retained", "false")
 		optional("Switch.ratedCurrent", ee.RatedCurrent)
 	case "SeriesCompensator":
@@ -931,7 +1013,7 @@ func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 }
 
 func (x *cimExporter) shunt(e Element, key, name string, ports []Port) {
-	if cimClassOf(e) == "PetersenCoil" {
+	if x.table.classOf(e) == "PetersenCoil" {
 		x.petersenCoil(e, key, name, ports)
 		return
 	}
@@ -1019,7 +1101,7 @@ func (x *cimExporter) knifeSwitch(e Element, key, name string, ports []Port) {
 	}{{"L", ports[1], left}, {"R", ports[2], right}} {
 		k := fmt.Sprintf("%s:%s", key, side.suffix)
 		n := name + " " + side.suffix
-		o := x.addEQ("Disconnector", k, n).ref("Equipment.EquipmentContainer", x.voltageLevel(v, firstNode(e))).
+		o := x.addEQ(x.table.classOf(e), k, n).ref("Equipment.EquipmentContainer", x.voltageLevel(v, firstNode(e))).
 			lit("Switch.normalOpen", strconv.FormatBool(!side.closed)).lit("Switch.retained", "false")
 		if ee.RatedCurrent != nil {
 			o.num("Switch.ratedCurrent", *ee.RatedCurrent)
@@ -1117,7 +1199,10 @@ func (x *cimExporter) connector(c Connector) {
 // Terminal on the node at its From end; the arrow end is the object itself. Its layout is the link's points, styled
 // "LinkToObject".
 func (x *cimExporter) objectLink(c Connector) {
-	classes := connectorCIM[c.Kind]
+	classes := x.table[LinkToObjectCIM]
+	if len(classes) == 0 {
+		classes = []string{"EnergyConsumer"}
+	}
 	class := classes[0]
 	if slices.Contains(classes, c.CIM) {
 		class = c.CIM

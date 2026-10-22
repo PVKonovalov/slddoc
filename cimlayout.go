@@ -73,7 +73,7 @@ func (im *cimImporter) autoLayout() []*cimObject {
 			if _, isEq := im.terminals[o.id]; !isEq {
 				continue
 			}
-			if _, drawn := cimEquipmentShapes[o.class]; !drawn && o.class != "ACLineSegment" {
+			if !im.drawable(o.class) && o.class != "ACLineSegment" {
 				continue
 			}
 			equipment = append(equipment, o)
@@ -782,8 +782,8 @@ func (l *cimLayout) wire(cn string, pts []Point) {
 // so that terminal sits at near; one without symbol terminals is centred at centre. Returns its terminals as placed
 // and the facing one's index.
 func (l *cimLayout) device(n *layNode, x, near, centre, dir float64) ([]Point, int) {
-	def := cimEquipmentShapes[n.eq.class]
-	ts := l.im.opt.Terminals[def.shape]
+	defClass, defShape, _ := l.im.shapeFor(n.eq.class)
+	ts := l.im.opt.Terminals[defShape]
 	facing := 0
 	if !cimAuxiliaryClasses[n.eq.class] {
 		facing = max(slices.Index(l.im.equipmentCNs(n.eq), n.from), 0)
@@ -800,7 +800,7 @@ func (l *cimLayout) device(n *layNode, x, near, centre, dir float64) ([]Point, i
 	if dir > 0 && ty > 0 || dir < 0 && ty < 0 {
 		rot = 180
 	}
-	probe := Element{Class: def.class, Shape: def.shape, Orient: rot}
+	probe := Element{Class: defClass, Shape: defShape, Orient: rot}
 	placed := symbolTerminals(&probe, l.im.opt.Terminals)
 	anchor := Point{X: x, Y: near - placed[facing].Y}
 	l.object(n.eq, []Point{anchor}, float64(rot))

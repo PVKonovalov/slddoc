@@ -24,9 +24,10 @@ import (
 // CIMImportOptions tells ImportCIM about the editor: Terminals maps a symbol shape to its local terminals and Classes
 // a shape to its element class (from the element library); Grid is the grid step foreign layouts are snapped to.
 type CIMImportOptions struct {
-	Terminals map[string][]Point
-	Classes   map[string]Class
-	Grid      float64
+	Terminals  map[string][]Point
+	Classes    map[string]Class
+	Grid       float64
+	CIMClasses CIMClassTable // which CIM classes an element class stands for (nil: DefaultCIMClasses)
 }
 
 // CIMPage is one imported diagram: Title is the DL Diagram's name, Report counts what was made (Skipped by CIM
@@ -194,6 +195,39 @@ var cimAuxiliaryClasses = map[string]bool{
 	"CurrentTransformer": true, "PotentialTransformer": true, "SurgeArrester": true, "FaultIndicator": true, "WaveTrap": true,
 }
 
+// shapeFor is the element class and shape CIM class cls is drawn with: its own symbol, else that of the first
+// element class (by name) the CIM class table lets stand for it.
+func (im *cimImporter) shapeFor(cls string) (Class, string, bool) {
+	if def, ok := cimEquipmentShapes[cls]; ok {
+		return def.class, def.shape, true
+	}
+	var classes []Class
+	for c, l := range im.opt.CIMClasses {
+		if c != LinkToObjectCIM && slices.Contains(l, cls) {
+			classes = append(classes, c)
+		}
+	}
+	slices.Sort(classes)
+	for _, c := range classes {
+		var shapes []string
+		for code, sc := range im.opt.Classes {
+			if sc == c {
+				shapes = append(shapes, code)
+			}
+		}
+		if len(shapes) > 0 {
+			slices.Sort(shapes)
+			return c, shapes[0], true
+		}
+	}
+	return "", "", false
+}
+
+func (im *cimImporter) drawable(cls string) bool {
+	_, _, ok := im.shapeFor(cls)
+	return ok
+}
+
 // isNode reports whether o is a node equipment connects at: a ConnectivityNode, or a TopologicalNode in a
 // bus-branch model.
 func isNode(o *cimObject) bool {
@@ -215,6 +249,9 @@ type cimImporter struct {
 func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 	if opt.Grid <= 0 {
 		opt.Grid = 10
+	}
+	if opt.CIMClasses == nil {
+		opt.CIMClasses = DefaultCIMClasses()
 	}
 	objs, err := parseCIM(docs)
 	if err != nil {
@@ -396,7 +433,7 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 			b.objectLink(obj, do)
 		case obj.class == "Terminal" || obj.class == "PowerTransformerEnd":
 		default:
-			if _, ok := cimEquipmentShapes[obj.class]; ok {
+			if _, _, ok := im.shapeFor(obj.class); ok {
 				b.element(obj, do)
 			} else if _, isEq := im.terminals[obj.id]; isEq {
 				b.report.Skipped[obj.class]++
@@ -458,7 +495,7 @@ func (b *cimPageBuilder) transform(dg *cimObject, dos []*cimObject) {
 			all = append(all, raw(p))
 		}
 		if len(pts) == 1 && do.class == "DiagramObject" {
-			if o := b.im.objs[do.get("IdentifiedObject")]; o != nil && cimEquipmentShapes[o.class].shape != "" {
+			if o := b.im.objs[do.get("IdentifiedObject")]; o != nil && b.im.drawable(o.class) {
 				centres = append(centres, raw(pts[0]))
 			}
 		}
@@ -635,8 +672,7 @@ func snapOrient(rotation float64) int {
 
 // element places one equipment item and records what its terminals must reach.
 func (b *cimPageBuilder) element(obj, do *cimObject) {
-	def := cimEquipmentShapes[obj.class]
-	class, shape := def.class, def.shape
+	class, shape, _ := b.im.shapeFor(obj.class)
 	switch obj.class {
 	case "SynchronousMachine":
 		switch obj.get("type") {
@@ -657,7 +693,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	// A layout this editor exported names its shape; keep it when that shape can stand for this CIM class.
 	if st := b.im.objs[do.get("DiagramObjectStyle")]; st != nil {
 		if code, ok := strings.CutPrefix(st.get("name"), "shape-"); ok {
-			if c, ok := b.im.opt.Classes[code]; ok && slices.Contains(CIMClasses(c), obj.class) {
+			if c, ok := b.im.opt.Classes[code]; ok && slices.Contains(b.im.opt.CIMClasses[c], obj.class) {
 				class, shape = c, code
 			}
 		}
@@ -675,7 +711,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	if r, ok := do.num("rotation"); ok {
 		e.Orient = snapOrient(r)
 	}
-	if len(CIMClasses(class)) > 1 && CIMClasses(class)[0] != obj.class && slices.Contains(CIMClasses(class), obj.class) {
+	if l := b.im.opt.CIMClasses[class]; len(l) > 1 && l[0] != obj.class && slices.Contains(l, obj.class) {
 		e.CIM = obj.class
 	}
 	if no := obj.get("normalOpen"); no != "" {
@@ -790,9 +826,10 @@ func (b *cimPageBuilder) wireEndsNear(cn string, at Point) []Point {
 	return out
 }
 
-// fit sets e's size step, mirror and lead spacing so its terminals land on targets: target i on terminal i when
-// ordered (a zero target is ignored), else each target on its nearest terminal. Nothing changes unless some
-// setting fits within a unit.
+// fit sets e's mirror and lead spacing so its terminals land on targets: target i on terminal i when ordered (a
+// zero target is ignored), else each target on its nearest terminal. Nothing changes unless some setting fits
+// within a unit. The size step stays 0: a drawn terminal point that matches another step is usually a port Node
+// lying off its terminal, and the port goes there anyway.
 func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered bool) {
 	if len(targets) == 0 {
 		return
@@ -819,23 +856,17 @@ func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered bool) {
 		}
 		return w
 	}
-	steps := []int{0}
-	if UsesSizeStep(e.Class) {
-		steps = SizeSteps
-	}
 	spans := []float64{0}
 	if HasLeads(e.Shape) && len(targets) >= 2 && targets[0] != (Point{}) && targets[1] != (Point{}) {
 		spans = append(spans, math.Round(math.Hypot(targets[0].X-targets[1].X, targets[0].Y-targets[1].Y)))
 	}
 	best, bestErr := *e, worst(e)
-	for _, step := range steps {
-		for _, mirror := range []bool{false, true} {
-			for _, span := range spans {
-				probe := *e
-				probe.Scale, probe.Mirror, probe.Span = step, mirror, span
-				if w := worst(&probe); w < bestErr-1e-9 {
-					best, bestErr = probe, w
-				}
+	for _, mirror := range []bool{false, true} {
+		for _, span := range spans {
+			probe := *e
+			probe.Scale, probe.Mirror, probe.Span = 0, mirror, span
+			if w := worst(&probe); w < bestErr-1e-9 {
+				best, bestErr = probe, w
 			}
 		}
 	}
@@ -1162,7 +1193,7 @@ func (b *cimPageBuilder) line(obj, do *cimObject) {
 // "LinkToObject" polyline.
 func (b *cimPageBuilder) isObjectLink(obj, do *cimObject) bool {
 	st := b.im.objs[do.get("DiagramObjectStyle")]
-	return st != nil && st.get("name") == string(KindLinkToObject) && slices.Contains(connectorCIM[KindLinkToObject], obj.class) &&
+	return st != nil && st.get("name") == string(KindLinkToObject) && slices.Contains(b.im.opt.CIMClasses[LinkToObjectCIM], obj.class) &&
 		len(b.im.points[do.id]) >= 2
 }
 
@@ -1174,7 +1205,7 @@ func (b *cimPageBuilder) objectLink(obj, do *cimObject) {
 	}
 	c := Connector{ID: b.take(), Kind: KindLinkToObject, Name: obj.get("name"), Voltage: b.equipmentVoltage(obj),
 		Layer: b.layer(do), Points: pts}
-	if obj.class != connectorCIM[KindLinkToObject][0] {
+	if l := b.im.opt.CIMClasses[LinkToObjectCIM]; len(l) > 0 && obj.class != l[0] {
 		c.CIM = obj.class
 	}
 	if el := (Electrical{P: obj.numPtr("pfixed"), Q: obj.numPtr("qfixed")}); el != (Electrical{}) {

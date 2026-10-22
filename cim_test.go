@@ -419,3 +419,56 @@ func TestExportCIMVoltageFromNeighbours(t *testing.T) {
 		t.Errorf("the class without a voltage should be reported: %+v", out.Warnings)
 	}
 }
+
+func TestCIMClassTable(t *testing.T) {
+	def := DefaultCIMClasses()
+	for _, bad := range []map[string][]string{
+		{"Rectangle": {"Breaker"}},          // not exported as equipment
+		{"Breaker": {}},                     // empty
+		{"Breaker": {"SynchronousMachine"}}, // not a switch
+		{"Breaker": {"Breaker", "Breaker"}}, // twice
+		{"LinkToObject": {"Breaker"}},       // a link is an injection
+	} {
+		if _, err := def.With(bad); err == nil {
+			t.Errorf("With(%v) should fail", bad)
+		}
+	}
+	table, err := def.With(map[string][]string{"Disconnector": {"Jumper", "Disconnector"}, "LinkToObject": {"EnergySource", "EnergyConsumer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(table.Of(ClassBreaker), def.Of(ClassBreaker)) {
+		t.Error("a class left out keeps its built-in list")
+	}
+
+	// The configured default is what an element without a choice exports as, and an imported Jumper comes back as a
+	// disconnector with that choice.
+	d := &Diagram{
+		Nodes:      []Node{{ID: 1}, {ID: 2}},
+		Elements:   []Element{{ID: 10, Class: ClassDisconnector, Shape: "162", Name: "D1", Ports: []Port{{"1", 1}, {"2", 2}}}},
+		Connectors: []Connector{{ID: 20, Kind: KindLinkToObject, Name: "W", From: 2, To: 3, Points: []Point{{0, 0}, {0, 10}}}},
+	}
+	d.Nodes = append(d.Nodes, Node{ID: 3, Y: 10})
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0), Classes: table})
+	classes := map[string]bool{}
+	for _, o := range parseRDF(t, out.EQ) {
+		classes[o.class] = true
+	}
+	if !classes["Jumper"] || classes["Disconnector"] || !classes["EnergySource"] {
+		t.Errorf("exported classes = %v", classes)
+	}
+	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, CIMImportOptions{Terminals: map[string][]Point{"162": {{X: 0, Y: -20}, {X: 0, Y: 20}}},
+		Classes: map[string]Class{"162": ClassDisconnector}, CIMClasses: table})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Element
+	for _, e := range pages[0].Diagram.Elements {
+		if e.Name == "D1" {
+			back = e
+		}
+	}
+	if back.Class != ClassDisconnector || back.Shape != "162" || back.CIM != "" {
+		t.Errorf("D1 back = %+v (Jumper is its default, so no choice is stored)", back)
+	}
+}
