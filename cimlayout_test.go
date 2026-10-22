@@ -115,7 +115,6 @@ func TestAutoLayout(t *testing.T) {
 	}
 
 	d := pages[0].Diagram
-	Repair(d, terms)
 	at := map[string]Element{}
 	for _, e := range d.Elements {
 		at[e.Name] = e
@@ -152,7 +151,6 @@ func TestAutoLayout(t *testing.T) {
 	}
 
 	d2 := pages[1].Diagram
-	Repair(d2, terms)
 	n2 := terminalNodes(t, d2)
 	for _, group := range [][]string{{"W1/2", "Q5/1"}, {"Q5/2", "B2/1", "Q6/1"}, {"Q6/2", "L2/1"}} {
 		for _, k := range group {

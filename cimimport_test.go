@@ -1,11 +1,13 @@
 package slddoc
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
 
 var testCIMTerminals = map[string][]Point{
+	"14":     {{X: -10, Y: 0}, {X: 10, Y: 0}},
 	"41":     {{X: 0, Y: -20}, {X: 0, Y: 20}},
 	"330001": {{X: 0, Y: 0}},
 }
@@ -112,5 +114,66 @@ func TestImportCIMForeignLayout(t *testing.T) {
 	}
 	if byName["M1"].CIM != "AsynchronousMachine" || byName["M1"].Class != ClassSynchronousMotor {
 		t.Errorf("asynchronous machine = %+v", byName["M1"])
+	}
+}
+
+// cimDoc wraps CIM objects in an RDF document; refs are written "#id".
+func cimDoc(objects string) []byte {
+	return []byte(`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">` +
+		objects + `</rdf:RDF>`)
+}
+
+func dlObject(id, of string, pts ...float64) string {
+	var s strings.Builder
+	s.WriteString(`<cim:DiagramObject rdf:ID="` + id + `"><cim:DiagramObject.Diagram rdf:resource="#d"/><cim:DiagramObject.IdentifiedObject rdf:resource="#` + of + `"/></cim:DiagramObject>`)
+	for i := 0; i+1 < len(pts); i += 2 {
+		s.WriteString(`<cim:DiagramObjectPoint rdf:ID="` + id + `p` + strconv.Itoa(i) + `"><cim:DiagramObjectPoint.DiagramObject rdf:resource="#` + id +
+			`"/><cim:DiagramObjectPoint.sequenceNumber>` + strconv.Itoa(i/2+1) + `</cim:DiagramObjectPoint.sequenceNumber><cim:DiagramObjectPoint.xPosition>` +
+			strconv.FormatFloat(pts[i], 'f', -1, 64) + `</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>` +
+			strconv.FormatFloat(pts[i+1], 'f', -1, 64) + `</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>`)
+	}
+	return s.String()
+}
+
+func terminal(id, eq, node, nodeKind string, seq int) string {
+	return `<cim:Terminal rdf:ID="` + id + `"><cim:Terminal.ConductingEquipment rdf:resource="#` + eq + `"/><cim:Terminal.` + nodeKind +
+		` rdf:resource="#` + node + `"/><cim:ACDCTerminal.sequenceNumber>` + strconv.Itoa(seq) + `</cim:ACDCTerminal.sequenceNumber></cim:Terminal>`
+}
+
+// The connections come from the model, never from the drawing: a foreign layout's wire of one node crossing
+// another's gets a wire jump, two busbar sections of one node touching end to end are joined, and a bus-branch
+// model's TopologicalNodes stand in for ConnectivityNodes.
+func TestImportCIMConnectionsFromModel(t *testing.T) {
+	for _, kind := range []string{"ConnectivityNode", "TopologicalNode"} {
+		eq := `<cim:` + kind + ` rdf:ID="a"/><cim:` + kind + ` rdf:ID="b"/>
+<cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name></cim:BusbarSection>` + terminal("tb1", "B1", "a", kind, 1) + `
+<cim:BusbarSection rdf:ID="B2"><cim:IdentifiedObject.name>B2</cim:IdentifiedObject.name></cim:BusbarSection>` + terminal("tb2", "B2", "a", kind, 1) + `
+<cim:Breaker rdf:ID="Q1"><cim:IdentifiedObject.name>Q1</cim:IdentifiedObject.name></cim:Breaker>` + terminal("tq1", "Q1", "a", kind, 1) + terminal("tq2", "Q1", "b", kind, 2) + `
+<cim:EnergyConsumer rdf:ID="L"><cim:IdentifiedObject.name>L</cim:IdentifiedObject.name></cim:EnergyConsumer>` + terminal("tl", "L", "b", kind, 1)
+		dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
+			dlObject("o1", "B1", 0, 0, 3, 0) + dlObject("o2", "B2", 3, 0, 6, 0) + dlObject("o3", "Q1", 5, 2) + dlObject("o4", "L", 5, 4) +
+			// a's wire from the busbar down across b's wire.
+			dlObject("o5", "a", 1, 0, 1, 3) + dlObject("o6", "b", 0, 2.5, 3, 2.5)
+		pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		d := pages[0].Diagram
+		jumps := 0
+		for _, e := range d.Elements {
+			if e.Class == ClassNonIntersection {
+				jumps++
+			}
+		}
+		if jumps != 1 {
+			t.Errorf("%s: wire jumps = %d, want 1 where a's wire crosses b's", kind, jumps)
+		}
+		n := terminalNodes(t, d)
+		if n["B1/1"] == "" || n["B1/1"] != n["B2/1"] || n["B1/1"] != n["Q1/1"] {
+			t.Errorf("%s: B1, B2 and Q1/1 should share a node: %v", kind, n)
+		}
+		if n["Q1/2"] == "" || n["Q1/2"] != n["L/1"] || n["Q1/2"] == n["Q1/1"] {
+			t.Errorf("%s: Q1/2 and L should share a node of their own: %v", kind, n)
+		}
 	}
 }

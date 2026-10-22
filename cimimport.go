@@ -2,6 +2,7 @@ package slddoc
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -193,6 +194,12 @@ var cimAuxiliaryClasses = map[string]bool{
 	"CurrentTransformer": true, "PotentialTransformer": true, "SurgeArrester": true, "FaultIndicator": true, "WaveTrap": true,
 }
 
+// isNode reports whether o is a node equipment connects at: a ConnectivityNode, or a TopologicalNode in a
+// bus-branch model.
+func isNode(o *cimObject) bool {
+	return o.class == "ConnectivityNode" || o.class == "TopologicalNode"
+}
+
 // cimImporter holds the parsed documents and their indexes.
 type cimImporter struct {
 	opt       CIMImportOptions
@@ -225,6 +232,10 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 		im.byClass[o.class] = append(im.byClass[o.class], o)
 		switch o.class {
 		case "Terminal":
+			// A bus-branch model has no ConnectivityNodes: its TopologicalNodes stand in for them.
+			if o.get("ConnectivityNode") == "" && o.get("TopologicalNode") != "" {
+				o.props["ConnectivityNode"] = o.props["TopologicalNode"]
+			}
 			eq := o.get("ConductingEquipment")
 			im.terminals[eq] = append(im.terminals[eq], o)
 		case "DiagramObjectPoint":
@@ -295,6 +306,8 @@ type cimPageBuilder struct {
 	doFor     map[string]*cimObject // object id → its DiagramObject on this page
 	portAt    map[int][]Point       // element id → where its ports sit, when not at its symbol's terminals
 	glued     map[string]Point      // DiagramObjectGluePoint id → the point of a terminal glued there
+	portCN    map[int][]string      // element id → the ConnectivityNode of each port ("" for none)
+	connCN    map[int][2]string     // connector id → the ConnectivityNodes of its From and To ends
 	pending   []cimPending          // junctions, jumps and auxiliary devices, joined once all else is placed
 	knives    map[string]*cimKnife
 	knifeKey  []string
@@ -329,7 +342,8 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 		report: Report{Skipped: map[string]int{}}, voltages: map[string]int{}, layers: map[string]int{},
 		itemOf: map[string]int{}, attach: map[string][]cimAttach{}, busbars: map[string][][2]Point{},
 		wires: map[string][][]Point{}, cnLayer: map[string]int{}, knives: map[string]*cimKnife{},
-		doFor: map[string]*cimObject{}, portAt: map[int][]Point{}, glued: map[string]Point{}}
+		doFor: map[string]*cimObject{}, portAt: map[int][]Point{}, glued: map[string]Point{},
+		portCN: map[int][]string{}, connCN: map[int][2]string{}}
 	b.transform(dg, dos)
 	for _, do := range dos {
 		if ref := do.get("IdentifiedObject"); ref != "" && b.doFor[ref] == nil {
@@ -353,7 +367,7 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 
 	// Wires first: placing a device matches its terminals to their ends.
 	for _, do := range dos {
-		if obj := im.objs[do.get("IdentifiedObject")]; do.class == "DiagramObject" && obj != nil && obj.class == "ConnectivityNode" {
+		if obj := im.objs[do.get("IdentifiedObject")]; do.class == "DiagramObject" && obj != nil && isNode(obj) {
 			if pts := b.gluedEnds(do); len(pts) >= 2 {
 				b.wires[obj.id] = append(b.wires[obj.id], pts)
 				b.cnLayer[obj.id] = b.layer(do)
@@ -368,8 +382,11 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 		if obj == nil {
 			continue
 		}
+		if _, placed := b.itemOf[obj.id]; placed && !isNode(obj) {
+			continue // a second DiagramObject for the same equipment on this page: drawn once
+		}
 		switch {
-		case obj.class == "ConnectivityNode":
+		case isNode(obj):
 			if pts := b.doPoints(do); len(pts) == 1 {
 				b.passThrough(obj, do, pts[0])
 			}
@@ -683,6 +700,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 		e.X, e.Y = (pts[0].X+pts[len(pts)-1].X)/2, (pts[0].Y+pts[len(pts)-1].Y)/2
 		if ts := b.im.terminals[obj.id]; len(ts) > 0 {
 			cn := ts[0].get("ConnectivityNode")
+			cns = []string{cn}
 			for i := 1; i < len(pts); i++ {
 				b.busbars[cn] = append(b.busbars[cn], [2]Point{pts[i-1], pts[i]})
 			}
@@ -721,10 +739,16 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 		}
 		return
 	}
+	pc := make([]string, len(ts))
 	for i, p := range ts {
 		if i < len(cns) && cns[i] != "" {
+			pc[i] = cns[i]
 			b.attach[cns[i]] = append(b.attach[cns[i]], cimAttach{at: roundPt(p)})
 		}
+	}
+	b.portCN[e.ID] = pc
+	if class == ClassBusBarSection && len(cns) > 0 {
+		b.portCN[e.ID] = []string{cns[0]}
 	}
 }
 
@@ -875,9 +899,12 @@ func (b *cimPageBuilder) joinPending() {
 				used[best] = true
 			}
 		}
-		for _, p := range ts {
+		pc := make([]string, len(ts))
+		for i, p := range ts {
+			pc[i] = pd.cn
 			b.attach[pd.cn] = append(b.attach[pd.cn], cimAttach{at: roundPt(p), optional: pd.optional, group: e.ID})
 		}
+		b.portCN[e.ID] = pc
 	}
 }
 
@@ -970,11 +997,14 @@ func (b *cimPageBuilder) finishKnives() {
 				b.portAt[e.ID] = ts
 			}
 		}
+		pc := make([]string, len(ts))
 		for j, p := range ts {
 			if cn := [3]string{k.pivot, k.left, k.right}[min(j, 2)]; cn != "" {
+				pc[j] = cn
 				b.attach[cn] = append(b.attach[cn], cimAttach{at: roundPt(p)})
 			}
 		}
+		b.portCN[e.ID] = pc
 	}
 }
 
@@ -1116,6 +1146,11 @@ func (b *cimPageBuilder) line(obj, do *cimObject) {
 		}
 		b.attach[cn1] = append(b.attach[cn1], cimAttach{at: ends[0]})
 		b.attach[cn2] = append(b.attach[cn2], cimAttach{at: ends[1]})
+		if ends[0] == pts[0] {
+			b.connCN[c.ID] = [2]string{cn1, cn2}
+		} else {
+			b.connCN[c.ID] = [2]string{cn2, cn1}
+		}
 	}
 	b.d.Connectors = append(b.d.Connectors, c)
 	b.itemOf[obj.id] = c.ID
@@ -1147,6 +1182,7 @@ func (b *cimPageBuilder) objectLink(obj, do *cimObject) {
 	if ts := b.im.terminals[obj.id]; len(ts) > 0 && ts[0].get("ConnectivityNode") != "" {
 		cn := ts[0].get("ConnectivityNode")
 		b.attach[cn] = append(b.attach[cn], cimAttach{at: pts[0]})
+		b.connCN[c.ID] = [2]string{cn, ""}
 	}
 	b.d.Connectors = append(b.d.Connectors, c)
 	b.itemOf[obj.id] = c.ID
@@ -1170,32 +1206,379 @@ func (b *cimPageBuilder) wireNodes() {
 	if routed > 0 && !b.synthetic {
 		b.messages = append(b.messages, fmt.Sprintf("%d connections were not drawn in the layout and were routed automatically", routed))
 	}
-	// A wire end and a terminal on one spot share a Node; Repair then makes it the terminal's port.
-	nodes := map[Point]int{}
-	node := func(p Point) int {
+	if !b.own && !b.synthetic {
+		b.splitAtJunctions()
+		b.addJumps()
+	}
+	// The connections are the model's, never the drawing's: ends and terminals share a Node only when they are on
+	// the same ConnectivityNode and at the same point.
+	type key struct {
+		cn string
+		p  Point
+	}
+	nodes := map[key]int{}
+	nodeCN := map[int]string{}
+	node := func(cn string, p Point) int {
 		p = roundPt(p)
-		if id, ok := nodes[p]; ok {
+		if id, ok := nodes[key{cn, p}]; ok && cn != "" {
 			return id
 		}
 		id := b.take()
-		nodes[p] = id
+		nodes[key{cn, p}] = id
+		nodeCN[id] = cn
 		b.d.Nodes = append(b.d.Nodes, Node{ID: id, X: p.X, Y: p.Y})
 		return id
 	}
 	for i := range b.d.Connectors {
 		c := &b.d.Connectors[i]
-		c.From, c.To = node(c.Points[0]), node(c.Points[len(c.Points)-1])
+		ends := b.connCN[c.ID]
+		c.From, c.To = node(ends[0], c.Points[0]), node(ends[1], c.Points[len(c.Points)-1])
 	}
 	for i := range b.d.Elements {
 		e := &b.d.Elements[i]
+		if e.Class == ClassBusBarSection {
+			continue
+		}
 		ts := b.portAt[e.ID]
 		if ts == nil {
 			ts = symbolTerminals(e, b.im.opt.Terminals)
 		}
 		for k, p := range ts {
-			e.Ports = append(e.Ports, Port{Name: strconv.Itoa(k + 1), Node: node(p)})
+			cn := ""
+			if k < len(b.portCN[e.ID]) {
+				cn = b.portCN[e.ID][k]
+			}
+			e.Ports = append(e.Ports, Port{Name: strconv.Itoa(k + 1), Node: node(cn, p)})
 		}
 	}
+	// Where a busbar's end lies on another busbar or a wire of its node, the two meet at a Node there.
+	for _, e := range b.d.Elements {
+		if e.Class != ClassBusBarSection || len(b.portCN[e.ID]) == 0 || len(e.Points) < 2 {
+			continue
+		}
+		cn := b.portCN[e.ID][0]
+		for _, p := range []Point{e.Points[0], e.Points[len(e.Points)-1]} {
+			if b.touchesOwn(e.ID, cn, p) {
+				node(cn, p)
+			}
+		}
+	}
+	b.tapWires(nodeCN)
+	// A busbar takes as its ports the Nodes of its own ConnectivityNode lying on its line.
+	for i := range b.d.Elements {
+		e := &b.d.Elements[i]
+		if e.Class != ClassBusBarSection || len(b.portCN[e.ID]) == 0 {
+			continue
+		}
+		cn := b.portCN[e.ID][0]
+		for _, n := range b.d.Nodes {
+			if nodeCN[n.ID] != cn {
+				continue
+			}
+			for k := 1; k < len(e.Points); k++ {
+				if onSeg(Point{X: n.X, Y: n.Y}, e.Points[k-1], e.Points[k]) {
+					e.Ports = append(e.Ports, Port{Name: strconv.Itoa(len(e.Ports) + 1), Node: n.ID})
+					break
+				}
+			}
+		}
+	}
+}
+
+// touchesOwn reports whether p lies on a busbar (other than busbar self) or a wire of ConnectivityNode cn.
+func (b *cimPageBuilder) touchesOwn(self int, cn string, p Point) bool {
+	on := func(pts []Point) bool {
+		for k := 1; k < len(pts); k++ {
+			if onSeg(p, pts[k-1], pts[k]) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, e := range b.d.Elements {
+		if e.ID != self && e.Class == ClassBusBarSection && len(b.portCN[e.ID]) > 0 && b.portCN[e.ID][0] == cn && on(e.Points) {
+			return true
+		}
+	}
+	for _, c := range b.d.Connectors {
+		if c.Kind == KindBusWork && b.connCN[c.ID][0] == cn && on(c.Points) {
+			return true
+		}
+	}
+	return false
+}
+
+// tapWires splits each wire where a Node of its own ConnectivityNode lies inside it (a T-junction), so the Node
+// joins it, until none is left.
+func (b *cimPageBuilder) tapWires(nodeCN map[int]string) {
+	for i := 0; i < len(b.d.Connectors); i++ {
+		c := b.d.Connectors[i]
+		cn := b.connCN[c.ID][0]
+		if c.Kind != KindBusWork || cn == "" {
+			continue
+		}
+	nodes:
+		for _, n := range b.d.Nodes {
+			p := Point{X: n.X, Y: n.Y}
+			if nodeCN[n.ID] != cn || n.ID == c.From || n.ID == c.To {
+				continue
+			}
+			for k := 1; k < len(c.Points); k++ {
+				a, z := c.Points[k-1], c.Points[k]
+				if !onSeg(p, a, z) || p == z || p == a && k == 1 {
+					continue
+				}
+				head := slices.Clone(c.Points[:k])
+				if p != a {
+					head = append(head, p)
+				}
+				tail := append([]Point{p}, c.Points[k:]...)
+				id := b.take()
+				b.connCN[id] = [2]string{cn, cn}
+				b.d.Connectors[i].Points, b.d.Connectors[i].To = simplifyPath(head), n.ID
+				rest := c
+				rest.ID, rest.From, rest.Points = id, n.ID, simplifyPath(tail)
+				b.d.Connectors = append(b.d.Connectors, rest)
+				i-- // the shortened wire may have more
+				break nodes
+			}
+		}
+	}
+}
+
+// splitAtJunctions cuts each wire where something of its own ConnectivityNode ends inside it (a wire end or a
+// terminal), so a wire jump put in later never lands on a junction.
+func (b *cimPageBuilder) splitAtJunctions() {
+	own := map[string][]Point{}
+	for _, c := range b.d.Connectors {
+		ends := b.connCN[c.ID]
+		own[ends[0]] = append(own[ends[0]], c.Points[0])
+		own[ends[1]] = append(own[ends[1]], c.Points[len(c.Points)-1])
+	}
+	for _, e := range b.d.Elements {
+		ts := b.portAt[e.ID]
+		if ts == nil {
+			ts = symbolTerminals(&e, b.im.opt.Terminals)
+		}
+		for k, p := range ts {
+			if k < len(b.portCN[e.ID]) {
+				own[b.portCN[e.ID][k]] = append(own[b.portCN[e.ID][k]], roundPt(p))
+			}
+		}
+	}
+	for i := 0; i < len(b.d.Connectors); i++ {
+		c := b.d.Connectors[i]
+		cn := b.connCN[c.ID][0]
+		if c.Kind != KindBusWork || cn == "" {
+			continue
+		}
+	points:
+		for _, p := range own[cn] {
+			for k := 1; k < len(c.Points); k++ {
+				a, z := c.Points[k-1], c.Points[k]
+				if !onSeg(p, a, z) || p == z || p == a && k == 1 {
+					continue
+				}
+				head := slices.Clone(c.Points[:k])
+				if p != a {
+					head = append(head, p)
+				}
+				rest := c
+				rest.ID, rest.Points = b.take(), simplifyPath(append([]Point{p}, c.Points[k:]...))
+				b.connCN[rest.ID] = [2]string{cn, cn}
+				b.d.Connectors[i].Points = simplifyPath(head)
+				b.d.Connectors = append(b.d.Connectors, rest)
+				i--
+				break points
+			}
+		}
+	}
+}
+
+// addJumps puts a wire jump (shape 14) into a wire wherever, in a foreign layout, it crosses or touches the drawing
+// of another ConnectivityNode, so the two don't look connected: the wire is cut around the spot and its pieces end
+// on the jump's ports. A jump over a busbar is size step 1. A spot too near a bend, an end or the previous jump for
+// the jump to fit on one straight run, and a terminal on another node's busbar, are only counted in the messages.
+func (b *cimPageBuilder) addJumps() {
+	type obstacle struct {
+		segs [][2]Point
+		ends []Point
+		cn   [2]string
+		step int
+	}
+	var obs []obstacle
+	for _, c := range b.d.Connectors {
+		o := obstacle{ends: []Point{c.Points[0], c.Points[len(c.Points)-1]}, cn: b.connCN[c.ID]}
+		for k := 1; k < len(c.Points); k++ {
+			o.segs = append(o.segs, [2]Point{c.Points[k-1], c.Points[k]})
+		}
+		obs = append(obs, o)
+	}
+	busbarTouches := 0
+	for _, e := range b.d.Elements {
+		pc := b.portCN[e.ID]
+		if e.Class == ClassBusBarSection {
+			if len(pc) > 0 {
+				o := obstacle{cn: [2]string{pc[0], pc[0]}, step: 1}
+				for k := 1; k < len(e.Points); k++ {
+					o.segs = append(o.segs, [2]Point{e.Points[k-1], e.Points[k]})
+				}
+				obs = append(obs, o)
+			}
+			continue
+		}
+		ts := b.portAt[e.ID]
+		if ts == nil {
+			ts = symbolTerminals(&e, b.im.opt.Terminals)
+		}
+		for k, p := range ts {
+			cn := ""
+			if k < len(pc) {
+				cn = pc[k]
+			}
+			p = roundPt(p)
+			obs = append(obs, obstacle{ends: []Point{p}, cn: [2]string{cn, cn}})
+			for _, bus := range b.d.Elements {
+				if bus.Class != ClassBusBarSection || len(b.portCN[bus.ID]) == 0 || b.portCN[bus.ID][0] == cn {
+					continue
+				}
+				for j := 1; j < len(bus.Points); j++ {
+					if onSeg(p, bus.Points[j-1], bus.Points[j]) {
+						busbarTouches++
+						break
+					}
+				}
+			}
+		}
+	}
+	half := func(step int) float64 {
+		probe := Element{Class: ClassNonIntersection, Shape: "14", Scale: step}
+		h := 0.0
+		for _, t := range symbolTerminals(&probe, b.im.opt.Terminals) {
+			h = math.Max(h, math.Hypot(t.X, t.Y))
+		}
+		return h
+	}
+	if half(0) == 0 {
+		return
+	}
+	type hit struct {
+		seg   int
+		at    Point
+		along float64
+		step  int
+	}
+	jumps, skipped := 0, 0
+	for i := 0; i < len(b.d.Connectors); i++ {
+		w := b.d.Connectors[i]
+		cn := b.connCN[w.ID][0]
+		if w.Kind != KindBusWork || cn == "" {
+			continue
+		}
+		var hits []hit
+		along := 0.0
+		for k := 1; k < len(w.Points); k++ {
+			a, z := w.Points[k-1], w.Points[k]
+			for _, o := range obs {
+				if o.cn[0] == cn || o.cn[1] == cn {
+					continue
+				}
+				for _, sg := range o.segs {
+					if at, ok := properCrossing(a, z, sg[0], sg[1]); ok {
+						hits = append(hits, hit{k - 1, at, along + math.Hypot(at.X-a.X, at.Y-a.Y), o.step})
+					}
+				}
+				for _, p := range o.ends {
+					if onSeg(p, a, z) && p != a && p != z {
+						hits = append(hits, hit{k - 1, p, along + math.Hypot(p.X-a.X, p.Y-a.Y), o.step})
+					}
+				}
+			}
+			along += math.Hypot(z.X-a.X, z.Y-a.Y)
+		}
+		if len(hits) == 0 {
+			continue
+		}
+		slices.SortFunc(hits, func(x, y hit) int { return cmp.Compare(x.along, y.along) })
+		pts := w.Points
+		var pieces []Connector
+		rest := slices.Clone(pts)
+		restSeg, restStart := 0, math.Inf(-1)
+		for _, h := range hits {
+			hl := half(h.step)
+			a, z := pts[h.seg], pts[h.seg+1]
+			segStart := h.along - math.Hypot(h.at.X-a.X, h.at.Y-a.Y)
+			segEnd := segStart + math.Hypot(z.X-a.X, z.Y-a.Y)
+			if h.along-hl <= math.Max(segStart, restStart)+1e-6 || h.along+hl >= segEnd-1e-6 {
+				skipped++
+				continue
+			}
+			orient := int(math.Round(math.Atan2(z.Y-a.Y, z.X-a.X) * 180 / math.Pi))
+			for orient >= 90 {
+				orient -= 180
+			}
+			for orient < -90 {
+				orient += 180
+			}
+			j := Element{ID: b.take(), Class: ClassNonIntersection, Shape: "14", Voltage: w.Voltage, Layer: w.Layer,
+				X: h.at.X, Y: h.at.Y, Orient: orient, Scale: h.step}
+			ts := symbolTerminals(&j, b.im.opt.Terminals)
+			if len(ts) != 2 {
+				continue
+			}
+			near, far := roundPt(ts[0]), roundPt(ts[1])
+			if math.Hypot(far.X-a.X, far.Y-a.Y) < math.Hypot(near.X-a.X, near.Y-a.Y) {
+				near, far = far, near
+			}
+			b.portAt[j.ID] = []Point{near, far}
+			b.portCN[j.ID] = []string{cn, cn}
+			b.d.Elements = append(b.d.Elements, j)
+			piece := w
+			if len(pieces) > 0 {
+				piece.ID = b.take()
+			}
+			piece.Points = simplifyPath(append(slices.Clone(rest[:h.seg-restSeg+1]), near))
+			pieces = append(pieces, piece)
+			rest = append([]Point{far}, pts[h.seg+1:]...)
+			restSeg, restStart = h.seg, h.along+hl
+			jumps++
+		}
+		if len(pieces) == 0 {
+			continue
+		}
+		last := w
+		last.ID = b.take()
+		last.Points = simplifyPath(rest)
+		pieces = append(pieces, last)
+		for _, p := range pieces {
+			b.connCN[p.ID] = [2]string{cn, cn}
+		}
+		b.d.Connectors = append(append(slices.Clone(b.d.Connectors[:i]), pieces...), b.d.Connectors[i+1:]...)
+		i += len(pieces) - 1
+	}
+	if jumps > 0 {
+		b.messages = append(b.messages, fmt.Sprintf("%d wire jumps mark where the layout makes unconnected wires cross or touch", jumps))
+	}
+	if skipped+busbarTouches > 0 {
+		b.messages = append(b.messages, fmt.Sprintf("%d places where the layout makes unconnected items touch had no room for a wire jump; they are not connected", skipped+busbarTouches))
+	}
+}
+
+// properCrossing is where segments a–z and p–q cross inside both (not at an end of either), if they do.
+func properCrossing(a, z, p, q Point) (Point, bool) {
+	rx, ry := z.X-a.X, z.Y-a.Y
+	sx, sy := q.X-p.X, q.Y-p.Y
+	den := rx*sy - ry*sx
+	if math.Abs(den) < 1e-9 {
+		return Point{}, false
+	}
+	t := ((p.X-a.X)*sy - (p.Y-a.Y)*sx) / den
+	u := ((p.X-a.X)*ry - (p.Y-a.Y)*rx) / den
+	const eps = 1e-6
+	if t <= eps || t >= 1-eps || u <= eps || u >= 1-eps {
+		return Point{}, false
+	}
+	return roundPt(Point{X: a.X + t*rx, Y: a.Y + t*ry}), true
 }
 
 // cimPart is a connected piece of one ConnectivityNode's drawing: its points and segments.
@@ -1280,7 +1663,9 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		}
 	}
 	addWire := func(pts []Point) {
-		b.d.Connectors = append(b.d.Connectors, Connector{ID: b.take(), Kind: KindBusWork, Voltage: voltage, Layer: layer, Points: pts})
+		id := b.take()
+		b.connCN[id] = [2]string{cn, cn}
+		b.d.Connectors = append(b.d.Connectors, Connector{ID: id, Kind: KindBusWork, Voltage: voltage, Layer: layer, Points: pts})
 		b.report.Connectors++
 	}
 	for _, w := range b.wires[cn] {
