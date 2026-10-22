@@ -206,12 +206,13 @@ func TestExportCIM(t *testing.T) {
 	if count(eq, "Thyristor") != 0 || count(dl, "TextDiagramObject") != 1 {
 		t.Error("unexpected thyristor or label count")
 	}
-	// The line's far end is a substation of its own: whatever a device other than a line joins is one substation.
-	if n := count(eq, "Substation"); n != 2 {
-		t.Errorf("Substations = %d, want 2", n)
+	// Whatever a device other than a line joins is one substation; the line's far end has no equipment, so it
+	// belongs to this one too.
+	if n := count(eq, "Substation"); n != 1 {
+		t.Errorf("Substations = %d, want 1", n)
 	}
-	if n := count(eq, "VoltageLevel"); n != 3 {
-		t.Errorf("VoltageLevels = %d, want 3: 110 and 10 kV here, 10 kV at the line's far end (the unused class left out)", n)
+	if n := count(eq, "VoltageLevel"); n != 2 {
+		t.Errorf("VoltageLevels = %d, want 2: 110 and 10 kV (the unused class left out)", n)
 	}
 	if !bytes.Contains(out.DL, []byte("Q1 &lt;main&gt;")) {
 		t.Error("label text not escaped")
@@ -477,5 +478,31 @@ func TestCIMClassTable(t *testing.T) {
 	}
 	if e := back["Q43"]; e.Shape != "43" || e.CIM != "" {
 		t.Errorf("Q43 back = %+v", e)
+	}
+}
+
+// A line between two equipped substations keeps them apart; a bare line end joins the substation across the line.
+func TestExportCIMSubstations(t *testing.T) {
+	d := &Diagram{
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}},
+		Nodes:          []Node{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5}},
+		Elements: []Element{
+			{ID: 10, Class: ClassBreaker, Shape: "41", Name: "QA", Voltage: 1, Ports: []Port{{"1", 1}, {"2", 2}}},
+			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "QB", Voltage: 1, Ports: []Port{{"1", 3}, {"2", 4}}},
+		},
+		Connectors: []Connector{
+			{ID: 20, Kind: KindOverheadLine, Name: "AB", Voltage: 1, From: 2, To: 3, Points: []Point{{0, 0}, {10, 0}}},
+			{ID: 21, Kind: KindOverheadLine, Name: "B-end", Voltage: 1, From: 4, To: 5, Points: []Point{{20, 0}, {30, 0}}},
+		},
+	}
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	subs := 0
+	for _, o := range parseRDF(t, out.EQ) {
+		if o.class == "Substation" {
+			subs++
+		}
+	}
+	if subs != 2 {
+		t.Errorf("Substations = %d, want 2: QA's and QB's (the bare end of B-end joining QB's)", subs)
 	}
 }

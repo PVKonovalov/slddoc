@@ -592,6 +592,36 @@ func (x *cimExporter) substations() {
 			join(e.Ports[0].Node, e.Ports[i].Node)
 		}
 	}
+	// A line end with no equipment around it (only lines, wires, poles and the like) is no substation of its own:
+	// it joins the one at the line's other end, following chains of lines until nothing changes.
+	equipped := map[int]bool{}
+	for _, e := range x.d.Elements {
+		if info, ok := cimClasses[e.Class]; ok && info.role != rolePassThrough {
+			for _, p := range e.Ports {
+				equipped[find(x.find(p.Node))] = true
+			}
+		}
+	}
+	for _, c := range x.d.Connectors {
+		if c.Kind == KindLinkToObject {
+			equipped[find(x.find(c.From))] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, c := range x.d.Connectors {
+			if c.Kind != KindOverheadLine && c.Kind != KindCableLine {
+				continue
+			}
+			a, b := find(x.find(c.From)), find(x.find(c.To))
+			if a == b || equipped[a] && equipped[b] {
+				continue
+			}
+			join(c.From, c.To)
+			equipped[find(a)] = equipped[a] || equipped[b]
+			changed = true
+		}
+	}
 	// Named after its busbar with the most connections, else its first named device.
 	best := map[int]int{}
 	for _, e := range x.d.Elements {
