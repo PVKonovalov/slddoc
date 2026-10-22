@@ -14,7 +14,7 @@ package slddoc
 //   - BusBarSection: IpMax
 //   - Load (EnergyConsumer), and a LinkToObject connector exported as one: P, Q
 //   - NetworkInfeed (ExternalNetworkInjection and the like): MinP, MaxP, MinQ, MaxQ
-//   - StaticVarCompensator: CapacitiveRating, InductiveRating
+//   - StaticVarCompensator: CapacitiveRating, InductiveRating, Slope
 //
 // A PowerTransformer keeps its parameters on each TransformerWinding.
 type Electrical struct {
@@ -51,6 +51,8 @@ type Electrical struct {
 	// CapacitiveRating and InductiveRating are an SVC's reactances (Ω) at its limits.
 	CapacitiveRating *float64 `xml:"capacitiveRating,attr,omitempty" json:"capacitiveRating,omitempty"`
 	InductiveRating  *float64 `xml:"inductiveRating,attr,omitempty" json:"inductiveRating,omitempty"`
+	// Slope is an SVC's voltage change per reactive power, kV/Mvar.
+	Slope *float64 `xml:"slope,attr,omitempty" json:"slope,omitempty"`
 
 	// RatedCurrent and IpMax are in A.
 	RatedCurrent *float64 `xml:"ratedCurrent,attr,omitempty" json:"ratedCurrent,omitempty"`

@@ -471,7 +471,7 @@ keeps its parameters on each `<winding>` (§6.4) instead.
 | `Load` | `p` (MW), `q` (Mvar) |
 | `LinkToObject` connectors (as `EnergyConsumer`) | `p` (MW), `q` (Mvar) |
 | `NetworkInfeed` | `minP`, `maxP` (MW), `minQ`, `maxQ` (Mvar) |
-| `StaticVarCompensator` | `capacitiveRating`, `inductiveRating` (Ω) |
+| `StaticVarCompensator` | `capacitiveRating`, `inductiveRating` (Ω), `slope` (kV/Mvar) |
 
 When a wire is split, the piece that keeps the original id keeps its
 `<electrical>`; the new piece has none.

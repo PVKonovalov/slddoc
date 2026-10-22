@@ -1107,6 +1107,7 @@ func (b *cimPageBuilder) electrical(e *Element, obj *cimObject) {
 	case "StaticVarCompensator":
 		pick(&el.CapacitiveRating, "capacitiveRating")
 		pick(&el.InductiveRating, "inductiveRating")
+		pick(&el.Slope, "slope")
 	}
 	if set {
 		e.Electrical = &el

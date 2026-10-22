@@ -206,8 +206,12 @@ func TestExportCIM(t *testing.T) {
 	if count(eq, "Thyristor") != 0 || count(dl, "TextDiagramObject") != 1 {
 		t.Error("unexpected thyristor or label count")
 	}
-	if n := count(eq, "VoltageLevel"); n != 2 {
-		t.Errorf("VoltageLevels = %d, want 2 (the unused class is left out)", n)
+	// The line's far end is a substation of its own: whatever a device other than a line joins is one substation.
+	if n := count(eq, "Substation"); n != 2 {
+		t.Errorf("Substations = %d, want 2", n)
+	}
+	if n := count(eq, "VoltageLevel"); n != 3 {
+		t.Errorf("VoltageLevels = %d, want 3: 110 and 10 kV here, 10 kV at the line's far end (the unused class left out)", n)
 	}
 	if !bytes.Contains(out.DL, []byte("Q1 &lt;main&gt;")) {
 		t.Error("label text not escaped")
@@ -241,6 +245,11 @@ func TestParseVoltage(t *testing.T) {
 	for name, want := range map[string]float64{"110 kV": 110, "6,3 \u043a\u0412": 6.3, "0.4kV": 0.4, "400 V": 0.4, "35": 35, "1,15 MV": 1150} {
 		if got, ok := ParseVoltage(name); !ok || got != want {
 			t.Errorf("ParseVoltage(%q) = %v, %v; want %v", name, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"#00cc00", "0 kV", "coral"} {
+		if _, ok := ParseVoltage(bad); ok {
+			t.Errorf("ParseVoltage(%q) should fail", bad)
 		}
 	}
 	if _, ok := ParseVoltage("aux"); ok {
@@ -283,7 +292,7 @@ func TestExportCIMClassChoice(t *testing.T) {
 			svc = w.Fields
 		}
 	}
-	if !slices.Equal(svc, []string{"capacitiveRating", "inductiveRating"}) {
+	if !slices.Equal(svc, []string{"capacitiveRating", "inductiveRating", "slope"}) {
 		t.Errorf("SVC warnings = %v", svc)
 	}
 	if got := CIMClasses(ClassLoad); !slices.Equal(got, []string{"EnergyConsumer", "ConformLoad", "NonConformLoad"}) {
@@ -364,5 +373,49 @@ func TestExportCIMObjectLink(t *testing.T) {
 	}
 	if got := ConnectorCIMClasses(KindLinkToObject); !slices.Equal(got, []string{"EnergyConsumer", "EnergySource"}) || ConnectorCIMClasses(KindBusWork) != nil {
 		t.Errorf("ConnectorCIMClasses = %v", got)
+	}
+}
+
+// A device in a class with no voltage in its name, and a node with no voltage at all, take the voltage of what they
+// are switched to; no voltage level of 0 kV is written.
+func TestExportCIMVoltageFromNeighbours(t *testing.T) {
+	d := &Diagram{
+		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}, {ID: 2, Name: "coral"}},
+		Nodes:          []Node{{ID: 1}, {ID: 2}, {ID: 3}},
+		Elements: []Element{
+			{ID: 10, Class: ClassBusBarSection, Shape: "24", Name: "B", Voltage: 1, Points: []Point{{0, 0}, {10, 0}}, Ports: []Port{{"1", 1}}},
+			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "Q", Voltage: 2, Ports: []Port{{"1", 1}, {"2", 2}}},
+			{ID: 12, Class: ClassDisconnector, Shape: "162", Name: "D", Ports: []Port{{"1", 2}, {"2", 3}}},
+			{ID: 13, Class: ClassLoad, Shape: "330001", Name: "L", Ports: []Port{{"1", 3}}},
+		},
+	}
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	eq := parseRDF(t, out.EQ)
+	var vls, subs int
+	for _, o := range eq {
+		switch o.class {
+		case "VoltageLevel":
+			vls++
+		case "Substation":
+			subs++
+		case "BaseVoltage":
+			if o.props["BaseVoltage.nominalVoltage"][0] == "0" {
+				t.Error("a 0 kV base voltage was written")
+			}
+		case "ConnectivityNode":
+			if len(o.props["ConnectivityNode.ConnectivityNodeContainer"]) == 0 {
+				t.Error("a node without a container")
+			}
+		}
+	}
+	if vls != 1 || subs != 1 {
+		t.Errorf("voltage levels %d, substations %d; want 1 and 1", vls, subs)
+	}
+	voltageWarned := false
+	for _, w := range out.Warnings {
+		voltageWarned = voltageWarned || w.Kind == "voltage" && w.ID == 2
+	}
+	if !voltageWarned {
+		t.Errorf("the class without a voltage should be reported: %+v", out.Warnings)
 	}
 }

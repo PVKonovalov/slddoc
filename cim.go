@@ -41,7 +41,11 @@ type CIMOptions struct {
 //   - "noTerminal": an auxiliary device (CT, VT, arrester, fault indicator, wave trap) found no equipment
 //     terminal on its node to attach to;
 //   - "notExported": the element has connections but no CIM counterpart;
-//   - "openEnd": a link to object has something at its arrow end, which is left unconnected.
+//   - "openEnd": a link to object has something at its arrow end, which is left unconnected;
+//   - "shorted": a switch or line has both ends on one node and is left out;
+//   - "windings": a transformer has 4 windings, which some tools (PowSyBl among them) can't read;
+//   - "guessedVoltage": nothing on or around the item has a voltage, so it was given its substation's (or the
+//     diagram's) most common one.
 type CIMWarning struct {
 	Kind   string   `json:"kind"`
 	Item   string   `json:"item"`
@@ -216,9 +220,8 @@ type cimExporter struct {
 	cn       map[int]string // root node → ConnectivityNode id
 	cnVolt   map[int]int    // root node → VoltageClass id
 	classes  map[int]VoltageClass
-	bv, vl   map[int]string // VoltageClass id → BaseVoltage / VoltageLevel id
+	bv       map[int]string // VoltageClass id → BaseVoltage id
 	nominal  map[int]float64
-	sub      string
 	region   string
 	layerZ   map[int]int
 	layerDOs map[int][]string
@@ -228,7 +231,14 @@ type cimExporter struct {
 	termsAt  map[int][]string     // root node → equipment Terminal ids, in order
 	diagram  string
 	auxLater []func()
+	subFind  func(int) int
 	used     map[int]int // slddoc node → how many ports and connector ends use it
+
+	subParent map[int]int    // node root → its substation's root (union-find over node roots)
+	subName   map[int]string // substation root → its name
+	subs      map[int]string // substation root → its Substation id
+	vls       map[[2]int]string
+	badClass  map[int]bool // voltage classes already reported as holding no voltage
 }
 
 // ExportCIM converts d to CGMES 3.0 EQ and DL documents.
@@ -236,7 +246,7 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 	x := &cimExporter{
 		d: d, opt: opt,
 		nodes: map[int]Node{}, parent: map[int]int{}, cn: map[int]string{}, cnVolt: map[int]int{},
-		classes: map[int]VoltageClass{}, bv: map[int]string{}, vl: map[int]string{}, nominal: map[int]float64{},
+		classes: map[int]VoltageClass{}, bv: map[int]string{}, nominal: map[int]float64{},
 		layerZ: map[int]int{}, layerDOs: map[int][]string{}, eqOf: map[int]string{}, styles: map[string]string{},
 		glue: map[int][]*rdfObject{}, termsAt: map[int][]string{},
 	}
@@ -259,8 +269,10 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 	for _, vc := range d.VoltageClasses {
 		x.classes[vc.ID] = vc
 	}
+	x.subParent, x.subName, x.subs, x.vls, x.badClass = map[int]int{}, map[int]string{}, map[int]string{}, map[[2]int]string{}, map[int]bool{}
 	x.joinNodes()
 	x.containers()
+	x.substations()
 	x.diagram = x.id("diagram")
 	x.dl = append(x.dl, (&rdfObject{class: "Diagram", id: x.diagram}).
 		lit("IdentifiedObject.mRID", x.mrid("diagram")).
@@ -375,6 +387,7 @@ func (x *cimExporter) joinNodes() {
 	// A node's voltage: the most common voltage among what touches it, the smallest class id on a tie.
 	votes := map[int]map[int]int{}
 	vote := func(node, v int) {
+		v = x.known(v)
 		if v == 0 || node == 0 {
 			return
 		}
@@ -406,6 +419,120 @@ func (x *cimExporter) joinNodes() {
 		}
 		x.cnVolt[r] = best
 	}
+	// A node with no voltage of its own takes that of a node any device but a transformer joins it to.
+	var pairs [][2]int
+	link := func(a, b int) {
+		if a != 0 && b != 0 {
+			pairs = append(pairs, [2]int{x.find(a), x.find(b)})
+		}
+	}
+	for _, e := range x.d.Elements {
+		if r := cimClasses[e.Class].role; r == roleTransformer || r == roleBooster {
+			continue
+		}
+		for i := 1; i < len(e.Ports); i++ {
+			link(e.Ports[0].Node, e.Ports[i].Node)
+		}
+	}
+	for _, c := range x.d.Connectors {
+		if c.Kind == KindOverheadLine || c.Kind == KindCableLine {
+			link(c.From, c.To)
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, p := range pairs {
+			a, b := x.cnVolt[p[0]], x.cnVolt[p[1]]
+			switch {
+			case a == 0 && b != 0:
+				x.cnVolt[p[0]], changed = b, true
+			case b == 0 && a != 0:
+				x.cnVolt[p[1]], changed = a, true
+			}
+		}
+	}
+}
+
+// known is voltage class v when its name holds a voltage, else 0 (reported once as a "voltage" warning).
+func (x *cimExporter) known(v int) int {
+	vc, ok := x.classes[v]
+	if v == 0 || !ok {
+		return 0
+	}
+	if _, ok := ParseVoltage(vc.Name); !ok {
+		if !x.badClass[v] {
+			x.badClass[v] = true
+			x.warnf("voltage", "voltageClass", v)
+		}
+		return 0
+	}
+	return v
+}
+
+// substations groups the nodes into substations: whatever any device but a line joins is one substation.
+func (x *cimExporter) substations() {
+	find := func(r int) int {
+		for x.subParent[r] != 0 && x.subParent[r] != r {
+			r = x.subParent[r]
+		}
+		return r
+	}
+	join := func(a, b int) {
+		ra, rb := find(x.find(a)), find(x.find(b))
+		if ra == rb {
+			return
+		}
+		if rb < ra {
+			ra, rb = rb, ra
+		}
+		x.subParent[rb] = ra
+	}
+	for _, e := range x.d.Elements {
+		if _, ok := cimClasses[e.Class]; !ok {
+			continue
+		}
+		for i := 1; i < len(e.Ports); i++ {
+			join(e.Ports[0].Node, e.Ports[i].Node)
+		}
+	}
+	// Named after its busbar with the most connections, else its first named device.
+	best := map[int]int{}
+	for _, e := range x.d.Elements {
+		if len(e.Ports) == 0 || e.Name == "" {
+			continue
+		}
+		if _, ok := cimClasses[e.Class]; !ok {
+			continue
+		}
+		s := find(x.find(e.Ports[0].Node))
+		score := 0
+		if e.Class == ClassBusBarSection {
+			score = 1 + len(e.Ports)
+		}
+		if _, named := x.subName[s]; !named || score > best[s] {
+			x.subName[s], best[s] = e.Name, score
+		}
+	}
+	x.subFind = find
+}
+
+// substation returns the Substation of slddoc node n (0: the one for equipment with no connection), creating it.
+func (x *cimExporter) substation(n int) string {
+	s := 0
+	if n != 0 {
+		s = x.subFind(x.find(n))
+	}
+	if id, ok := x.subs[s]; ok {
+		return id
+	}
+	name := x.subName[s]
+	if name == "" {
+		name = fmt.Sprintf("%s %d", x.modelName(), len(x.subs)+1)
+	}
+	key := fmt.Sprintf("substation:%d", s)
+	x.addEQ("Substation", key, name).ref("Substation.Region", x.region)
+	x.subs[s] = x.id(key)
+	return x.subs[s]
 }
 
 // node returns the ConnectivityNode of slddoc node n, creating it on first use.
@@ -415,10 +542,7 @@ func (x *cimExporter) node(n int) string {
 		return id
 	}
 	key := fmt.Sprintf("cn:%d", r)
-	container := x.sub
-	if v := x.cnVolt[r]; v != 0 {
-		container = x.voltageLevel(v)
-	}
+	container := x.voltageLevel(x.cnVolt[r], n)
 	x.addEQ("ConnectivityNode", key, fmt.Sprintf("CN %d", r)).ref("ConnectivityNode.ConnectivityNodeContainer", container)
 	x.cn[r] = x.id(key)
 	return x.cn[r]
@@ -431,6 +555,9 @@ var voltageRe = regexp.MustCompile("(?i)([0-9]+(?:[.,][0-9]+)?)\\s*(kv|\u043a\u0
 // ParseVoltage reads a voltage class name such as "110 kV", "6,3 kV" or "400 V" as kV; the unit may also be in Cyrillic.
 // A bare number is kV.
 func ParseVoltage(name string) (float64, bool) {
+	if strings.HasPrefix(strings.TrimSpace(name), "#") {
+		return 0, false // a colour, not a voltage
+	}
 	m := voltageRe.FindStringSubmatch(name)
 	if m == nil {
 		return 0, false
@@ -445,7 +572,7 @@ func ParseVoltage(name string) (float64, bool) {
 	case "v", "\u0432":
 		v /= 1000
 	}
-	return v, true
+	return v, v > 0
 }
 
 func (x *cimExporter) containers() {
@@ -453,8 +580,6 @@ func (x *cimExporter) containers() {
 	gr := x.addEQ("GeographicalRegion", "region:geo", name)
 	x.region = x.id("region:sub")
 	x.addEQ("SubGeographicalRegion", "region:sub", name).ref("SubGeographicalRegion.Region", gr.id)
-	x.sub = x.id("substation")
-	x.addEQ("Substation", "substation", name).ref("Substation.Region", x.region)
 }
 
 // baseVoltage returns the BaseVoltage of voltage class v ("" for none), creating it with its VoltageLevel.
@@ -477,30 +602,83 @@ func (x *cimExporter) baseVoltage(v int) string {
 	key := fmt.Sprintf("bv:%d", v)
 	x.addEQ("BaseVoltage", key, vc.Name).num("BaseVoltage.nominalVoltage", kv)
 	x.bv[v] = x.id(key)
-	vlKey := fmt.Sprintf("vl:%d", v)
-	x.addEQ("VoltageLevel", vlKey, vc.Name).ref("VoltageLevel.Substation", x.sub).ref("VoltageLevel.BaseVoltage", x.bv[v])
-	x.vl[v] = x.id(vlKey)
 	return x.bv[v]
 }
 
-func (x *cimExporter) voltageLevel(v int) string {
-	if x.baseVoltage(v) == "" {
-		return x.sub
+// voltageLevel returns the VoltageLevel of voltage class v in the substation of slddoc node n, creating it. An
+// unknown voltage takes the substation's most common one; with none at all, the Substation itself is returned.
+func (x *cimExporter) voltageLevel(v, n int) string {
+	v = x.resolve(v, n)
+	s := 0
+	if n != 0 {
+		s = x.subFind(x.find(n))
 	}
-	return x.vl[v]
+	if v == 0 {
+		return x.substation(n)
+	}
+	if id, ok := x.vls[[2]int{s, v}]; ok {
+		return id
+	}
+	key := fmt.Sprintf("vl:%d:%d", s, v)
+	x.addEQ("VoltageLevel", key, x.classes[v].Name).ref("VoltageLevel.Substation", x.substation(n)).ref("VoltageLevel.BaseVoltage", x.baseVoltage(v))
+	x.vls[[2]int{s, v}] = x.id(key)
+	return x.vls[[2]int{s, v}]
 }
 
-// voltageOf is an element's own voltage, else that of its first port's node.
+// resolve is voltage class v when it holds a voltage, else that of slddoc node n, else the most common one of n's
+// substation, else of the whole diagram (0 only when nothing in the diagram has a voltage).
+func (x *cimExporter) resolve(v, n int) int {
+	if v = x.known(v); v != 0 {
+		return v
+	}
+	if n != 0 {
+		r := x.find(n)
+		if v := x.cnVolt[r]; v != 0 {
+			return v
+		}
+		if v := x.mainVoltage(x.subFind(r), false); v != 0 {
+			return v
+		}
+	}
+	return x.mainVoltage(0, true)
+}
+
+// mainVoltage is the voltage class most nodes of substation s (of the whole diagram when all) have; 0 for none.
+func (x *cimExporter) mainVoltage(s int, all bool) int {
+	count := map[int]int{}
+	for r, v := range x.cnVolt {
+		if v != 0 && (all || x.subFind(r) == s) {
+			count[v]++
+		}
+	}
+	best, bestN := 0, 0
+	for v, c := range count {
+		if c > bestN || c == bestN && v < best {
+			best, bestN = v, c
+		}
+	}
+	return best
+}
+
+// firstNode is the node of e's first port (0 when it has none).
+func firstNode(e Element) int {
+	if ps := sortedPorts(e); len(ps) > 0 {
+		return ps[0].Node
+	}
+	return 0
+}
+
+// voltageOf is an element's own voltage, else that of its ports' nodes, else resolve's fallback.
 func (x *cimExporter) voltageOf(e Element) int {
-	if e.Voltage != 0 {
-		return e.Voltage
+	if v := x.known(e.Voltage); v != 0 {
+		return v
 	}
 	for _, p := range sortedPorts(e) {
 		if v := x.cnVolt[x.find(p.Node)]; v != 0 {
 			return v
 		}
 	}
-	return 0
+	return x.resolve(0, firstNode(e))
 }
 
 // --- equipment
@@ -609,6 +787,15 @@ func (x *cimExporter) element(e Element) {
 	key := fmt.Sprintf("el:%d", e.ID)
 	name := elementName(e)
 	ports := sortedPorts(e)
+	if info.role != rolePassThrough && len(ports) > 0 && x.known(e.Voltage) == 0 && e.Class != ClassPowerTransformer {
+		guessed := true
+		for _, p := range ports {
+			guessed = guessed && x.cnVolt[x.find(p.Node)] == 0
+		}
+		if guessed {
+			x.warnf("guessedVoltage", "element", e.ID)
+		}
+	}
 	at := []Point{{e.X, e.Y}}
 	rot := normalizedRotation(e.Orient)
 	switch info.role {
@@ -621,7 +808,7 @@ func (x *cimExporter) element(e Element) {
 			return
 		}
 		node := ports[0].Node
-		o := x.addEQ(cimClassOf(e), key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
+		o := x.addEQ(cimClassOf(e), key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e), firstNode(e)))
 		x.eqOf[e.ID] = o.id
 		x.diagramObject(key, o.id, shapeStyle(e), rot, e.Layer, at)
 		if info.role == roleAuxOnPort1 {
@@ -638,7 +825,7 @@ func (x *cimExporter) element(e Element) {
 	case roleBusbar:
 		v := x.voltageOf(e)
 		ee := elec(e.Electrical)
-		o := x.addEQ("BusbarSection", key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(v))
+		o := x.addEQ("BusbarSection", key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(v, firstNode(e)))
 		if ee.IpMax != nil {
 			o.num("BusbarSection.ipMax", *ee.IpMax)
 		}
@@ -655,7 +842,11 @@ func (x *cimExporter) element(e Element) {
 		x.shunt(e, key, name, ports)
 	default:
 		class := cimClassOf(e)
-		o := x.addEQ(class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
+		if switchClasses[class] && len(ports) >= 2 && x.find(ports[0].Node) == x.find(ports[1].Node) {
+			x.warnf("shorted", "element", e.ID) // both ends on one node: no switch at all
+			return
+		}
+		o := x.addEQ(class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e), firstNode(e)))
 		x.eqOf[e.ID] = o.id
 		x.equipmentParams(e, o, class)
 		for i, p := range ports {
@@ -664,6 +855,9 @@ func (x *cimExporter) element(e Element) {
 		x.diagramObject(key, o.id, shapeStyle(e), rot, e.Layer, at)
 	}
 }
+
+var switchClasses = map[string]bool{"Breaker": true, "DisconnectingCircuitBreaker": true, "Disconnector": true,
+	"LoadBreakSwitch": true, "GroundDisconnector": true, "Switch": true, "Fuse": true}
 
 func switchOpen(e Element) bool {
 	return e.State != nil && *e.State != 1
@@ -704,15 +898,19 @@ func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 			gu := x.addEQ("GeneratingUnit", guKey, elementName(e)).
 				num("GeneratingUnit.minOperatingP", param(ee.MinP, 0, "minP", &missing)).
 				num("GeneratingUnit.maxOperatingP", param(ee.MaxP, 0, "maxP", &missing)).
-				ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e)))
+				ref("Equipment.EquipmentContainer", x.voltageLevel(x.voltageOf(e), firstNode(e)))
 			o.ref("RotatingMachine.GeneratingUnit", gu.id)
 		}
 	case "EnergyConsumer", "ConformLoad", "NonConformLoad":
 		optional("EnergyConsumer.pfixed", ee.P)
 		optional("EnergyConsumer.qfixed", ee.Q)
 	case "ExternalNetworkInjection", "EquivalentInjection":
-		optional(class+".minP", ee.MinP)
-		optional(class+".maxP", ee.MaxP)
+		if class == "ExternalNetworkInjection" {
+			o.num(class+".minP", param(ee.MinP, 0, "minP", &missing)).num(class+".maxP", param(ee.MaxP, 0, "maxP", &missing))
+		} else {
+			optional(class+".minP", ee.MinP)
+			optional(class+".maxP", ee.MaxP)
+		}
 		optional(class+".minQ", ee.MinQ)
 		optional(class+".maxQ", ee.MaxQ)
 		if class == "EquivalentInjection" {
@@ -724,7 +922,8 @@ func (x *cimExporter) equipmentParams(e Element, o *rdfObject, class string) {
 		}
 	case "StaticVarCompensator":
 		o.num("StaticVarCompensator.capacitiveRating", param(ee.CapacitiveRating, 0, "capacitiveRating", &missing)).
-			num("StaticVarCompensator.inductiveRating", param(ee.InductiveRating, 0, "inductiveRating", &missing))
+			num("StaticVarCompensator.inductiveRating", param(ee.InductiveRating, 0, "inductiveRating", &missing)).
+			num("StaticVarCompensator.slope", param(ee.Slope, 0, "slope", &missing))
 	}
 	if len(missing) > 0 {
 		x.warnf("missing", "element", e.ID, missing...)
@@ -759,7 +958,7 @@ func (x *cimExporter) shunt(e Element, key, name string, ports []Port) {
 		missing = append(missing, "normalSections")
 	}
 	o := x.addEQ("LinearShuntCompensator", key, name).
-		ref("Equipment.EquipmentContainer", x.voltageLevel(v)).
+		ref("Equipment.EquipmentContainer", x.voltageLevel(v, firstNode(e))).
 		num("ShuntCompensator.nomU", nomU).
 		lit("ShuntCompensator.maximumSections", strconv.Itoa(maxSec)).
 		lit("ShuntCompensator.normalSections", strconv.Itoa(normSec)).
@@ -785,7 +984,7 @@ func (x *cimExporter) petersenCoil(e Element, key, name string, ports []Port) {
 	ee := elec(e.Electrical)
 	var missing []string
 	o := x.addEQ("PetersenCoil", key, name).
-		ref("Equipment.EquipmentContainer", x.voltageLevel(v)).
+		ref("Equipment.EquipmentContainer", x.voltageLevel(v, firstNode(e))).
 		enum("PetersenCoil.mode", "PetersenCoilModeKind.fixed").
 		num("PetersenCoil.nominalU", param(ee.NomU, x.nominal[v], "nomU", &missing))
 	x.eqOf[e.ID] = o.id
@@ -820,7 +1019,7 @@ func (x *cimExporter) knifeSwitch(e Element, key, name string, ports []Port) {
 	}{{"L", ports[1], left}, {"R", ports[2], right}} {
 		k := fmt.Sprintf("%s:%s", key, side.suffix)
 		n := name + " " + side.suffix
-		o := x.addEQ("Disconnector", k, n).ref("Equipment.EquipmentContainer", x.voltageLevel(v)).
+		o := x.addEQ("Disconnector", k, n).ref("Equipment.EquipmentContainer", x.voltageLevel(v, firstNode(e))).
 			lit("Switch.normalOpen", strconv.FormatBool(!side.closed)).lit("Switch.retained", "false")
 		if ee.RatedCurrent != nil {
 			o.num("Switch.ratedCurrent", *ee.RatedCurrent)
@@ -837,7 +1036,10 @@ func (x *cimExporter) knifeSwitch(e Element, key, name string, ports []Port) {
 var windingConnection = map[WindingScheme]string{SchemeWye: "Y", SchemeWyeN: "Yn", SchemeDelta: "D"}
 
 func (x *cimExporter) transformer(e Element, key, name string, ports []Port, booster bool) {
-	o := x.addEQ("PowerTransformer", key, name).ref("Equipment.EquipmentContainer", x.sub)
+	o := x.addEQ("PowerTransformer", key, name).ref("Equipment.EquipmentContainer", x.substation(firstNode(e)))
+	if len(e.Windings) > 3 {
+		x.warnf("windings", "element", e.ID) // valid CIM, but many tools read only 2 or 3 ends
+	}
 	x.eqOf[e.ID] = o.id
 	windings := e.Windings
 	if booster {
@@ -852,10 +1054,7 @@ func (x *cimExporter) transformer(e Element, key, name string, ports []Port, boo
 			break
 		}
 		var miss []string
-		v := w.Voltage
-		if v == 0 {
-			v = x.cnVolt[x.find(ports[i].Node)]
-		}
+		v := x.resolve(w.Voltage, ports[i].Node)
 		bv := x.baseVoltage(v)
 		endKey := fmt.Sprintf("%s:end:%d", key, i+1)
 		t := x.terminal(key, name, i+1, ports[i].Node, e.Layer)
@@ -928,12 +1127,9 @@ func (x *cimExporter) objectLink(c Connector) {
 	if name == "" {
 		name = fmt.Sprintf("%s %d", c.Kind, c.ID)
 	}
-	v := c.Voltage
-	if v == 0 {
-		v = x.cnVolt[x.find(c.From)]
-	}
+	v := x.resolve(c.Voltage, c.From)
 	x.baseVoltage(v)
-	o := x.addEQ(class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(v))
+	o := x.addEQ(class, key, name).ref("Equipment.EquipmentContainer", x.voltageLevel(v, c.From))
 	ee := elec(c.Electrical)
 	switch class {
 	case "EnergyConsumer":
@@ -963,15 +1159,19 @@ func (x *cimExporter) objectLink(c Connector) {
 }
 
 func (x *cimExporter) line(c Connector) {
+	if x.find(c.From) == x.find(c.To) {
+		x.warnf("shorted", "connector", c.ID) // both ends on one node: nothing to model
+		return
+	}
+	if x.known(c.Voltage) == 0 && x.cnVolt[x.find(c.From)] == 0 && x.cnVolt[x.find(c.To)] == 0 {
+		x.warnf("guessedVoltage", "connector", c.ID)
+	}
 	key := fmt.Sprintf("line:%d", c.ID)
 	name := c.Name
 	if name == "" {
 		name = fmt.Sprintf("%s %d", c.Kind, c.ID)
 	}
-	v := c.Voltage
-	if v == 0 {
-		v = x.cnVolt[x.find(c.From)]
-	}
+	v := x.resolve(c.Voltage, c.From)
 	lineID := x.addEQ("Line", key+":container", name).ref("Line.Region", x.region).id
 	ee := elec(c.Electrical)
 	var missing []string
