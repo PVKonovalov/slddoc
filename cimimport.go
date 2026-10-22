@@ -27,7 +27,7 @@ type CIMImportOptions struct {
 	Terminals  map[string][]Point
 	Classes    map[string]Class
 	Grid       float64
-	CIMClasses CIMClassTable // which CIM classes an element class stands for (nil: DefaultCIMClasses)
+	CIMClasses CIMClassTable // which CIM classes a shape stands for (nil: the built-in lists)
 }
 
 // CIMPage is one imported diagram: Title is the DL Diagram's name, Report counts what was made (Skipped by CIM
@@ -195,32 +195,37 @@ var cimAuxiliaryClasses = map[string]bool{
 	"CurrentTransformer": true, "PotentialTransformer": true, "SurgeArrester": true, "FaultIndicator": true, "WaveTrap": true,
 }
 
-// shapeFor is the element class and shape CIM class cls is drawn with: its own symbol, else that of the first
-// element class (by name) the CIM class table lets stand for it.
+// shapeFor is the element class and shape CIM class cls is drawn with: a shape the table made default to it, else
+// its own symbol, else the first shape (by code) whose classes include it.
 func (im *cimImporter) shapeFor(cls string) (Class, string, bool) {
+	codes := make([]string, 0, len(im.opt.CIMClasses))
+	for code := range im.opt.CIMClasses {
+		if _, ok := im.opt.Classes[code]; ok && code != LinkToObjectCode {
+			codes = append(codes, code)
+		}
+	}
+	slices.Sort(codes)
+	for _, code := range codes {
+		// Only a default the table changed; shapes keeping their class's built-in default draw it as before.
+		l, c := im.opt.CIMClasses[code], im.opt.Classes[code]
+		if builtin := CIMClasses(c); len(l) > 0 && l[0] == cls && (len(builtin) == 0 || builtin[0] != cls) {
+			return c, code, true
+		}
+	}
 	if def, ok := cimEquipmentShapes[cls]; ok {
 		return def.class, def.shape, true
 	}
-	var classes []Class
-	for c, l := range im.opt.CIMClasses {
-		if c != LinkToObjectCIM && slices.Contains(l, cls) {
-			classes = append(classes, c)
-		}
-	}
-	slices.Sort(classes)
-	for _, c := range classes {
-		var shapes []string
-		for code, sc := range im.opt.Classes {
-			if sc == c {
-				shapes = append(shapes, code)
-			}
-		}
-		if len(shapes) > 0 {
-			slices.Sort(shapes)
-			return c, shapes[0], true
+	for _, code := range codes {
+		if slices.Contains(im.opt.CIMClasses[code], cls) {
+			return im.opt.Classes[code], code, true
 		}
 	}
 	return "", "", false
+}
+
+// classesOf is the CIM classes an element of shape code (class c) can stand for.
+func (im *cimImporter) classesOf(code string, c Class) []string {
+	return im.opt.CIMClasses.elementClasses(Element{Shape: code, Class: c})
 }
 
 func (im *cimImporter) drawable(cls string) bool {
@@ -249,9 +254,6 @@ type cimImporter struct {
 func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 	if opt.Grid <= 0 {
 		opt.Grid = 10
-	}
-	if opt.CIMClasses == nil {
-		opt.CIMClasses = DefaultCIMClasses()
 	}
 	objs, err := parseCIM(docs)
 	if err != nil {
@@ -693,7 +695,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	// A layout this editor exported names its shape; keep it when that shape can stand for this CIM class.
 	if st := b.im.objs[do.get("DiagramObjectStyle")]; st != nil {
 		if code, ok := strings.CutPrefix(st.get("name"), "shape-"); ok {
-			if c, ok := b.im.opt.Classes[code]; ok && slices.Contains(b.im.opt.CIMClasses[c], obj.class) {
+			if c, ok := b.im.opt.Classes[code]; ok && slices.Contains(b.im.classesOf(code, c), obj.class) {
 				class, shape = c, code
 			}
 		}
@@ -711,7 +713,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	if r, ok := do.num("rotation"); ok {
 		e.Orient = snapOrient(r)
 	}
-	if l := b.im.opt.CIMClasses[class]; len(l) > 1 && l[0] != obj.class && slices.Contains(l, obj.class) {
+	if l := b.im.classesOf(shape, class); len(l) > 1 && l[0] != obj.class && slices.Contains(l, obj.class) {
 		e.CIM = obj.class
 	}
 	if no := obj.get("normalOpen"); no != "" {
@@ -1193,7 +1195,7 @@ func (b *cimPageBuilder) line(obj, do *cimObject) {
 // "LinkToObject" polyline.
 func (b *cimPageBuilder) isObjectLink(obj, do *cimObject) bool {
 	st := b.im.objs[do.get("DiagramObjectStyle")]
-	return st != nil && st.get("name") == string(KindLinkToObject) && slices.Contains(b.im.opt.CIMClasses[LinkToObjectCIM], obj.class) &&
+	return st != nil && st.get("name") == string(KindLinkToObject) && slices.Contains(b.im.opt.CIMClasses.linkClasses(), obj.class) &&
 		len(b.im.points[do.id]) >= 2
 }
 
@@ -1205,7 +1207,7 @@ func (b *cimPageBuilder) objectLink(obj, do *cimObject) {
 	}
 	c := Connector{ID: b.take(), Kind: KindLinkToObject, Name: obj.get("name"), Voltage: b.equipmentVoltage(obj),
 		Layer: b.layer(do), Points: pts}
-	if l := b.im.opt.CIMClasses[LinkToObjectCIM]; len(l) > 0 && obj.class != l[0] {
+	if obj.class != b.im.opt.CIMClasses.linkClasses()[0] {
 		c.CIM = obj.class
 	}
 	if el := (Electrical{P: obj.numPtr("pfixed"), Q: obj.numPtr("qfixed")}); el != (Electrical{}) {

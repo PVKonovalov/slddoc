@@ -421,54 +421,61 @@ func TestExportCIMVoltageFromNeighbours(t *testing.T) {
 }
 
 func TestCIMClassTable(t *testing.T) {
-	def := DefaultCIMClasses()
+	shapes := map[string]Class{"41": ClassBreaker, "43": ClassBreaker, "162": ClassDisconnector, "3": ClassRectangle}
 	for _, bad := range []map[string][]string{
-		{"Rectangle": {"Breaker"}},          // not exported as equipment
-		{"Breaker": {}},                     // empty
-		{"Breaker": {"SynchronousMachine"}}, // not a switch
-		{"Breaker": {"Breaker", "Breaker"}}, // twice
-		{"LinkToObject": {"Breaker"}},       // a link is an injection
+		{"3": {"Breaker"}},              // a rectangle is not exported as equipment
+		{"999": {"Breaker"}},            // no such shape
+		{"41": {}},                      // empty
+		{"41": {"SynchronousMachine"}},  // not a switch
+		{"41": {"Breaker", "Breaker"}},  // twice
+		{LinkToObjectCode: {"Breaker"}}, // a link is an injection
 	} {
-		if _, err := def.With(bad); err == nil {
-			t.Errorf("With(%v) should fail", bad)
+		if _, err := NewCIMClassTable(shapes, bad); err == nil {
+			t.Errorf("NewCIMClassTable(%v) should fail", bad)
 		}
 	}
-	table, err := def.With(map[string][]string{"Disconnector": {"Jumper", "Disconnector"}, "LinkToObject": {"EnergySource", "EnergyConsumer"}})
+	table, err := NewCIMClassTable(shapes, map[string][]string{
+		"43":             {"DisconnectingCircuitBreaker", "Breaker"},
+		"162":            {"Jumper", "Disconnector"},
+		LinkToObjectCode: {"EnergySource", "EnergyConsumer"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(table.Of(ClassBreaker), def.Of(ClassBreaker)) {
-		t.Error("a class left out keeps its built-in list")
+	if !slices.Equal(table.Of("41"), CIMClasses(ClassBreaker)) || table.Of("43")[0] != "DisconnectingCircuitBreaker" {
+		t.Errorf("41 keeps its class's list and 43 gets its own: %v, %v", table.Of("41"), table.Of("43"))
 	}
 
-	// The configured default is what an element without a choice exports as, and an imported Jumper comes back as a
-	// disconnector with that choice.
+	// A shape's configured default is what its elements export as, and the CIM class comes back as that shape.
 	d := &Diagram{
-		Nodes:      []Node{{ID: 1}, {ID: 2}},
-		Elements:   []Element{{ID: 10, Class: ClassDisconnector, Shape: "162", Name: "D1", Ports: []Port{{"1", 1}, {"2", 2}}}},
+		Nodes: []Node{{ID: 1}, {ID: 2}, {ID: 3, Y: 10}, {ID: 4}, {ID: 5}},
+		Elements: []Element{
+			{ID: 10, Class: ClassDisconnector, Shape: "162", Name: "D1", Ports: []Port{{"1", 1}, {"2", 2}}},
+			{ID: 11, Class: ClassBreaker, Shape: "43", Name: "Q43", Ports: []Port{{"1", 4}, {"2", 5}}},
+		},
 		Connectors: []Connector{{ID: 20, Kind: KindLinkToObject, Name: "W", From: 2, To: 3, Points: []Point{{0, 0}, {0, 10}}}},
 	}
-	d.Nodes = append(d.Nodes, Node{ID: 3, Y: 10})
 	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0), Classes: table})
 	classes := map[string]bool{}
 	for _, o := range parseRDF(t, out.EQ) {
 		classes[o.class] = true
 	}
-	if !classes["Jumper"] || classes["Disconnector"] || !classes["EnergySource"] {
+	if !classes["Jumper"] || classes["Disconnector"] || !classes["EnergySource"] || !classes["DisconnectingCircuitBreaker"] {
 		t.Errorf("exported classes = %v", classes)
 	}
-	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, CIMImportOptions{Terminals: map[string][]Point{"162": {{X: 0, Y: -20}, {X: 0, Y: 20}}},
-		Classes: map[string]Class{"162": ClassDisconnector}, CIMClasses: table})
+	terms := map[string][]Point{"162": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "43": {{X: 0, Y: -20}, {X: 0, Y: 20}}}
+	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, CIMImportOptions{Terminals: terms, Classes: shapes, CIMClasses: table})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var back Element
+	back := map[string]Element{}
 	for _, e := range pages[0].Diagram.Elements {
-		if e.Name == "D1" {
-			back = e
-		}
+		back[e.Name] = e
 	}
-	if back.Class != ClassDisconnector || back.Shape != "162" || back.CIM != "" {
-		t.Errorf("D1 back = %+v (Jumper is its default, so no choice is stored)", back)
+	if e := back["D1"]; e.Shape != "162" || e.CIM != "" {
+		t.Errorf("D1 back = %+v (Jumper is its shape's default, so no choice is stored)", e)
+	}
+	if e := back["Q43"]; e.Shape != "43" || e.CIM != "" {
+		t.Errorf("Q43 back = %+v", e)
 	}
 }

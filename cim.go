@@ -27,7 +27,7 @@ const (
 )
 
 // CIMOptions names the exported model: Name is the diagram's name (it seeds every mRID, so re-exporting the
-// same diagram keeps its ids), Created the export time; Classes is the CIM class table (nil: DefaultCIMClasses).
+// same diagram keeps its ids), Created the export time; Classes is the CIM class table (nil: the built-in lists).
 type CIMOptions struct {
 	Name    string
 	Created time.Time
@@ -141,23 +141,15 @@ var cimAlternatives = map[Class][]string{
 	ClassNetworkInfeed:    {"EquivalentInjection", "EnergySource"},
 }
 
-// CIMClassTable maps an element class, or LinkToObjectCIM for links to object, to the CIM classes it can be
-// exported as, its default first.
-type CIMClassTable map[Class][]string
+// CIMClassTable maps a symbol shape code, or LinkToObjectCode for links to object, to the CIM classes an element
+// of that shape can be exported as, its default first. A nil table, or a shape missing from it, falls back to the
+// built-in lists of its element class (CIMClasses).
+type CIMClassTable map[string][]string
 
-// LinkToObjectCIM is the CIMClassTable key of links to object.
-const LinkToObjectCIM = Class(KindLinkToObject)
+// LinkToObjectCode is the shape code of a link to object (xsde2svg 28), its CIMClassTable key.
+const LinkToObjectCode = "28"
 
-// DefaultCIMClasses is the built-in table.
-func DefaultCIMClasses() CIMClassTable {
-	t := CIMClassTable{LinkToObjectCIM: {"EnergyConsumer", "EnergySource"}}
-	for c, info := range cimClasses {
-		if info.class != "" {
-			t[c] = append([]string{info.class}, cimAlternatives[c]...)
-		}
-	}
-	return t
-}
+var builtinLinkCIM = []string{"EnergyConsumer", "EnergySource"}
 
 // cimFamilies groups the CIM classes the export writes alike; an element can stand for any class of its default's
 // family (a class in no family stands for itself only).
@@ -178,65 +170,91 @@ func cimFamily(class string) []string {
 	return []string{class}
 }
 
-// With returns t with the classes of overrides (element class → CIM classes, default first) put in, checked: every
-// key must be an element class exported as equipment (or LinkToObject), and every CIM class one the export writes
-// for that kind of equipment.
-func (t CIMClassTable) With(overrides map[string][]string) (CIMClassTable, error) {
-	out := CIMClassTable{}
-	for c, l := range t {
-		out[c] = slices.Clone(l)
-	}
-	keys := make([]string, 0, len(overrides))
-	for k := range overrides {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	for _, k := range keys {
-		classes := overrides[k]
-		def := ""
-		if Class(k) == LinkToObjectCIM {
-			def = "EnergyConsumer"
-		} else if info, ok := cimClasses[Class(k)]; ok {
-			def = info.class
+// NewCIMClassTable builds the table of the shapes given (shape code → element class, the element library): each
+// shape exported as equipment gets its class's built-in list, and overrides (shape code → CIM classes, default
+// first) replace those of the shapes they name. Every override is checked: the code must be a shape exported as
+// CIM equipment (or LinkToObjectCode), and every CIM class one the export writes alike for it, listed once.
+func NewCIMClassTable(shapes map[string]Class, overrides map[string][]string) (CIMClassTable, error) {
+	t := CIMClassTable{LinkToObjectCode: slices.Clone(builtinLinkCIM)}
+	for code, c := range shapes {
+		if l := CIMClasses(c); l != nil {
+			t[code] = l
 		}
-		if def == "" {
-			return nil, fmt.Errorf("cim.classes: %q is not an element class exported as CIM equipment", k)
+	}
+	codes := make([]string, 0, len(overrides))
+	for code := range overrides {
+		codes = append(codes, code)
+	}
+	slices.Sort(codes)
+	for _, code := range codes {
+		classes := overrides[code]
+		def, ok := t[code]
+		if !ok {
+			if c, known := shapes[code]; known {
+				return nil, fmt.Errorf("cim.classes: shape %q (%s) is not exported as CIM equipment", code, c)
+			}
+			return nil, fmt.Errorf("cim.classes: no shape %q in the element library", code)
 		}
 		if len(classes) == 0 {
-			return nil, fmt.Errorf("cim.classes: %q lists no CIM class", k)
+			return nil, fmt.Errorf("cim.classes: shape %q lists no CIM class", code)
 		}
-		family := cimFamily(def)
-		for i, c := range classes {
-			if !slices.Contains(family, c) {
-				return nil, fmt.Errorf("cim.classes: %q can't be exported as %q; choose from %s", k, c, strings.Join(family, ", "))
+		family := cimFamily(def[0])
+		for i, cls := range classes {
+			if !slices.Contains(family, cls) {
+				return nil, fmt.Errorf("cim.classes: shape %q can't be exported as %q; choose from %s", code, cls, strings.Join(family, ", "))
 			}
-			if slices.Contains(classes[:i], c) {
-				return nil, fmt.Errorf("cim.classes: %q lists %q twice", k, c)
+			if slices.Contains(classes[:i], cls) {
+				return nil, fmt.Errorf("cim.classes: shape %q lists %q twice", code, cls)
 			}
 		}
-		out[Class(k)] = slices.Clone(classes)
+		t[code] = slices.Clone(classes)
 	}
-	return out, nil
+	return t, nil
 }
 
-// Of returns the CIM classes class c can be exported as, its default first; nil when it isn't exported as equipment.
-func (t CIMClassTable) Of(c Class) []string {
-	return slices.Clone(t[c])
+// Of returns the CIM classes an element of shape code can be exported as, its default first; nil when it isn't
+// exported as equipment (or the table has no such shape).
+func (t CIMClassTable) Of(code string) []string {
+	return slices.Clone(t[code])
 }
 
-// CIMClasses returns the built-in CIM classes of element class c (see DefaultCIMClasses).
+// elementClasses is the list e's shape has in t, else the built-in one of its class.
+func (t CIMClassTable) elementClasses(e Element) []string {
+	if l, ok := t[e.Shape]; ok {
+		return l
+	}
+	return CIMClasses(e.Class)
+}
+
+// linkClasses is the list of links to object.
+func (t CIMClassTable) linkClasses() []string {
+	if l, ok := t[LinkToObjectCode]; ok {
+		return l
+	}
+	return builtinLinkCIM
+}
+
+// CIMClasses returns the built-in CIM classes of element class c, its default first; nil when c is not exported as
+// equipment.
 func CIMClasses(c Class) []string {
-	return DefaultCIMClasses().Of(c)
+	info, ok := cimClasses[c]
+	if !ok || info.class == "" {
+		return nil
+	}
+	return append([]string{info.class}, cimAlternatives[c]...)
 }
 
 // ConnectorCIMClasses returns the built-in CIM classes of a connector kind exported as equipment (links to object).
 func ConnectorCIMClasses(k ConnectorKind) []string {
-	return DefaultCIMClasses().Of(Class(k))
+	if k == KindLinkToObject {
+		return slices.Clone(builtinLinkCIM)
+	}
+	return nil
 }
 
-// classOf is e's CIM class: its own choice when the table allows it, else the table's default.
+// classOf is e's CIM class: its own choice when its shape's list allows it, else that list's default.
 func (t CIMClassTable) classOf(e Element) string {
-	l := t[e.Class]
+	l := t.elementClasses(e)
 	if e.CIM != "" && slices.Contains(l, e.CIM) {
 		return e.CIM
 	}
@@ -332,9 +350,6 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 		x.nodes[n.ID] = n
 	}
 	x.table = opt.Classes
-	if x.table == nil {
-		x.table = DefaultCIMClasses()
-	}
 	x.used = map[int]int{}
 	for _, e := range d.Elements {
 		for _, p := range e.Ports {
@@ -1199,10 +1214,7 @@ func (x *cimExporter) connector(c Connector) {
 // Terminal on the node at its From end; the arrow end is the object itself. Its layout is the link's points, styled
 // "LinkToObject".
 func (x *cimExporter) objectLink(c Connector) {
-	classes := x.table[LinkToObjectCIM]
-	if len(classes) == 0 {
-		classes = []string{"EnergyConsumer"}
-	}
+	classes := x.table.linkClasses()
 	class := classes[0]
 	if slices.Contains(classes, c.CIM) {
 		class = c.CIM
