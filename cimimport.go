@@ -327,32 +327,46 @@ type cimAttach struct {
 	at       Point
 	optional bool
 	group    int
+	owner    int // the element whose port it is (0 for a line end)
 }
 
 type cimPageBuilder struct {
-	im        *cimImporter
-	d         *Diagram
-	report    Report
-	messages  []string
-	nextID    int
-	voltages  map[string]int         // BaseVoltage id → VoltageClass id
-	layers    map[string]int         // VisibilityLayer id → Layer id
-	itemOf    map[string]int         // CIM object id → element/connector id, for labels
-	attach    map[string][]cimAttach // ConnectivityNode id → what must reach it
-	busbars   map[string][][2]Point  // ConnectivityNode id → busbar segments on it
-	wires     map[string][][]Point   // ConnectivityNode id → wires drawn for it
-	cnLayer   map[string]int
-	doFor     map[string]*cimObject // object id → its DiagramObject on this page
-	portAt    map[int][]Point       // element id → where its ports sit, when not at its symbol's terminals
-	glued     map[string]Point      // DiagramObjectGluePoint id → the point of a terminal glued there
-	portCN    map[int][]string      // element id → the ConnectivityNode of each port ("" for none)
-	connCN    map[int][2]string     // connector id → the ConnectivityNodes of its From and To ends
-	pending   []cimPending          // junctions, jumps and auxiliary devices, joined once all else is placed
-	knives    map[string]*cimKnife
-	knifeKey  []string
-	tf        func(Point) Point
-	own       bool
-	synthetic bool // laid out by autoLayout
+	im         *cimImporter
+	d          *Diagram
+	report     Report
+	messages   []string
+	nextID     int
+	voltages   map[string]int         // BaseVoltage id → VoltageClass id
+	layers     map[string]int         // VisibilityLayer id → Layer id
+	itemOf     map[string]int         // CIM object id → element/connector id, for labels
+	attach     map[string][]cimAttach // ConnectivityNode id → what must reach it
+	busbars    map[string][][2]Point  // ConnectivityNode id → busbar segments on it
+	wires      map[string][][]Point   // ConnectivityNode id → wires drawn for it
+	cnLayer    map[string]int
+	doFor      map[string]*cimObject // object id → its DiagramObject on this page
+	portAt     map[int][]Point       // element id → where its ports sit, when not at its symbol's terminals
+	glued      map[string]Point      // DiagramObjectGluePoint id → the point of a terminal glued there
+	portCN     map[int][]string      // element id → the ConnectivityNode of each port ("" for none)
+	connCN     map[int][2]string     // connector id → the ConnectivityNodes of its From and To ends
+	pending    []cimPending          // junctions, jumps and auxiliary devices, joined once all else is placed
+	knives     map[string]*cimKnife
+	knifeKey   []string
+	tf         func(Point) Point
+	own        bool
+	synthetic  bool             // laid out by autoLayout
+	foreign    bool             // neither own nor synthetic: drawn by another tool
+	termDrawn  map[string]Point // Terminal id → where a foreign layout draws it (its polyline's device end)
+	termWires  []cimTermWire
+	faced      map[int]bool // element id → turned to face the terminals its layout draws
+	baseOrient map[int]int  // element id → its orientation in the layout, before turning to face its terminals
+}
+
+// cimTermWire is a Terminal a foreign layout draws as a polyline: wire idx of node cn, its device end first or last.
+type cimTermWire struct {
+	cn    string
+	idx   int
+	first bool
+	term  string
 }
 
 // cimPending is an element whose ports all join ConnectivityNode cn as one piece.
@@ -382,8 +396,10 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 		itemOf: map[string]int{}, attach: map[string][]cimAttach{}, busbars: map[string][][2]Point{},
 		wires: map[string][][]Point{}, cnLayer: map[string]int{}, knives: map[string]*cimKnife{},
 		doFor: map[string]*cimObject{}, portAt: map[int][]Point{}, glued: map[string]Point{},
-		portCN: map[int][]string{}, connCN: map[int][2]string{}}
+		portCN: map[int][]string{}, connCN: map[int][2]string{}, termDrawn: map[string]Point{}, faced: map[int]bool{},
+		baseOrient: map[int]int{}}
 	b.transform(dg, dos)
+	b.foreign = !b.own && !b.synthetic
 	for _, do := range dos {
 		if ref := do.get("IdentifiedObject"); ref != "" && b.doFor[ref] == nil {
 			b.doFor[ref] = do
@@ -404,10 +420,26 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 		}
 	}
 
-	// Wires first: placing a device matches its terminals to their ends.
+	// A foreign layout may draw a terminal as a polyline from its device to its node: a wire of that node, whose
+	// device end goes onto the symbol's terminal once the device is placed (snapTerminalWires).
+	if b.foreign {
+		for _, do := range dos {
+			if t := im.objs[do.get("IdentifiedObject")]; do.class == "DiagramObject" && t != nil && t.class == "Terminal" {
+				b.terminalWire(t, do)
+			}
+		}
+	}
+
+	// Wires first: placing a device matches its terminals to their ends. A foreign layout may draw a busbar as its
+	// node: a drawing of a node with a BusbarSection not drawn on its own becomes that busbar; one shorter than two
+	// grid steps only marks a junction, which the wiring makes anyway.
 	for _, do := range dos {
 		if obj := im.objs[do.get("IdentifiedObject")]; do.class == "DiagramObject" && obj != nil && isNode(obj) {
-			if pts := b.gluedEnds(do); len(pts) >= 2 {
+			if bb := b.undrawnBusbar(obj.id); b.foreign && bb != nil && len(b.doPoints(do)) >= 2 {
+				b.element(bb, do)
+				continue
+			}
+			if pts := b.gluedEnds(do); len(pts) >= 2 && !(b.foreign && pathLength(pts) < 2*b.im.opt.Grid) {
 				b.wires[obj.id] = append(b.wires[obj.id], pts)
 				b.cnLayer[obj.id] = b.layer(do)
 			}
@@ -444,6 +476,12 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 	}
 	if b.report.Elements == 0 && b.report.Connectors == 0 {
 		return CIMPage{}, false
+	}
+	if b.foreign {
+		b.dropOverdrawn()
+		b.faceConnections()
+		b.snapTerminalWires()
+		b.undrawnLines(dos)
 	}
 	b.finishKnives()
 	b.joinPending()
@@ -758,6 +796,9 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	if b.own && !cimAuxiliaryClasses[obj.class] {
 		drawn = b.terminalPoints(obj, class)
 		b.fit(&e, drawn, true)
+	} else if b.foreign && !cimAuxiliaryClasses[obj.class] && class != ClassBusBarSection {
+		b.baseOrient[e.ID] = e.Orient
+		b.faced[e.ID] = b.face(&e, b.terminalPoints(obj, class))
 	}
 	ts := symbolTerminals(&e, b.im.opt.Terminals)
 	// This editor's own export draws each terminal where its port Node was, which need not be the symbol's
@@ -781,7 +822,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	for i, p := range ts {
 		if i < len(cns) && cns[i] != "" {
 			pc[i] = cns[i]
-			b.attach[cns[i]] = append(b.attach[cns[i]], cimAttach{at: roundPt(p)})
+			b.attach[cns[i]] = append(b.attach[cns[i]], cimAttach{at: roundPt(p), owner: e.ID})
 		}
 	}
 	b.portCN[e.ID] = pc
@@ -791,21 +832,17 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 }
 
 // terminalPoints is where the layout draws each of obj's terminals (by port order; a transformer's by end number),
-// a zero point for one it doesn't draw.
+// a zero point for one it doesn't draw; in a foreign layout only by a polyline kept as a wire (termDrawn).
 func (b *cimPageBuilder) terminalPoints(obj *cimObject, class Class) []Point {
-	terms := b.im.terminals[obj.id]
-	if class == ClassPowerTransformer {
-		terms = nil
-		for _, end := range b.im.transformerEnds(obj) {
-			terms = append(terms, b.im.objs[end.get("Terminal")])
-		}
-	}
+	terms := b.portTerminals(obj, class)
 	out := make([]Point, len(terms))
 	for i, t := range terms {
 		if t == nil {
 			continue
 		}
-		if do := b.doFor[t.id]; do != nil {
+		if p, ok := b.termDrawn[t.id]; ok {
+			out[i] = p
+		} else if do := b.doFor[t.id]; do != nil && !b.foreign {
 			if pts := b.doPoints(do); len(pts) > 0 {
 				out[i] = pts[0]
 			}
@@ -814,11 +851,26 @@ func (b *cimPageBuilder) terminalPoints(obj *cimObject, class Class) []Point {
 	return out
 }
 
+// portTerminals is obj's Terminals in port order: a transformer's by end number (nil for an end without one).
+func (b *cimPageBuilder) portTerminals(obj *cimObject, class Class) []*cimObject {
+	if class != ClassPowerTransformer {
+		return b.im.terminals[obj.id]
+	}
+	var terms []*cimObject
+	for _, end := range b.im.transformerEnds(obj) {
+		terms = append(terms, b.im.objs[end.get("Terminal")])
+	}
+	return terms
+}
+
 // wireEndsNear is every end of cn's drawn wires within three grid steps of at.
 func (b *cimPageBuilder) wireEndsNear(cn string, at Point) []Point {
 	var out []Point
 	r := 3 * b.im.opt.Grid
 	for _, w := range b.wires[cn] {
+		if len(w) < 2 {
+			continue // a drawn wire left to the routing
+		}
 		for _, p := range []Point{w[0], w[len(w)-1]} {
 			if math.Hypot(p.X-at.X, p.Y-at.Y) <= r {
 				out = append(out, p)
@@ -1157,12 +1209,7 @@ func (b *cimPageBuilder) line(obj, do *cimObject) {
 	if st := b.im.objs[do.get("DiagramObjectStyle")]; st != nil && st.get("name") == string(KindCableLine) {
 		kind = KindCableLine
 	}
-	c := Connector{ID: b.take(), Kind: kind, Name: obj.get("name"), Voltage: b.equipmentVoltage(obj), Layer: b.layer(do), Points: pts}
-	el := Electrical{Length: obj.numPtr("length"), R: obj.numPtr("r"), X: obj.numPtr("x"), Bch: obj.numPtr("bch"),
-		Gch: obj.numPtr("gch"), R0: obj.numPtr("r0"), X0: obj.numPtr("x0"), B0ch: obj.numPtr("b0ch"), G0ch: obj.numPtr("g0ch")}
-	if el != (Electrical{}) {
-		c.Electrical = &el
-	}
+	c := b.lineConnector(obj, pts, b.layer(do), kind)
 	ts := b.im.terminals[obj.id]
 	ends := [2]Point{pts[0], pts[len(pts)-1]}
 	if len(ts) >= 2 {
@@ -1189,6 +1236,17 @@ func (b *cimPageBuilder) line(obj, do *cimObject) {
 	b.d.Connectors = append(b.d.Connectors, c)
 	b.itemOf[obj.id] = c.ID
 	b.report.Connectors++
+}
+
+// lineConnector is AC line segment obj as a line of kind along pts, with its name, voltage and parameters.
+func (b *cimPageBuilder) lineConnector(obj *cimObject, pts []Point, layer int, kind ConnectorKind) Connector {
+	c := Connector{ID: b.take(), Kind: kind, Name: obj.get("name"), Voltage: b.equipmentVoltage(obj), Layer: layer, Points: pts}
+	el := Electrical{Length: obj.numPtr("length"), R: obj.numPtr("r"), X: obj.numPtr("x"), Bch: obj.numPtr("bch"),
+		Gch: obj.numPtr("gch"), R0: obj.numPtr("r0"), X0: obj.numPtr("x0"), B0ch: obj.numPtr("b0ch"), G0ch: obj.numPtr("g0ch")}
+	if el != (Electrical{}) {
+		c.Electrical = &el
+	}
+	return c
 }
 
 // isObjectLink reports whether obj is a link to object this editor exported: a consumer or source drawn as a
@@ -1703,6 +1761,9 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		b.report.Connectors++
 	}
 	for _, w := range b.wires[cn] {
+		if len(w) < 2 {
+			continue
+		}
 		p := &cimPart{pts: []Point{w[0], w[len(w)-1]}}
 		for i := 1; i < len(w); i++ {
 			p.segs = append(p.segs, [2]Point{w[i-1], w[i]})
