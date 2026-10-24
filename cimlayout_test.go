@@ -374,7 +374,7 @@ func arranged(t *testing.T, eq string) {
 
 // TestAutoLayoutGeneratorsUnderTransformers: three step-up transformers on adjacent 110 kV bays, each feeding a 10 kV
 // voltage level of its own with a long name. The bays are narrower than the transformers, so these spread out and
-// their leads from the bays turn without crossing; the 10 kV levels stay together on one row, each straight under its
+// their leads from the bays turn in one jog each, without crossing; the 10 kV levels stay together on one row, each straight under its
 // transformer.
 func TestAutoLayoutGeneratorsUnderTransformers(t *testing.T) {
 	var b strings.Builder
@@ -451,6 +451,9 @@ func TestAutoLayoutGeneratorsUnderTransformers(t *testing.T) {
 				}
 				if p.Name == "1" {
 					up = append(up, c.Points)
+					if len(c.Points) > 4 {
+						t.Errorf("%s winding 1 should turn in one jog: %v", e.Name, c.Points)
+					}
 				}
 			}
 		}

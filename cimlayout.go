@@ -1138,6 +1138,10 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 			if !ok {
 				continue
 			}
+			if l.clearRun(to.X, k.corridor, to.Y, k.cn, nil) && l.free(to.X, k.corridor, to.Y) {
+				l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: to.X, Y: k.corridor}, to})
+				continue
+			}
 			// In from the side the node's own wires leave, where only they lie.
 			ay := to.Y + l.cnOut[k.cn]*g
 			side := l.side(to.X, k.corridor, ay, colW)
@@ -1158,6 +1162,12 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) && math.Abs(k.at.X-end.X) < 1e-6 {
 				// Lined up under (or over) its bay: one straight lead.
 				l.wire(k.cn, []Point{k.at, end})
+				continue
+			}
+			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) && l.clearRun(end.X, k.corridor, end.Y, k.cn, k.trans) &&
+				l.free(end.X, k.corridor, end.Y) {
+				// Along the corridor to over (or under) the winding and straight in: one jog.
+				l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: end.X, Y: k.corridor}, end})
 				continue
 			}
 			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) {
@@ -1199,6 +1209,49 @@ func (l *cimLayout) free(x, y1, y2 float64) bool {
 		}
 	}
 	l.sideUsed[x] = append(l.sideUsed[x], [2]float64{lo, hi})
+	return true
+}
+
+// clearRun reports whether a vertical run at x from y1 up to (not including) y2 touches nothing drawn: no wire or
+// busbar but node cn's own, no symbol but transformer self's, no name.
+func (l *cimLayout) clearRun(x, y1, y2 float64, cn string, self *cimObject) bool {
+	g := l.grid
+	lo, hi := math.Min(y1, y2), math.Max(y1, y2)
+	if y2 > y1 {
+		hi -= g / 2
+	} else {
+		lo += g / 2
+	}
+	for _, do := range l.im.dos[l.diagram.id] {
+		eq := do.get("IdentifiedObject")
+		if eq == cn || self != nil && eq == self.id {
+			continue
+		}
+		pts := l.im.points[do.id]
+		switch {
+		case do.class == "TextDiagramObject":
+			if len(pts) > 0 {
+				p := pointOf(pts[0])
+				w := 6 * float64(len([]rune(do.get("text"))))
+				if x >= p.X-g/2 && x <= p.X+w+g/2 && spanOverlap(lo, hi, p.Y-10, p.Y+2) {
+					return false
+				}
+			}
+		case len(pts) == 1:
+			p := pointOf(pts[0])
+			if math.Abs(p.X-x) < 1.5*g && spanOverlap(lo, hi, p.Y-1.5*g, p.Y+1.5*g) {
+				return false
+			}
+		default:
+			for i := 1; i < len(pts); i++ {
+				a, b := pointOf(pts[i-1]), pointOf(pts[i])
+				if math.Min(a.X, b.X)-g/2 <= x && x <= math.Max(a.X, b.X)+g/2 &&
+					math.Min(a.Y, b.Y) <= hi && lo <= math.Max(a.Y, b.Y) {
+					return false
+				}
+			}
+		}
+	}
 	return true
 }
 
