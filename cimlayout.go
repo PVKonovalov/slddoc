@@ -1176,6 +1176,16 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 				approaches[k.trans.id]++
 				ay := end.Y + out*float64(1+approaches[k.trans.id])*g
 				side := l.side(end.X, k.corridor, ay, colW)
+				if !l.clearSeg(Point{X: side, Y: k.corridor}, Point{X: side, Y: ay}, k.cn, k.trans) {
+					// Something drawn (another band) is in the way: go around it, else find a way on the grid.
+					if x, ok := l.around(k.at.X, k.corridor, ay, end.X, 0, k.cn, k.trans); ok {
+						side = x
+					} else if pts, ok := l.route(k.at, Point{Y: math.Copysign(1, k.corridor-k.at.Y)}, end,
+						Point{Y: -out}, k.cn, nil); ok {
+						l.wire(k.cn, pts)
+						continue
+					}
+				}
 				l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: side, Y: k.corridor}, {X: side, Y: ay}, {X: end.X, Y: ay}, end})
 				continue
 			}
@@ -1187,6 +1197,17 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 				ax = end.X + out*float64(1+approaches[k.trans.id])*g
 				if !l.columnX(ax) && l.free(ax, k.corridor, end.Y) {
 					break
+				}
+			}
+			if !l.clearSeg(Point{X: ax, Y: k.corridor}, Point{X: ax, Y: end.Y}, k.cn, k.trans) {
+				// Something drawn (another band) is in the way: go around it, still on the terminal's side, else find a
+				// way on the grid.
+				if x, ok := l.around(k.at.X, k.corridor, end.Y, end.X, out, k.cn, k.trans); ok {
+					ax = x
+				} else if pts, ok := l.route(k.at, Point{Y: math.Copysign(1, k.corridor-k.at.Y)}, end, Point{X: -out},
+					k.cn, nil); ok {
+					l.wire(k.cn, pts)
+					continue
 				}
 			}
 			l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: ax, Y: k.corridor}, {X: ax, Y: end.Y}, end})
@@ -1216,12 +1237,19 @@ func (l *cimLayout) free(x, y1, y2 float64) bool {
 // busbar but node cn's own, no symbol but transformer self's, no name.
 func (l *cimLayout) clearRun(x, y1, y2 float64, cn string, self *cimObject) bool {
 	g := l.grid
-	lo, hi := math.Min(y1, y2), math.Max(y1, y2)
 	if y2 > y1 {
-		hi -= g / 2
+		y2 -= g / 2
 	} else {
-		lo += g / 2
+		y2 += g / 2
 	}
+	return l.clearSeg(Point{X: x, Y: y1}, Point{X: x, Y: y2}, cn, self)
+}
+
+// clearSeg reports whether the straight (horizontal or vertical) run from a to b touches nothing drawn, as clearRun
+// does.
+func (l *cimLayout) clearSeg(a, b Point, cn string, self *cimObject) bool {
+	g := l.grid
+	x1, y1, x2, y2 := math.Min(a.X, b.X), math.Min(a.Y, b.Y), math.Max(a.X, b.X), math.Max(a.Y, b.Y)
 	for _, do := range l.im.dos[l.diagram.id] {
 		eq := do.get("IdentifiedObject")
 		if eq == cn || self != nil && eq == self.id {
@@ -1233,26 +1261,49 @@ func (l *cimLayout) clearRun(x, y1, y2 float64, cn string, self *cimObject) bool
 			if len(pts) > 0 {
 				p := pointOf(pts[0])
 				w := 6 * float64(len([]rune(do.get("text"))))
-				if x >= p.X-g/2 && x <= p.X+w+g/2 && spanOverlap(lo, hi, p.Y-10, p.Y+2) {
+				if overlaps([4]float64{x1, y1, x2, y2}, [4]float64{p.X - g/2, p.Y - 10, p.X + w + g/2, p.Y + 2}) {
 					return false
 				}
 			}
 		case len(pts) == 1:
-			p := pointOf(pts[0])
-			if math.Abs(p.X-x) < 1.5*g && spanOverlap(lo, hi, p.Y-1.5*g, p.Y+1.5*g) {
+			if overlaps([4]float64{x1, y1, x2, y2}, l.symbolBox(do, pointOf(pts[0]), 1.5*g)) {
 				return false
 			}
 		default:
 			for i := 1; i < len(pts); i++ {
-				a, b := pointOf(pts[i-1]), pointOf(pts[i])
-				if math.Min(a.X, b.X)-g/2 <= x && x <= math.Max(a.X, b.X)+g/2 &&
-					math.Min(a.Y, b.Y) <= hi && lo <= math.Max(a.Y, b.Y) {
+				p, q := pointOf(pts[i-1]), pointOf(pts[i])
+				if math.Min(p.X, q.X)-g/2 <= x2 && x1 <= math.Max(p.X, q.X)+g/2 &&
+					math.Min(p.Y, q.Y)-g/2 <= y2 && y1 <= math.Max(p.Y, q.Y)+g/2 {
 					return false
 				}
 			}
 		}
 	}
 	return true
+}
+
+// around finds, for a lead from its corridor at height cy (leaving its bay at ax) to the height ay it comes in at,
+// the nearest x from tx outwards (only on side dir, −1 or 1, when not 0) whose whole run from cy to ay, and the runs
+// along cy from ax and along ay to tx, touch nothing drawn, so the lead goes around a band instead of through it. ok
+// is false when none is near enough.
+func (l *cimLayout) around(ax, cy, ay, tx, dir float64, cn string, self *cimObject) (float64, bool) {
+	g := l.grid
+	for d := 1; d < 400; d++ {
+		for _, x := range []float64{tx - float64(d)*g, tx + float64(d)*g} {
+			if dir != 0 && (x-tx)*dir < 0 {
+				continue
+			}
+			if x < l.margin/2 || l.columnX(x) {
+				continue
+			}
+			if l.clearSeg(Point{X: x, Y: cy}, Point{X: x, Y: ay}, cn, self) &&
+				l.clearSeg(Point{X: ax, Y: cy}, Point{X: x, Y: cy}, cn, self) &&
+				l.clearSeg(Point{X: x, Y: ay}, Point{X: tx, Y: ay}, cn, self) && l.free(x, cy, ay) {
+				return x, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // side picks an x within half a column of x, where no terminal lies, for a link's vertical run from y1 to y2 that

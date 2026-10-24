@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // CIM import: CIM RDF/XML documents (CGMES 3.0 or 2.4.15; any set of profiles, read by class and property name
@@ -96,6 +100,7 @@ var cimGeneralClasses = map[string]bool{"IdentifiedObject": true, "PowerSystemRe
 // parseCIM reads RDF/XML documents into one object store, merging objects that several profiles describe.
 func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
 	objs := map[string]*cimObject{}
+	var inverse [][3]string // object id, the property to state, the object stating it from the other end
 	for _, doc := range docs {
 		dec := xml.NewDecoder(bytes.NewReader(doc))
 		depth := 0
@@ -152,6 +157,9 @@ func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
 								v = v[i+1:] // an enum value, e.g. WindingConnection.D
 							} else {
 								v = cimRef(v)
+								if fwd, ok := cimInverseRoles[tk.Name.Local]; ok {
+									inverse = append(inverse, [3]string{v, fwd, cur.id})
+								}
 							}
 							cur.props[prop] = append(cur.props[prop], v)
 							prop = ""
@@ -171,7 +179,32 @@ func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
 			}
 		}
 	}
+	// What a document states only from the other end (a container listing its equipment) reads as if stated from
+	// this one, unless that is stated too.
+	for _, inv := range inverse {
+		if o := objs[inv[0]]; o != nil && len(o.props[inv[1]]) == 0 {
+			o.props[inv[1]] = []string{inv[2]}
+		}
+	}
 	return objs, nil
+}
+
+// cimInverseRoles maps an association written from the end the importer doesn't read (CIM's inverse role, as in
+// a container's list of its equipment) to the property it reads at the other end.
+var cimInverseRoles = map[string]string{
+	"ConnectivityNodeContainer.ConnectivityNodes": "ConnectivityNodeContainer",
+	"EquipmentContainer.Equipments":               "EquipmentContainer",
+	"Substation.VoltageLevels":                    "Substation",
+	"VoltageLevel.Bays":                           "VoltageLevel",
+	"ConductingEquipment.Terminals":               "ConductingEquipment",
+	"ConnectivityNode.Terminals":                  "ConnectivityNode",
+	"TopologicalNode.Terminal":                    "TopologicalNode",
+	"PowerTransformer.PowerTransformerEnd":        "PowerTransformer",
+	"Terminal.TransformerEnd":                     "Terminal",
+	"Diagram.DiagramElements":                     "Diagram",
+	"DiagramObject.DiagramObjectPoints":           "DiagramObject",
+	"IdentifiedObject.DiagramObjects":             "IdentifiedObject",
+	"BaseVoltage.VoltageLevel":                    "BaseVoltage",
 }
 
 // cimEquipmentShapes maps a CIM equipment class to the element class and shape it is drawn with by default.
@@ -261,6 +294,7 @@ func isNode(o *cimObject) bool {
 // cimImporter holds the parsed documents and their indexes.
 type cimImporter struct {
 	opt       CIMImportOptions
+	ownLayout bool // the documents hold a diagram layout (set aside with AutoLayout)
 	objs      map[string]*cimObject
 	byClass   map[string][]*cimObject
 	terminals map[string][]*cimObject // equipment id → its Terminals, by sequence number
@@ -278,6 +312,7 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 	if err != nil {
 		return nil, err
 	}
+	nameVoltages(objs)
 	im := &cimImporter{opt: opt, objs: objs, byClass: map[string][]*cimObject{}, terminals: map[string][]*cimObject{},
 		points: map[string][]*cimObject{}, dos: map[string][]*cimObject{}, layerOf: map[string]string{}}
 	ids := make([]string, 0, len(objs))
@@ -322,6 +357,7 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 		sort.SliceStable(list, func(i, j int) bool { return seq(list[i]) < seq(list[j]) })
 	}
 	diagrams := im.byClass["Diagram"]
+	im.ownLayout = len(diagrams) > 0
 	if len(diagrams) == 0 || opt.AutoLayout {
 		diagrams = im.autoLayout()
 	}
@@ -335,6 +371,52 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 		return nil, ErrNoDiagramLayout
 	}
 	return pages, nil
+}
+
+// nameVoltages gives a VoltageLevel whose BaseVoltage is missing (often in a file not sent along) or holds no
+// nominal voltage the one its name states, "ОРУ-110 кВ" or "6,3 kV" (a number with its unit; ParseVoltage).
+func nameVoltages(objs map[string]*cimObject) {
+	ids := slices.Sorted(maps.Keys(objs))
+	for _, id := range ids {
+		vl := objs[id]
+		if vl.class != "VoltageLevel" {
+			continue
+		}
+		bv := objs[vl.get("BaseVoltage")]
+		if kv, ok := bv.num("nominalVoltage"); ok && kv > 0 {
+			continue
+		}
+		kv, ok := unitVoltage(vl.get("name"))
+		if !ok {
+			continue
+		}
+		ref := vl.get("BaseVoltage")
+		if ref == "" {
+			ref = "_named-bv-" + strconv.FormatFloat(kv, 'f', -1, 64)
+			vl.props["BaseVoltage"] = []string{ref}
+		}
+		if bv == nil {
+			bv = &cimObject{id: ref, class: "BaseVoltage", props: map[string][]string{}}
+			objs[ref] = bv
+		}
+		bv.props["nominalVoltage"] = []string{strconv.FormatFloat(kv, 'f', -1, 64)}
+	}
+}
+
+var unitVoltageRe = regexp.MustCompile(`(?i)([0-9]+(?:[.,][0-9]+)?)\s*(kv|кв|mv|мв|v|в)`)
+
+// unitVoltage is the voltage, in kV, a name states as a number with its unit ("110 кВ", "6,3kV", "400 V"); a number
+// without one (a busbar's "1СШ") states none.
+func unitVoltage(name string) (float64, bool) {
+	for _, m := range unitVoltageRe.FindAllStringSubmatchIndex(name, -1) {
+		if end := m[1]; end < len(name) {
+			if r, _ := utf8.DecodeRuneInString(name[end:]); unicode.IsLetter(r) {
+				continue
+			}
+		}
+		return ParseVoltage(name[m[0]:m[1]])
+	}
+	return 0, false
 }
 
 // --- one page
@@ -546,7 +628,7 @@ func (b *cimPageBuilder) transform(dg *cimObject, dos []*cimObject) {
 				b.d.Width, b.d.Height = math.Max(b.d.Width, x+10*b.im.opt.Grid), math.Max(b.d.Height, y+6*b.im.opt.Grid)
 			}
 		}
-		if len(b.im.byClass["Diagram"]) > 0 {
+		if b.im.ownLayout {
 			b.messages = append(b.messages, "the file's diagram layout set aside: laid out automatically from the connections")
 		} else {
 			b.messages = append(b.messages, "the file has no diagram layout: laid out automatically from the connections")
@@ -726,13 +808,13 @@ func (b *cimPageBuilder) equipmentVoltage(obj *cimObject) int {
 	if v := obj.get("BaseVoltage"); v != "" {
 		return b.voltage(v)
 	}
-	if c := b.im.objs[obj.get("EquipmentContainer")]; c != nil && c.get("BaseVoltage") != "" {
-		return b.voltage(c.get("BaseVoltage"))
+	if c := b.im.objs[obj.get("EquipmentContainer")]; c != nil && b.im.containerBV(c) != "" {
+		return b.voltage(b.im.containerBV(c))
 	}
 	for _, t := range b.im.terminals[obj.id] {
 		if cn := b.im.objs[t.get("ConnectivityNode")]; cn != nil {
-			if c := b.im.objs[cn.get("ConnectivityNodeContainer")]; c != nil && c.get("BaseVoltage") != "" {
-				return b.voltage(c.get("BaseVoltage"))
+			if c := b.im.objs[cn.get("ConnectivityNodeContainer")]; c != nil && b.im.containerBV(c) != "" {
+				return b.voltage(b.im.containerBV(c))
 			}
 		}
 	}
@@ -1015,7 +1097,7 @@ func (b *cimPageBuilder) passThrough(cn, do *cimObject, at Point) {
 		e.Orient = snapOrient(r)
 	}
 	if c := b.im.objs[cn.get("ConnectivityNodeContainer")]; c != nil {
-		e.Voltage = b.voltage(c.get("BaseVoltage"))
+		e.Voltage = b.voltage(b.im.containerBV(c))
 	}
 	b.d.Elements = append(b.d.Elements, e)
 	b.report.Elements++
@@ -1185,7 +1267,18 @@ func (b *cimPageBuilder) windings(e *Element, obj *cimObject) []string {
 	schemes := map[string]WindingScheme{"WindingConnection.Y": SchemeWye, "WindingConnection.Yn": SchemeWyeN, "WindingConnection.D": SchemeDelta}
 	var cns []string
 	for _, end := range ends {
-		w := TransformerWinding{Voltage: b.voltage(end.get("BaseVoltage")), Scheme: schemes[end.get("connectionKind")],
+		bv := end.get("BaseVoltage")
+		if bv == "" {
+			// None of its own: its terminal's voltage level's.
+			if t := b.im.objs[end.get("Terminal")]; t != nil {
+				if cn := b.im.objs[t.get("ConnectivityNode")]; cn != nil {
+					if c := b.im.objs[cn.get("ConnectivityNodeContainer")]; c != nil {
+						bv = b.im.containerBV(c)
+					}
+				}
+			}
+		}
+		w := TransformerWinding{Voltage: b.voltage(bv), Scheme: schemes[end.get("connectionKind")],
 			RatedU: end.numPtr("ratedU"), RatedS: end.numPtr("ratedS"), R: end.numPtr("r"), X: end.numPtr("x"),
 			G: end.numPtr("g"), B: end.numPtr("b")}
 		if c, ok := end.num("phaseAngleClock"); ok {
@@ -1845,7 +1938,7 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 	voltage := 0
 	if o := b.im.objs[cn]; o != nil {
 		if c := b.im.objs[o.get("ConnectivityNodeContainer")]; c != nil {
-			voltage = b.voltage(c.get("BaseVoltage"))
+			voltage = b.voltage(b.im.containerBV(c))
 		}
 	}
 	addWire := func(pts []Point) {
@@ -1933,6 +2026,16 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		routed++
 	}
 	return routed
+}
+
+// containerBV is the BaseVoltage of container c: its own, or a Bay's voltage level's.
+func (im *cimImporter) containerBV(c *cimObject) string {
+	if c.class == "Bay" {
+		if vl := im.objs[c.get("VoltageLevel")]; vl != nil {
+			return vl.get("BaseVoltage")
+		}
+	}
+	return c.get("BaseVoltage")
 }
 
 // mridOf is CIM object o's mRID: its IdentifiedObject.mRID, else its id without the leading "_".

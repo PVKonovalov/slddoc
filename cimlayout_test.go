@@ -483,3 +483,152 @@ func TestAutoLayoutGeneratorsUnderTransformers(t *testing.T) {
 		t.Errorf("the generators should stay together: %v", gens)
 	}
 }
+
+// TestAutoLayoutThreeWindings: two 110/35/10 kV transformers, each with a bay in every level. The voltage levels'
+// BaseVoltage is missing, so their names give the voltages (bands top to bottom 110, 35, 10, every wire with its
+// class), and the nodes are listed by their containers only (the inverse role). No lead crosses a busbar of another
+// class or runs along a wire of another node.
+func TestAutoLayoutThreeWindings(t *testing.T) {
+	var b strings.Builder
+	obj := func(class, id string, props ...string) {
+		fmt.Fprintf(&b, "<cim:%s rdf:ID=\"_%s\">", class, id)
+		for i := 0; i+1 < len(props); i += 2 {
+			if strings.HasPrefix(props[i+1], "#") {
+				fmt.Fprintf(&b, "<cim:%s rdf:resource=\"#_%s\"/>", props[i], props[i+1][1:])
+			} else {
+				fmt.Fprintf(&b, "<cim:%s>%s</cim:%s>", props[i], props[i+1], props[i])
+			}
+		}
+		fmt.Fprintf(&b, "</cim:%s>\n", class)
+	}
+	term := func(eq, cn string, seq int) {
+		obj("Terminal", fmt.Sprintf("t-%s-%d", eq, seq), "Terminal.ConductingEquipment", "#"+eq,
+			"Terminal.ConnectivityNode", "#"+cn, "ACDCTerminal.sequenceNumber", fmt.Sprint(seq))
+	}
+	b.WriteString(`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">` + "\n")
+	obj("Substation", "s", "IdentifiedObject.name", "S")
+	// Each level: a busbar, feeders, the bay of T1, feeders, the bay of T2, feeders.
+	bays := []string{"f1", "f2", "c1", "f3", "f4", "f5", "c2", "f6", "f7"}
+	for _, v := range []struct{ id, name string }{{"v110", "HV-110 кВ"}, {"v35", "MV-35 кВ"}, {"v10", "LV-10 кВ"}} {
+		var cns strings.Builder
+		for _, cn := range append([]string{"h"}, bays...) {
+			fmt.Fprintf(&cns, "<cim:ConnectivityNodeContainer.ConnectivityNodes rdf:resource=\"#_%s-%s\"/>", v.id, cn)
+		}
+		fmt.Fprintf(&b, `<cim:VoltageLevel rdf:ID="_%s"><cim:IdentifiedObject.name>%s</cim:IdentifiedObject.name><cim:VoltageLevel.Substation rdf:resource="#_s"/><cim:VoltageLevel.BaseVoltage rdf:resource="#_missing-%s"/>%s</cim:VoltageLevel>`+"\n",
+			v.id, v.name, v.id, cns.String())
+		for _, cn := range append([]string{"h"}, bays...) {
+			fmt.Fprintf(&b, "<cim:ConnectivityNode rdf:ID=\"_%s-%s\"/>\n", v.id, cn)
+		}
+		obj("BusbarSection", "B-"+v.id, "IdentifiedObject.name", "B-"+v.id, "Equipment.EquipmentContainer", "#"+v.id)
+		term("B-"+v.id, v.id+"-h", 1)
+		for _, bay := range bays {
+			id := "Q-" + v.id + "-" + bay
+			obj("Breaker", id, "IdentifiedObject.name", id, "Equipment.EquipmentContainer", "#"+v.id)
+			term(id, v.id+"-h", 1)
+			term(id, v.id+"-"+bay, 2)
+			if bay[0] == 'f' {
+				obj("EnergyConsumer", "L-"+v.id+"-"+bay, "IdentifiedObject.name", "L-"+v.id+"-"+bay, "Equipment.EquipmentContainer", "#"+v.id)
+				term("L-"+v.id+"-"+bay, v.id+"-"+bay, 1)
+			}
+		}
+	}
+	for _, tr := range []string{"1", "2"} {
+		obj("PowerTransformer", "T"+tr, "IdentifiedObject.name", "T"+tr, "Equipment.EquipmentContainer", "#s")
+		for i, v := range []string{"v110", "v35", "v10"} {
+			term("T"+tr, v+"-c"+tr, i+1)
+			obj("PowerTransformerEnd", fmt.Sprintf("T%se%d", tr, i+1), "PowerTransformerEnd.PowerTransformer", "#T"+tr,
+				"TransformerEnd.Terminal", fmt.Sprintf("#t-T%s-%d", tr, i+1), "TransformerEnd.endNumber", fmt.Sprint(i+1))
+		}
+	}
+	b.WriteString("</rdf:RDF>\n")
+
+	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}}
+	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection}
+	pages, err := ImportCIM([][]byte{[]byte(b.String())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	names := map[int]string{}
+	for _, vc := range d.VoltageClasses {
+		names[vc.ID] = vc.Name
+	}
+	busY := map[string]float64{}
+	var busbars []Element
+	for _, e := range d.Elements {
+		if e.Class == ClassBusBarSection {
+			busY[names[e.Voltage]] = e.Points[0].Y
+			busbars = append(busbars, e)
+		}
+	}
+	if !(busY["110 kV"] < busY["35 kV"] && busY["35 kV"] < busY["10 kV"]) {
+		t.Fatalf("bands should run 110, 35, 10 kV from the top: %v", busY)
+	}
+	var trPorts []Port
+	for _, e := range d.Elements {
+		if e.Class == ClassPowerTransformer {
+			trPorts = append(trPorts, e.Ports...)
+		}
+	}
+	for _, c := range d.Connectors {
+		if c.Voltage == 0 {
+			t.Errorf("wire %d has no voltage class", c.ID)
+		}
+		lead := slices.ContainsFunc(trPorts, func(p Port) bool { return p.Node == c.From || p.Node == c.To })
+		if !lead {
+			continue
+		}
+		for k := 1; k < len(c.Points); k++ {
+			for _, bus := range busbars {
+				if bus.Voltage == c.Voltage {
+					continue
+				}
+				if _, hit := properCrossing(c.Points[k-1], c.Points[k], bus.Points[0], bus.Points[len(bus.Points)-1]); hit {
+					t.Errorf("the %s lead crosses the %s busbar: %v", names[c.Voltage], names[bus.Voltage], c.Points)
+				}
+			}
+			for _, o := range d.Connectors {
+				if o.ID == c.ID || o.From == c.From || o.To == c.To || o.From == c.To || o.To == c.From {
+					continue
+				}
+				for j := 1; j < len(o.Points); j++ {
+					if alongSeg(c.Points[k-1], c.Points[k], o.Points[j-1], o.Points[j]) {
+						t.Errorf("the %s lead runs along wire %d: %v %v", names[c.Voltage], o.ID, c.Points, o.Points)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestRouteAroundBusbar: a lead whose way down is barred by a busbar goes around its end rather than across it, and
+// never through a symbol.
+func TestRouteAroundBusbar(t *testing.T) {
+	im := &cimImporter{objs: map[string]*cimObject{}, byClass: map[string][]*cimObject{}, dos: map[string][]*cimObject{},
+		points: map[string][]*cimObject{}, opt: CIMImportOptions{Grid: 10}}
+	l := &cimLayout{im: im, grid: 10, diagram: &cimObject{id: "d"}, sideUsed: map[float64][][2]float64{}}
+	draw := func(id, class string, pts ...Point) {
+		im.objs[id] = &cimObject{id: id, class: class, props: map[string][]string{}}
+		do := &cimObject{id: "do-" + id, class: "DiagramObject", props: map[string][]string{"IdentifiedObject": {id}}}
+		im.dos["d"] = append(im.dos["d"], do)
+		for _, p := range pts {
+			im.points[do.id] = append(im.points[do.id], &cimObject{props: map[string][]string{
+				"xPosition": {fmt.Sprint(p.X)}, "yPosition": {fmt.Sprint(p.Y)}}})
+		}
+	}
+	draw("bus", "BusbarSection", Point{X: 0, Y: 100}, Point{X: 400, Y: 100})
+	draw("q", "Breaker", Point{X: 200, Y: 160})
+	pts, ok := l.route(Point{X: 200, Y: 0}, Point{Y: 1}, Point{X: 200, Y: 200}, Point{Y: 1}, "lead", nil)
+	if !ok {
+		t.Fatal("no route")
+	}
+	for k := 1; k < len(pts); k++ {
+		if _, hit := properCrossing(pts[k-1], pts[k], Point{X: 0, Y: 100}, Point{X: 400, Y: 100}); hit {
+			t.Errorf("the lead crosses the busbar: %v", pts)
+		}
+		if overlaps([4]float64{math.Min(pts[k-1].X, pts[k].X), math.Min(pts[k-1].Y, pts[k].Y), math.Max(pts[k-1].X, pts[k].X),
+			math.Max(pts[k-1].Y, pts[k].Y)}, [4]float64{190, 150, 210, 170}) {
+			t.Errorf("the lead runs through the breaker: %v", pts)
+		}
+	}
+}

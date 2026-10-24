@@ -616,8 +616,8 @@ func (l *cimLayout) reach(tr *cimObject, y float64) (float64, float64) {
 }
 
 // layoutError estimates the layout with regions moved by d and transformers at transX (nil: where the links' mean
-// puts them): crossings of links with each other and with busbars and wires of another voltage class (a million
-// each), then each bend of a link (a thousand, a quarter more below its transformer), then the links' length.
+// puts them): crossings of links with each other and with busbars and wires of another voltage class, and runs of a
+// link along a busbar or wire (a million each), then each bend of a link (a thousand, a quarter more below its transformer), then the links' length.
 func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, transX map[string]float64, rows map[string]float64) float64 {
 	type seg struct {
 		a, z Point
@@ -695,10 +695,8 @@ func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, tr
 			errSum += math.Abs(pts[j].X-pts[j-1].X) + math.Abs(pts[j].Y-pts[j-1].Y)
 			s := seg{pts[j-1], pts[j], vl}
 			for _, o := range segs {
-				if o.vl != vl {
-					if _, hit := properCrossing(s.a, s.z, o.a, o.z); hit {
-						errSum += 1e6
-					}
+				if _, hit := properCrossing(s.a, s.z, o.a, o.z); hit && o.vl != vl || alongSeg(s.a, s.z, o.a, o.z) {
+					errSum += 1e6
 				}
 			}
 			for _, o := range linkSegs {
@@ -845,4 +843,15 @@ func corridors(leads []corrLead) map[int]float64 {
 		}
 	}
 	return out
+}
+
+// alongSeg reports whether segments a–b and c–d lie on one line and share more than a point.
+func alongSeg(a, b, c, d Point) bool {
+	switch {
+	case a.X == b.X && c.X == d.X && a.X == c.X:
+		return math.Min(math.Max(a.Y, b.Y), math.Max(c.Y, d.Y))-math.Max(math.Min(a.Y, b.Y), math.Min(c.Y, d.Y)) > 1e-6
+	case a.Y == b.Y && c.Y == d.Y && a.Y == c.Y:
+		return math.Min(math.Max(a.X, b.X), math.Max(c.X, d.X))-math.Max(math.Min(a.X, b.X), math.Min(c.X, d.X)) > 1e-6
+	}
+	return false
 }
