@@ -264,15 +264,15 @@ func TestAutoLayoutParallelBusbars(t *testing.T) {
 			t.Errorf("a bay needs no long runs: %v", c.Points)
 		}
 	}
-	// The voltage level's name over its band, at its top left.
+	// The voltage level's name beside its busbars: left of them, between their rows.
 	named := false
 	for _, lb := range d.Labels {
 		if lb.Text == "S1_110" {
-			named = lb.X <= ba.Points[0].X && lb.Y < q.Y
+			named = lb.X+6*float64(len(lb.Text)) <= ba.Points[0].X && lb.Y > ba.Points[0].Y && lb.Y < bb.Points[0].Y
 		}
 	}
 	if !named {
-		t.Errorf("voltage level S1_110 should be named above its band at the left: %+v", d.Labels)
+		t.Errorf("voltage level S1_110 should be named left of its busbars, between their rows: %+v", d.Labels)
 	}
 	n := terminalNodes(t, d)
 	for _, group := range [][]string{{"BA/1", "DA/1", "DC1/1"}, {"BB/1", "DB/1", "DC2/2"}, {"DA/2", "DB/2", "Q/1"}, {"Q/2", "W1/1"}} {
@@ -324,4 +324,49 @@ func offTerminals(d *Diagram, terms map[string][]Point) []string {
 		}
 	}
 	return out
+}
+
+// TestAutoLayoutArranged: the transformer stands under its 110 kV bay and the 10 kV region moves under it, so both of
+// its leads are straight, and nothing crosses; also when a 110 kV load bay ahead of the transformer's puts that bay a
+// column further right than the 10 kV bay to the transformer.
+func TestAutoLayoutArranged(t *testing.T) {
+	extra := `<cim:ConnectivityNode rdf:ID="_c0"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#_v1hv"/></cim:ConnectivityNode>
+<cim:Breaker rdf:ID="_A0"><cim:IdentifiedObject.name>A0</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#_v1hv"/></cim:Breaker>
+<cim:Terminal rdf:ID="_t-A0-1"><cim:Terminal.ConductingEquipment rdf:resource="#_A0"/><cim:Terminal.ConnectivityNode rdf:resource="#_h1"/><cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+<cim:Terminal rdf:ID="_t-A0-2"><cim:Terminal.ConductingEquipment rdf:resource="#_A0"/><cim:Terminal.ConnectivityNode rdf:resource="#_c0"/><cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+<cim:EnergyConsumer rdf:ID="_A1"><cim:IdentifiedObject.name>A1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#_v1hv"/></cim:EnergyConsumer>
+<cim:Terminal rdf:ID="_t-A1-1"><cim:Terminal.ConductingEquipment rdf:resource="#_A1"/><cim:Terminal.ConnectivityNode rdf:resource="#_c0"/><cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+</rdf:RDF>`
+	for _, eq := range []string{layoutEQ(), strings.Replace(layoutEQ(), "</rdf:RDF>", extra, 1)} {
+		arranged(t, eq)
+	}
+}
+
+func arranged(t *testing.T, eq string) {
+	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}}
+	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection}
+	pages, err := ImportCIM([][]byte{[]byte(eq)}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	var tr Element
+	for _, e := range d.Elements {
+		if e.Name == "T1" {
+			tr = e
+		}
+		if e.Class == ClassNonIntersection {
+			t.Errorf("nothing should cross: wire jump %+v", e)
+		}
+	}
+	for _, p := range tr.Ports {
+		for _, c := range d.Connectors {
+			if c.From != p.Node && c.To != p.Node {
+				continue
+			}
+			if len(c.Points) != 2 || c.Points[0].X != c.Points[1].X {
+				t.Errorf("T1 winding %s should have a straight lead: %v", p.Name, c.Points)
+			}
+		}
+	}
 }

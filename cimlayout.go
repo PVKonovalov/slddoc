@@ -50,6 +50,8 @@ type cimLayout struct {
 	transTop map[string]string // transformer id → voltage level key of its highest winding
 	links    []layLink
 	busRow   map[string]int           // busbar node → its row in its group
+	cur      *layRegion               // the region being drawn, which collects what is drawn
+	transX   map[string]float64       // transformer id → its centre's x as arranged (none: the links' mean)
 	cnAt     map[string]Point         // node → the point it was first drawn at
 	cnOut    map[string]float64       // node → the side (+1 below, -1 above) its own wires leave that point
 	sideUsed map[float64][][2]float64 // x → the y spans of the vertical runs links take there
@@ -531,10 +533,32 @@ type layBand struct {
 	upLinks, downLinks int
 	top, busY, bottom  float64
 	rows               int
-	nextUp, nextDown   int // corridors taken
+	main               int     // the group the voltage level's name stands beside
+	nameW              float64 // room for that name
+	nextUp, nextDown   int     // corridors taken
 }
 
 const layoutBusGap = 4 // grid steps between parallel busbars
+
+// mainGroup is the index of the group with the most busbars, then the most cells.
+func mainGroup(groups []*layGroup) int {
+	busbars := func(gr *layGroup) int {
+		n := 0
+		for _, bus := range gr.buses {
+			if bus != nil {
+				n++
+			}
+		}
+		return n
+	}
+	main := 0
+	for i, gr := range groups {
+		if m := groups[main]; busbars(gr) > busbars(m) || busbars(gr) == busbars(m) && len(gr.cells) > len(m.cells) {
+			main = i
+		}
+	}
+	return main
+}
 
 func (l *cimLayout) layout() {
 	im := l.im
@@ -703,10 +727,16 @@ func (l *cimLayout) layout() {
 	l.margin = margin
 	colX := func(col int) float64 { return margin + float64(col)*colW + colW/2 }
 
-	// Columns, directions, depths and corridors: couplers first, then the bays, each in columns of its own.
+	// Columns, directions, depths and corridors: couplers first, then the bays, each in columns of its own; before
+	// the band's main busbar group, room for the voltage level's name.
 	for bi, b := range bands {
 		col := 0
-		for _, gr := range b.groups {
+		b.main = mainGroup(b.groups)
+		for gi, gr := range b.groups {
+			if _, name := l.vlName(b.vl); gi == b.main && name != "" {
+				b.nameW = 6*float64(len([]rune(name))) + 2*g
+				col += int(math.Ceil(b.nameW / (layoutColumns * g)))
+			}
 			b.rows = max(b.rows, len(gr.cns))
 			slices.SortStableFunc(gr.cells, func(x, y *layCell) int {
 				return cmp.Compare(min(len(x.feeders), 1), min(len(y.feeders), 1))
@@ -733,19 +763,31 @@ func (l *cimLayout) layout() {
 	y := margin
 	maxX := margin
 	rows := map[string]float64{}
+	var regions []*layRegion
 	for _, b := range bands {
-		// The voltage level's name over its band, as PowSyBl writes it.
-		if o, name := l.vlName(b.vl); o != nil {
-			l.text(o, name, Point{X: margin, Y: y + g})
+		bandStart := y
+		var bandRegions []*layRegion
+		for _, gr := range b.groups {
+			bandRegions = append(bandRegions, &layRegion{group: gr, band: b})
 		}
-		y += 2 * g
 		b.top = y + float64(b.upLinks+1)*g
 		b.busY = b.top + float64(b.upDepth)*levelH + 2*g
 		last := b.busY + float64(max(b.rows-1, 0))*busGap
 		b.bottom = last + float64(b.downDepth)*levelH + 2*g
 		rowY := func(cn string) float64 { return b.busY + float64(l.busRow[cn])*busGap }
-		for _, gr := range b.groups {
+		for gi, gr := range b.groups {
+			r := bandRegions[gi]
+			l.cur = r
+			firstLink := len(l.links)
+			seen := make(map[string]bool, len(l.cnAt))
+			for cn := range l.cnAt {
+				seen[cn] = true
+			}
 			x1, x2 := colX(gr.col)-colW/2+g, colX(gr.col+gr.cols-1)+colW/2-g
+			// The voltage level's name, as PowSyBl writes it, left of its main busbars, half way down their rows.
+			if o, name := l.vlName(b.vl); o != nil && gi == b.main {
+				l.text(o, name, Point{X: x1 - b.nameW, Y: b.busY + float64(len(gr.cns)-1)*busGap/2 + 3})
+			}
 			for i, bus := range gr.buses {
 				yy := b.busY + float64(i)*busGap
 				switch {
@@ -767,11 +809,24 @@ func (l *cimLayout) layout() {
 				l.placeCell(c, b, base, out, rowY, colX)
 			}
 			maxX = math.Max(maxX, colX(gr.col+gr.cols))
+			for i := firstLink; i < len(l.links); i++ {
+				r.links = append(r.links, i)
+			}
+			for cn := range l.cnAt {
+				if !seen[cn] {
+					r.cns = append(r.cns, cn)
+				}
+			}
+			// Its box: its columns, room for the names right of the last, and the band with its corridors.
+			r.box = [4]float64{x1 - g, bandStart, x2 + 13*g, b.bottom + float64(b.downLinks+1)*g}
 		}
+		l.cur = nil
+		regions = append(regions, bandRegions...)
 		// Room for a transformer's leads and the wires coming in to them, clear of the corridors.
 		rows[b.vl] = b.bottom + float64(b.downLinks+1)*g + 12*g
 		y = rows[b.vl] + 13*g
 	}
+	l.arrange(regions, trs, rows)
 	l.transformers(trs, rows, y, maxX, colW)
 }
 
@@ -1034,21 +1089,8 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 		if !ok {
 			rowY = y
 		}
-		probe := Element{Class: ClassPowerTransformer, Shape: "47", Y: rowY,
-			Windings: make([]TransformerWinding, min(max(len(im.transformerEnds(tr)), 2), 4))}
-		best, bestScore := 0, math.Inf(-1)
-		for _, o := range []int{0, 90, 180, -90} {
-			probe.Orient = o
-			ts := symbolTerminals(&probe, l.im.opt.Terminals)
-			score := 0.0
-			for _, t := range ts[1:] {
-				score += t.Y - ts[0].Y
-			}
-			if score > bestScore+1e-9 {
-				best, bestScore = o, score
-			}
-		}
-		probe.Orient = best
+		probe := l.transformerProbe(tr, 0, rowY)
+		best := probe.Orient
 		// Its terminals' reach left and right of its centre, plus room for the wires coming in beside them.
 		left, right := 0.0, 0.0
 		for _, t := range symbolTerminals(&probe, l.im.opt.Terminals) {
@@ -1056,7 +1098,9 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 		}
 		room := 6 * g
 		x := math.Round(meanOr(xs[tr.id], maxX+colW)/g) * g
-		if prev, ok := last[rowY]; ok && x+left-room < prev {
+		if ax, arranged := l.transX[tr.id]; arranged {
+			x = ax
+		} else if prev, ok := last[rowY]; ok && x+left-room < prev {
 			x = prev - left + room
 		}
 		last[rowY] = x + right + room
@@ -1095,6 +1139,11 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 			}
 			end := ts[w]
 			c := centres[k.trans.id]
+			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) && math.Abs(k.at.X-end.X) < 1e-6 {
+				// Lined up under (or over) its bay: one straight lead.
+				l.wire(k.cn, []Point{k.at, end})
+				continue
+			}
 			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) {
 				// A lead up or down: come in vertically, from outside, at a height of its own.
 				out := math.Copysign(1, end.Y-c.Y)
@@ -1220,6 +1269,9 @@ func (l *cimLayout) object(eq *cimObject, pts []Point, rotation float64) {
 	do := l.im.synthetic("DiagramObject", map[string]string{
 		"Diagram": l.diagram.id, "IdentifiedObject": eq.id, "rotation": strconv.FormatFloat(rotation, 'f', -1, 64)})
 	l.im.dos[l.diagram.id] = append(l.im.dos[l.diagram.id], do)
+	if l.cur != nil {
+		l.cur.dos = append(l.cur.dos, do)
+	}
 	for i, p := range pts {
 		pt := l.im.synthetic("DiagramObjectPoint", map[string]string{"DiagramObject": do.id, "sequenceNumber": strconv.Itoa(i + 1),
 			"xPosition": strconv.FormatFloat(p.X, 'f', -1, 64), "yPosition": strconv.FormatFloat(p.Y, 'f', -1, 64)})
@@ -1230,6 +1282,9 @@ func (l *cimLayout) object(eq *cimObject, pts []Point, rotation float64) {
 func (l *cimLayout) text(eq *cimObject, text string, at Point) {
 	do := l.im.synthetic("TextDiagramObject", map[string]string{"Diagram": l.diagram.id, "IdentifiedObject": eq.id, "text": text})
 	l.im.dos[l.diagram.id] = append(l.im.dos[l.diagram.id], do)
+	if l.cur != nil {
+		l.cur.dos = append(l.cur.dos, do)
+	}
 	pt := l.im.synthetic("DiagramObjectPoint", map[string]string{"DiagramObject": do.id,
 		"xPosition": strconv.FormatFloat(at.X, 'f', -1, 64), "yPosition": strconv.FormatFloat(at.Y, 'f', -1, 64)})
 	l.im.points[do.id] = append(l.im.points[do.id], pt)

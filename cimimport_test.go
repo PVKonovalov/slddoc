@@ -252,20 +252,21 @@ func TestCIMJumpsAndJunctionsRoundTrip(t *testing.T) {
 // TestCIMOneJumpPerCrossing: two buswork wires of different voltage classes crossing mid-way get one wire jump, in
 // the first of them; the other passes through its gap, as in manual drawing.
 func TestCIMOneJumpPerCrossing(t *testing.T) {
-	eq := `<cim:BaseVoltage rdf:ID="bv1"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+	var eq strings.Builder
+	eq.WriteString(`<cim:BaseVoltage rdf:ID="bv1"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
 <cim:BaseVoltage rdf:ID="bv2"><cim:BaseVoltage.nominalVoltage>10</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
 <cim:VoltageLevel rdf:ID="v1"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv1"/></cim:VoltageLevel>
 <cim:VoltageLevel rdf:ID="v2"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv2"/></cim:VoltageLevel>
 <cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v1"/></cim:ConnectivityNode>
-<cim:ConnectivityNode rdf:ID="b"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v2"/></cim:ConnectivityNode>`
+<cim:ConnectivityNode rdf:ID="b"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v2"/></cim:ConnectivityNode>`)
 	for _, l := range [][2]string{{"L1", "a"}, {"L2", "a"}, {"L3", "b"}, {"L4", "b"}} {
-		eq += `<cim:EnergyConsumer rdf:ID="` + l[0] + `"><cim:IdentifiedObject.name>` + l[0] + `</cim:IdentifiedObject.name></cim:EnergyConsumer>` +
-			terminal("t"+l[0], l[0], l[1], "ConnectivityNode", 1)
+		eq.WriteString(`<cim:EnergyConsumer rdf:ID="` + l[0] + `"><cim:IdentifiedObject.name>` + l[0] + `</cim:IdentifiedObject.name></cim:EnergyConsumer>` +
+			terminal("t"+l[0], l[0], l[1], "ConnectivityNode", 1))
 	}
 	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
 		dlObject("o1", "L1", 0, 5) + dlObject("o2", "L2", 10, 5) + dlObject("o3", "L3", 5, 0) + dlObject("o4", "L4", 5, 10) +
 		dlObject("o5", "a", 0, 5, 10, 5) + dlObject("o6", "b", 5, 0, 5, 10)
-	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+	pages, err := ImportCIM([][]byte{cimDoc(eq.String()), cimDoc(dl)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
