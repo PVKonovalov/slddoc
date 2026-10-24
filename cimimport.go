@@ -432,14 +432,18 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 
 	// Wires first: placing a device matches its terminals to their ends. A foreign layout may draw a busbar as its
 	// node: a drawing of a node with a BusbarSection not drawn on its own becomes that busbar; one shorter than two
-	// grid steps only marks a junction, which the wiring makes anyway.
+	// grid steps that no other drawing of its node ends at only marks a junction, which the wiring makes anyway.
+	var junctionMark func(cn string, do *cimObject) bool
+	if b.foreign {
+		junctionMark = b.junctionMarks(dos)
+	}
 	for _, do := range dos {
 		if obj := im.objs[do.get("IdentifiedObject")]; do.class == "DiagramObject" && obj != nil && isNode(obj) {
 			if bb := b.undrawnBusbar(obj.id); b.foreign && bb != nil && len(b.doPoints(do)) >= 2 {
 				b.element(bb, do)
 				continue
 			}
-			if pts := b.gluedEnds(do); len(pts) >= 2 && !(b.foreign && pathLength(pts) < 2*b.im.opt.Grid) {
+			if pts := b.gluedEnds(do); len(pts) >= 2 && !(b.foreign && pathLength(pts) < 2*b.im.opt.Grid && junctionMark(obj.id, do)) {
 				b.wires[obj.id] = append(b.wires[obj.id], pts)
 				b.cnLayer[obj.id] = b.layer(do)
 			}
@@ -1298,7 +1302,7 @@ func (b *cimPageBuilder) wireNodes() {
 	if routed > 0 && !b.synthetic {
 		b.messages = append(b.messages, fmt.Sprintf("%d connections were not drawn in the layout and were routed automatically", routed))
 	}
-	if !b.own && !b.synthetic {
+	if !b.own {
 		b.splitAtJunctions()
 		b.addJumps()
 	}
@@ -1487,8 +1491,8 @@ func (b *cimPageBuilder) splitAtJunctions() {
 	}
 }
 
-// addJumps puts a wire jump (shape 14) into a wire wherever, in a foreign layout, it crosses or touches the drawing
-// of another ConnectivityNode, so the two don't look connected: the wire is cut around the spot and its pieces end
+// addJumps puts a wire jump (shape 14) into a wire wherever, in a foreign or generated layout, it crosses or touches
+// the drawing of another ConnectivityNode, so the two don't look connected: the wire is cut around the spot and its pieces end
 // on the jump's ports. A jump over a busbar is size step 1. A spot too near a bend, an end or the previous jump for
 // the jump to fit on one straight run, and a terminal on another node's busbar, are only counted in the messages.
 func (b *cimPageBuilder) addJumps() {

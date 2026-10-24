@@ -9,33 +9,25 @@ import (
 )
 
 // Auto-layout for a CIM model without a Diagram Layout: one page per Substation, plus one for equipment outside
-// any substation. Each voltage level is a band, highest voltage at the top: its busbars on one row, and its bays
-// (the chains of devices hanging off a busbar's node) as columns above or below it. A bay reaching a transformer of a
-// higher voltage, or the top band's bays reaching a line, go up; the rest go down. Transformers sit on a row between
-// the band of their highest winding and the next, loads and other end devices end the bays below. The layout is
-// written as ordinary DiagramObjects of a generated Diagram, so page builds it like any other layout, wiring
-// included. A voltage level without a busbar hangs its bays off its busiest node instead.
+// any substation, on the model of PowSyBl's single-line layout. Each voltage level is a band, highest voltage at the
+// top. Its busbars sharing a bay are parallel and drawn as full-width rows one under another; busbars sharing none sit
+// side by side. Each bay (a cell: the devices between the busbars and its feeders) takes columns of its own and is
+// drawn as a tree rooted at its node farthest from the busbars: every device that reaches a busbar has a column and
+// drops straight onto its row (crossing the rows before it, where the import puts wire jumps), each other device
+// stands over the devices below it, a level per device, and the feeders (lines leaving the page, transformers, end
+// devices) lie beyond the root. A bay reaching a transformer of a higher voltage, on the top band one reaching a line,
+// and a coupler (no feeder) go above the busbars; the rest below. Transformers sit on a row between the band of their
+// highest winding and the next, linked through corridors. The layout is written as ordinary DiagramObjects of a
+// generated Diagram, so page builds it like any other layout, wiring included. A voltage level without a busbar
+// hangs its bays off its busiest node instead.
 
 const (
 	layoutColumns = 6 // grid steps between bay columns
 	layoutLevel   = 8 // grid steps between devices down a bay
 )
 
-type layNode struct {
-	eq       *cimObject
-	from     string     // the node it hangs from
-	line     bool       // an AC line segment drawn as a stub
-	trans    *cimObject // a transformer this bay reaches (eq nil)
-	busStop  string     // a busbar node this bay reaches (eq nil)
-	loop     string     // a node already laid out that this bay reaches again, closing a ring (eq nil)
-	children []*layNode
-	width    int
-	depth    int
-	links    int // transformers and busbars its subtree reaches
-}
-
 // layLink is a connection the layout draws itself through a corridor: from at (a bay end) to a transformer winding
-// on node cn, or to the busbar on node cn.
+// on node cn, or, closing a ring, to node cn where it was first drawn.
 type layLink struct {
 	cn       string
 	at       Point
@@ -56,8 +48,7 @@ type cimLayout struct {
 	diagram  *cimObject
 	transTop map[string]string // transformer id → voltage level key of its highest winding
 	links    []layLink
-	busLine  map[string][3]float64    // busbar node → its line's x1, x2 and y
-	grown    map[string]bool          // nodes already expanded
+	busRow   map[string]int           // busbar node → its row in its group
 	cnAt     map[string]Point         // node → the point it was first drawn at
 	cnOut    map[string]float64       // node → the side (+1 below, -1 above) its own wires leave that point
 	sideUsed map[float64][][2]float64 // x → the y spans of the vertical runs links take there
@@ -135,7 +126,7 @@ func (im *cimImporter) autoLayout() []*cimObject {
 		}
 		l := &cimLayout{im: im, grid: im.opt.Grid, page: pages[sub], cnPage: map[string]bool{}, atCN: atCN,
 			visited: map[string]bool{}, busCN: map[string]bool{}, vlKV: map[string]float64{},
-			transTop: map[string]string{}, busLine: map[string][3]float64{}, grown: map[string]bool{}, cnAt: map[string]Point{}, cnOut: map[string]float64{},
+			transTop: map[string]string{}, busRow: map[string]int{}, cnAt: map[string]Point{}, cnOut: map[string]float64{},
 			sideUsed: map[float64][][2]float64{}}
 		for cn := range atCN {
 			if im.substationOfCN(cn) == sub {
@@ -262,100 +253,287 @@ func (l *cimLayout) vlKey(key, bv string) string {
 	return key
 }
 
-// --- trees
+// --- cells
 
-// grow collects the bays hanging off node cn: each device there not yet placed, continued through its other
-// terminals' nodes until a busbar's node, a transformer or the page's edge. A transformer comes first, so it stays
-// in its parent's column.
-func (l *cimLayout) grow(cn string) []*layNode {
-	l.grown[cn] = true
-	var out, trans []*layNode
-	for _, eq := range l.atCN[cn] {
-		if l.visited[eq.id] || !l.page[eq.id] || eq.class == "BusbarSection" {
-			continue
+// layTree is a device of a cell hanging from node up, its parent's, towards the busbars: its other terminal continues
+// the cell at node down, lands on busbar node bus or closes a ring at loop (none of them for a single-terminal one).
+// A transformer or a line leaving the page met inside a cell is a leaf too.
+type layTree struct {
+	eq       *cimObject
+	up       string
+	down     string
+	bus      string
+	loop     string
+	children []*layTree
+	height   int
+	width    int
+	x        float64
+	far      Point // its terminal on up, as placed
+}
+
+// layCell is a bay: the devices between the busbars and its feeders (lines leaving the page, transformers and end
+// devices), laid out as a tree rooted at its node farthest from the busbars, the feeders beyond that node.
+type layCell struct {
+	root    string // the far node ("" for a device straight between two busbars)
+	devices []*layTree
+	feeders []*cimObject
+	buses   []string   // the busbar nodes it reaches, in row order
+	direct  *cimObject // a device whose terminals are all on busbars
+	onBus   string     // the busbar node its feeders sit on when it has no devices
+	up      bool
+	width   int
+	height  int // levels below the root, plus one for the feeders
+	col     int
+}
+
+// layGroup is a set of parallel busbars (sharing a bay), drawn as full-width rows one under another.
+type layGroup struct {
+	buses []*cimObject // nil entries stand for a busbar-less hub node
+	cns   []string     // each row's node
+	cells []*layCell
+	col   int
+	cols  int
+}
+
+// isFeeder reports whether eq ends a bay at node cn: a transformer, a line leaving the page, or a device with no
+// other terminal.
+func (l *cimLayout) isFeeder(eq *cimObject) bool {
+	if eq.class == "PowerTransformer" {
+		return true
+	}
+	cns := l.im.equipmentCNs(eq)
+	if eq.class == "ACLineSegment" {
+		return len(cns) < 2 || !l.cnPage[cns[0]] || !l.cnPage[cns[1]]
+	}
+	return len(cns) < 2 || cimAuxiliaryClasses[eq.class]
+}
+
+// cell collects the bay starting at device first on hub node hub: every device reached through nodes other than
+// busbars', its feeders at the node farthest from the busbars, and the tree of its devices from there.
+func (l *cimLayout) cell(first *cimObject, hub string) *layCell {
+	c := &layCell{}
+	cns := map[string]bool{}
+	var order []string
+	buses := map[string]bool{}
+	feedersAt := map[string][]*cimObject{}
+	devices := map[string]bool{}
+	queue := []*cimObject{first}
+	if l.isFeeder(first) {
+		l.visited[first.id] = first.class != "PowerTransformer"
+		c.feeders, c.onBus, c.buses = []*cimObject{first}, hub, []string{hub}
+		return c
+	}
+	l.visited[first.id] = true
+	devices[first.id] = true
+	for len(queue) > 0 {
+		eq := queue[0]
+		queue = queue[1:]
+		for _, cn := range l.im.equipmentCNs(eq) {
+			if l.busCN[cn] {
+				buses[cn] = true
+				continue
+			}
+			if cns[cn] {
+				continue
+			}
+			cns[cn] = true
+			order = append(order, cn)
+			for _, o := range l.atCN[cn] {
+				if !l.page[o.id] || o.class == "BusbarSection" || devices[o.id] || l.visited[o.id] && o.class != "PowerTransformer" {
+					continue
+				}
+				if l.isFeeder(o) {
+					if o.class != "PowerTransformer" {
+						l.visited[o.id] = true
+					}
+					feedersAt[cn] = append(feedersAt[cn], o)
+					continue
+				}
+				l.visited[o.id] = true
+				devices[o.id] = true
+				queue = append(queue, o)
+			}
 		}
-		if eq.class == "PowerTransformer" {
-			trans = append(trans, &layNode{trans: eq, from: cn})
-			continue
-		}
-		l.visited[eq.id] = true
-		n := &layNode{eq: eq, from: cn}
-		cns := l.im.equipmentCNs(eq)
-		if eq.class == "ACLineSegment" && (len(cns) < 2 || !l.cnPage[cns[0]] || !l.cnPage[cns[1]]) {
-			n.line = true
-			out = append(out, n)
-			continue
-		}
-		if !cimAuxiliaryClasses[eq.class] {
-			for _, c := range cns {
-				switch {
-				case c == cn:
-				case l.busCN[c]:
-					n.children = append(n.children, &layNode{busStop: c, from: c})
-				case l.grown[c]:
-					n.children = append(n.children, &layNode{loop: c, from: c})
-				default:
-					n.children = append(n.children, l.grow(c)...)
+	}
+	for cn := range buses {
+		c.buses = append(c.buses, cn)
+	}
+	slices.SortFunc(c.buses, func(a, b string) int { return cmp.Compare(l.busRow[a], l.busRow[b]) })
+	if len(order) == 0 {
+		c.direct = first
+		return c
+	}
+
+	// The root: the node farthest from the busbars, one with feeders first.
+	dist := map[string]int{}
+	var frontier []string
+	for _, cn := range order {
+		for _, eq := range l.atCN[cn] {
+			if devices[eq.id] && slices.ContainsFunc(l.im.equipmentCNs(eq), func(x string) bool { return l.busCN[x] }) {
+				if _, ok := dist[cn]; !ok {
+					dist[cn] = 1
+					frontier = append(frontier, cn)
 				}
 			}
 		}
-		out = append(out, n)
 	}
-	return append(trans, out...)
+	for len(frontier) > 0 {
+		cn := frontier[0]
+		frontier = frontier[1:]
+		for _, eq := range l.atCN[cn] {
+			if !devices[eq.id] {
+				continue
+			}
+			for _, next := range l.im.equipmentCNs(eq) {
+				if _, ok := dist[next]; !ok && cns[next] {
+					dist[next] = dist[cn] + 1
+					frontier = append(frontier, next)
+				}
+			}
+		}
+	}
+	c.root = order[0]
+	score := func(cn string) [2]int {
+		f := 0
+		if len(feedersAt[cn]) > 0 {
+			f = 1
+		}
+		return [2]int{f, dist[cn]}
+	}
+	for _, cn := range order {
+		if s, b := score(cn), score(c.root); s[0] > b[0] || s[0] == b[0] && s[1] > b[1] {
+			c.root = cn
+		}
+	}
+	c.feeders = feedersAt[c.root]
+	inTree := map[string]bool{c.root: true}
+	placed := map[string]bool{}
+	c.devices = l.tree(c.root, nil, devices, feedersAt, inTree, placed)
+	return c
 }
 
-func measure(n *layNode) {
-	n.width, n.depth, n.links = 0, 0, 0
-	if n.trans != nil || n.busStop != "" || n.loop != "" {
-		n.links = 1
+// tree returns the devices hanging from node cn towards the busbars (parent excluded), each with its own subtree.
+func (l *cimLayout) tree(cn string, parent *cimObject, devices map[string]bool, feedersAt map[string][]*cimObject,
+	inTree, placed map[string]bool) []*layTree {
+	var out []*layTree
+	for _, eq := range l.atCN[cn] {
+		if !devices[eq.id] || eq == parent || placed[eq.id] {
+			continue
+		}
+		placed[eq.id] = true
+		t := &layTree{eq: eq, up: cn}
+		for _, other := range l.im.equipmentCNs(eq) {
+			switch {
+			case other == cn:
+			case l.busCN[other]:
+				t.bus = other
+			case inTree[other]:
+				t.loop = other
+			default:
+				t.down = other
+				inTree[other] = true
+				t.children = l.tree(other, eq, devices, feedersAt, inTree, placed)
+				for _, f := range feedersAt[other] {
+					t.children = append(t.children, &layTree{eq: f, up: other})
+				}
+			}
+			if t.down != "" || t.bus != "" || t.loop != "" {
+				break
+			}
+		}
+		out = append(out, t)
 	}
-	for _, c := range n.children {
-		measure(c)
-		n.width += c.width
-		n.depth = max(n.depth, c.depth)
-		n.links += c.links
-	}
-	n.width = max(n.width, 1)
-	if n.eq != nil {
-		n.depth++
-	}
+	// Legs to the upper busbar rows first, so they cross fewer of the others.
+	slices.SortStableFunc(out, func(a, b *layTree) int { return cmp.Compare(l.firstRow(a), l.firstRow(b)) })
+	return out
 }
 
-// reaches reports whether n's subtree reaches a transformer whose highest winding is above vl, or a line.
-func (l *cimLayout) reaches(n *layNode, vl string, line *bool) bool {
-	if n.trans != nil {
-		top := l.transTop[n.trans.id]
-		return top != vl && l.vlKV[top] > l.vlKV[vl]
+// firstRow is the topmost busbar row t's subtree lands on (a large number for none).
+func (l *cimLayout) firstRow(t *layTree) int {
+	r := math.MaxInt
+	if t.bus != "" {
+		r = l.busRow[t.bus]
 	}
-	if n.line {
-		*line = true
+	for _, c := range t.children {
+		r = min(r, l.firstRow(c))
 	}
-	up := false
-	for _, c := range n.children {
-		up = l.reaches(c, vl, line) || up
+	return r
+}
+
+func measureTree(t *layTree) {
+	t.width, t.height = 0, 0
+	for _, c := range t.children {
+		measureTree(c)
+		t.width += c.width
+		t.height = max(t.height, c.height)
 	}
-	return up
+	t.width = max(t.width, 1)
+	t.height++
+}
+
+func (l *cimLayout) measureCell(c *layCell) {
+	c.width, c.height = 0, 0
+	for _, t := range c.devices {
+		measureTree(t)
+		c.width += t.width
+		c.height = max(c.height, t.height)
+	}
+	if c.direct != nil {
+		c.width = 1
+	}
+	if len(c.feeders) > 0 {
+		c.height++
+	}
+	c.width = max(c.width, len(c.feeders), 1)
+}
+
+// goesUp reports whether cell c of band b is drawn above its busbars: one reaching a transformer of a higher voltage,
+// on the top band one reaching a line, and one with no feeder (a coupler).
+func (l *cimLayout) goesUp(c *layCell, b *layBand, top bool) bool {
+	if c.direct != nil {
+		return true
+	}
+	feeders := slices.Clone(c.feeders)
+	var walk func(ts []*layTree)
+	walk = func(ts []*layTree) {
+		for _, t := range ts {
+			if l.isFeeder(t.eq) {
+				feeders = append(feeders, t.eq)
+			}
+			walk(t.children)
+		}
+	}
+	walk(c.devices)
+	if len(feeders) == 0 {
+		return true
+	}
+	for _, f := range feeders {
+		if f.class == "PowerTransformer" {
+			top := l.transTop[f.id]
+			if top != b.vl && l.vlKV[top] > l.vlKV[b.vl] {
+				return true
+			}
+		}
+		if f.class == "ACLineSegment" && top {
+			return true
+		}
+	}
+	return false
 }
 
 // --- the page
 
-type layHub struct {
-	bus  *cimObject // nil for a voltage level without a busbar
-	cn   string     // the node a busbar-less hub hangs its bays from
-	bays []*layNode
-	up   []bool
-	col  int // first column
-	cols int
-}
-
 type layBand struct {
 	vl                 string
-	hubs               []*layHub
+	groups             []*layGroup
 	upDepth, downDepth int
 	upLinks, downLinks int
 	top, busY, bottom  float64
+	rows               int
 	nextUp, nextDown   int // corridors taken
 }
+
+const layoutBusGap = 4 // grid steps between parallel busbars
 
 func (l *cimLayout) layout() {
 	im := l.im
@@ -394,19 +572,41 @@ func (l *cimLayout) layout() {
 		l.transTop[tr.id] = top
 		band(top)
 	}
-	for _, bus := range buses {
-		l.visited[bus.id] = true
-		h := &layHub{bus: bus}
-		for _, cn := range im.equipmentCNs(bus) {
-			h.bays = append(h.bays, l.grow(cn)...)
-		}
-		band(l.vlOf(bus)).hubs = append(band(l.vlOf(bus)).hubs, h)
+
+	// Busbars and their bays; then whatever no busbar reaches hangs off its busiest node, repeatedly.
+	type hub struct {
+		bus *cimObject
+		cn  string
+		vl  string
 	}
-	// Whatever no busbar reaches hangs off its busiest node, repeatedly.
+	var hubs []hub
+	for i, bus := range buses {
+		l.visited[bus.id] = true
+		for _, cn := range im.equipmentCNs(bus) {
+			l.busRow[cn] = i
+			hubs = append(hubs, hub{bus: bus, cn: cn, vl: l.vlOf(bus)})
+			break
+		}
+	}
+	cellsOf := map[string][]*layCell{}
+	grow := func(h hub) {
+		for _, eq := range l.atCN[h.cn] {
+			if !l.page[eq.id] || eq.class == "BusbarSection" || l.visited[eq.id] && eq.class != "PowerTransformer" {
+				continue
+			}
+			if eq.class == "PowerTransformer" && slices.ContainsFunc(cellsOf[h.vl], func(c *layCell) bool { return slices.Contains(c.feeders, eq) }) {
+				continue
+			}
+			cellsOf[h.vl] = append(cellsOf[h.vl], l.cell(eq, h.cn))
+		}
+	}
+	for _, h := range hubs {
+		grow(h)
+	}
 	for {
 		best, bestN := "", 0
 		for cn, list := range l.atCN {
-			if !l.cnPage[cn] && !l.anyOnPage(list) {
+			if l.busCN[cn] || !l.cnPage[cn] && !l.anyOnPage(list) {
 				continue
 			}
 			n := 0
@@ -422,17 +622,70 @@ func (l *cimLayout) layout() {
 		if bestN == 0 {
 			break
 		}
-		h := &layHub{cn: best, bays: l.grow(best)}
 		vl := l.cnVL(best)
 		if vl == "" {
-			for _, n := range h.bays {
-				if n.eq != nil {
-					vl = l.vlOf(n.eq)
+			for _, eq := range l.atCN[best] {
+				if l.page[eq.id] {
+					vl = l.vlOf(eq)
 					break
 				}
 			}
 		}
-		band(vl).hubs = append(band(vl).hubs, h)
+		l.busCN[best] = true
+		l.busRow[best] = len(buses) + len(hubs)
+		h := hub{cn: best, vl: vl}
+		hubs = append(hubs, h)
+		grow(h)
+	}
+
+	// Groups: the busbars sharing a bay are parallel, drawn one under another.
+	for _, h := range hubs {
+		band(h.vl)
+	}
+	groupOf := map[string]*layGroup{}
+	for _, h := range hubs {
+		b := band(h.vl)
+		var g *layGroup
+		for _, c := range cellsOf[h.vl] {
+			if slices.Contains(c.buses, h.cn) {
+				for _, cn := range c.buses {
+					if groupOf[cn] != nil {
+						g = groupOf[cn]
+					}
+				}
+			}
+		}
+		if g == nil {
+			g = &layGroup{}
+			b.groups = append(b.groups, g)
+		}
+		g.buses = append(g.buses, h.bus)
+		g.cns = append(g.cns, h.cn)
+		groupOf[h.cn] = g
+	}
+	for vl, cells := range cellsOf {
+		b := band(vl)
+		for _, c := range cells {
+			g := groupOf[c.onBus]
+			if len(c.buses) > 0 {
+				g = groupOf[c.buses[0]]
+			}
+			if g == nil && len(b.groups) > 0 {
+				g = b.groups[0]
+			}
+			if g == nil {
+				g = &layGroup{}
+				b.groups = append(b.groups, g)
+			}
+			g.cells = append(g.cells, c)
+		}
+	}
+	for _, b := range vls {
+		for _, g := range b.groups {
+			for i, cn := range g.cns {
+				l.busRow[cn] = i
+			}
+		}
 	}
 
 	bands := make([]*layBand, 0, len(vls))
@@ -444,30 +697,34 @@ func (l *cimLayout) layout() {
 	})
 
 	g := l.grid
-	colW, levelH := layoutColumns*g, layoutLevel*g
+	colW, levelH, busGap := layoutColumns*g, layoutLevel*g, layoutBusGap*g
 	margin := 6 * g
 	l.margin = margin
 	colX := func(col int) float64 { return margin + float64(col)*colW + colW/2 }
 
-	// Columns, directions, depths and corridors.
+	// Columns, directions, depths and corridors: couplers first, then the bays, each in columns of its own.
 	for bi, b := range bands {
 		col := 0
-		for _, h := range b.hubs {
-			h.col = col
-			for _, n := range h.bays {
-				measure(n)
-				line := false
-				up := l.reaches(n, b.vl, &line) || bi == 0 && line && n.trans == nil
-				h.up = append(h.up, up)
-				h.cols += n.width
-				if up {
-					b.upDepth, b.upLinks = max(b.upDepth, n.depth), b.upLinks+n.links
+		for _, gr := range b.groups {
+			b.rows = max(b.rows, len(gr.cns))
+			slices.SortStableFunc(gr.cells, func(x, y *layCell) int {
+				return cmp.Compare(min(len(x.feeders), 1), min(len(y.feeders), 1))
+			})
+			gr.col = col
+			for _, c := range gr.cells {
+				l.measureCell(c)
+				c.up = l.goesUp(c, b, bi == 0)
+				c.col = col
+				col += c.width
+				links := l.cellLinks(c)
+				if c.up {
+					b.upDepth, b.upLinks = max(b.upDepth, c.height), b.upLinks+links
 				} else {
-					b.downDepth, b.downLinks = max(b.downDepth, n.depth), b.downLinks+n.links
+					b.downDepth, b.downLinks = max(b.downDepth, c.height), b.downLinks+links
 				}
 			}
-			h.cols = max(h.cols, 1)
-			col += h.cols + 1
+			gr.cols = max(col-gr.col, 1)
+			col = gr.col + gr.cols + 1
 		}
 	}
 
@@ -478,50 +735,262 @@ func (l *cimLayout) layout() {
 	for _, b := range bands {
 		b.top = y + float64(b.upLinks+1)*g
 		b.busY = b.top + float64(b.upDepth)*levelH + 2*g
-		b.bottom = b.busY + float64(b.downDepth)*levelH + 2*g
-		for _, h := range b.hubs {
-			col := h.col
-			for i, n := range h.bays {
-				dir := 1.0
-				if h.up[i] {
-					dir = -1
+		last := b.busY + float64(max(b.rows-1, 0))*busGap
+		b.bottom = last + float64(b.downDepth)*levelH + 2*g
+		rowY := func(cn string) float64 { return b.busY + float64(l.busRow[cn])*busGap }
+		for _, gr := range b.groups {
+			x1, x2 := colX(gr.col)-colW/2+g, colX(gr.col+gr.cols-1)+colW/2-g
+			for i, bus := range gr.buses {
+				yy := b.busY + float64(i)*busGap
+				switch {
+				case bus != nil:
+					l.object(bus, []Point{{X: x1, Y: yy}, {X: x2, Y: yy}}, 0)
+					if name := bus.get("name"); name != "" {
+						l.text(bus, name, Point{X: x1, Y: yy - g})
+					}
+				case im.objs[gr.cns[i]] != nil:
+					// A drawn wire stands in for the busbar, so the bays drop straight onto it.
+					l.object(im.objs[gr.cns[i]], []Point{{X: x1 + g, Y: yy}, {X: x2 - g, Y: yy}}, 0)
 				}
-				hubCN := h.cn
-				if h.bus != nil {
-					hubCN = n.from
-				}
-				at := Point{X: colX(col), Y: b.busY}
-				if _, seen := l.cnAt[hubCN]; !seen && hubCN != "" {
-					l.cnAt[hubCN], l.cnOut[hubCN] = at, dir
-				}
-				if p, ok := l.place(n, b, col, 1, dir, at, colX); ok {
-					l.wire(hubCN, []Point{at, p})
-				}
-				col += n.width
 			}
-			x1, x2 := colX(h.col)-colW/2+g, colX(h.col+h.cols-1)+colW/2-g
-			switch {
-			case h.bus != nil:
-				l.object(h.bus, []Point{{X: x1, Y: b.busY}, {X: x2, Y: b.busY}}, 0)
-				if name := h.bus.get("name"); name != "" {
-					l.text(h.bus, name, Point{X: x1, Y: b.busY - g})
+			for _, c := range gr.cells {
+				base, out := b.busY, -1.0
+				if !c.up {
+					base, out = last, 1
 				}
-				for _, cn := range im.equipmentCNs(h.bus) {
-					l.busLine[cn] = [3]float64{x1, x2, b.busY}
-				}
-			case h.cols > 1 && im.objs[h.cn] != nil:
-				// A drawn wire stands in for the busbar, so the bays drop straight onto it.
-				l.object(im.objs[h.cn], []Point{{X: colX(h.col), Y: b.busY}, {X: colX(h.col + h.cols - 1), Y: b.busY}}, 0)
+				l.placeCell(c, b, base, out, rowY, colX)
 			}
-			maxX = math.Max(maxX, colX(h.col+h.cols))
+			maxX = math.Max(maxX, colX(gr.col+gr.cols))
 		}
 		// Room for a transformer's leads and the wires coming in to them, clear of the corridors.
 		rows[b.vl] = b.bottom + float64(b.downLinks+1)*g + 12*g
 		y = rows[b.vl] + 13*g
 	}
+	l.transformers(trs, rows, y, maxX, colW)
+}
 
-	// Transformers: on the row under the band of their highest winding, above the bays that reach them, turned so
-	// winding 1 is on top.
+// cellLinks counts the links cell c takes through a corridor: transformers and rings.
+func (l *cimLayout) cellLinks(c *layCell) int {
+	n := 0
+	for _, f := range c.feeders {
+		if f.class == "PowerTransformer" {
+			n++
+		}
+	}
+	var walk func(ts []*layTree)
+	walk = func(ts []*layTree) {
+		for _, t := range ts {
+			if t.loop != "" || t.eq.class == "PowerTransformer" {
+				n++
+			}
+			walk(t.children)
+		}
+	}
+	walk(c.devices)
+	return n
+}
+
+// placeCell draws cell c from base (its busbar row nearest it) outwards (out -1 up, +1 down): its legs in columns
+// of their own from c.col, each device over the legs below it, a level per device, the feeders beyond the root.
+func (l *cimLayout) placeCell(c *layCell, b *layBand, base, out float64, rowY func(string) float64, colX func(int) float64) {
+	g := l.grid
+	levelH := layoutLevel * g
+	corridor := func() float64 {
+		if out > 0 {
+			b.nextDown++
+			return b.bottom + float64(b.nextDown)*g
+		}
+		b.nextUp++
+		return b.top - float64(b.nextUp)*g
+	}
+	if c.direct != nil {
+		l.placeDirect(c, colX(c.col), rowY)
+		return
+	}
+	col := c.col
+	var assign func(t *layTree)
+	assign = func(t *layTree) {
+		if len(t.children) == 0 {
+			t.x = colX(col)
+			col++
+			return
+		}
+		for _, ch := range t.children {
+			assign(ch)
+		}
+		t.x = math.Round((t.children[0].x+t.children[len(t.children)-1].x)/2/g) * g
+	}
+	for _, t := range c.devices {
+		assign(t)
+	}
+
+	rootX := colX(c.col)
+	if n := len(c.devices); n > 0 {
+		rootX = math.Round((c.devices[0].x+c.devices[n-1].x)/2/g) * g
+	}
+	rootH := c.height
+	if len(c.feeders) > 0 {
+		rootH--
+	}
+	rootY := base + out*(float64(rootH)*levelH+g)
+	if len(c.devices) == 0 {
+		rootY = rowY(c.onBus)
+	}
+	if c.root != "" {
+		if _, seen := l.cnAt[c.root]; !seen {
+			l.cnAt[c.root], l.cnOut[c.root] = Point{X: rootX, Y: rootY}, out
+		}
+	}
+	for _, t := range c.devices {
+		l.placeTree(t, b, base, out, rowY, corridor)
+		l.wire(t.up, []Point{{X: rootX, Y: rootY}, {X: t.far.X, Y: rootY}, t.far})
+	}
+
+	// The feeders beyond the root, side by side.
+	hubCN := c.root
+	if hubCN == "" {
+		hubCN = c.onBus
+	}
+	for i, f := range c.feeders {
+		x := rootX
+		if len(c.feeders) > 1 {
+			x = colX(c.col + i)
+		}
+		at := Point{X: x, Y: rootY}
+		if x != rootX {
+			l.wire(hubCN, []Point{{X: rootX, Y: rootY}, at})
+		}
+		l.feeder(f, hubCN, at, out, corridor)
+	}
+}
+
+// feeder draws feeder f on node cn, leaving at outwards: a transformer through a corridor, a line as a stub, an end
+// device facing at.
+func (l *cimLayout) feeder(f *cimObject, cn string, at Point, out float64, corridor func() float64) {
+	g := l.grid
+	switch {
+	case f.class == "PowerTransformer":
+		l.links = append(l.links, layLink{cn: cn, at: at, trans: f, corridor: corridor()})
+	case f.class == "ACLineSegment":
+		end := Point{X: at.X, Y: at.Y + out*4*g}
+		pts := []Point{at, end}
+		if cns := l.im.equipmentCNs(f); len(cns) > 1 && cns[1] == cn {
+			pts[0], pts[1] = pts[1], pts[0] // the points run from terminal 1 to terminal 2
+		}
+		l.object(f, pts, 0)
+		if name := f.get("name"); name != "" {
+			l.text(f, name, Point{X: end.X + g, Y: end.Y + out*g})
+		}
+	default:
+		near := at.Y + out*g
+		ts, k := l.device(f, cn, at.X, near, at.Y+out*3*g, out)
+		if k >= 0 {
+			l.wire(cn, []Point{at, ts[k]})
+		}
+		if name := f.get("name"); name != "" {
+			l.text(f, name, Point{X: at.X + 2*g, Y: at.Y + out*3*g})
+		}
+	}
+}
+
+// placeTree draws device t at the level of its height, its terminal towards the busbars down, and its subtree below.
+func (l *cimLayout) placeTree(t *layTree, b *layBand, base, out float64, rowY func(string) float64, corridor func() float64) {
+	g := l.grid
+	levelH := layoutLevel * g
+	level := float64(t.height)
+	if l.isFeeder(t.eq) {
+		// A feeder met inside the bay: from its node towards the busbars.
+		at := Point{X: t.x, Y: base + out*(levelH-g)}
+		t.far = at
+		l.feeder(t.eq, t.up, at, -out, corridor)
+		return
+	}
+	near := base + out*((level-1)*levelH+2*g)
+	centre := base + out*((level-0.5)*levelH)
+	// Names of devices side by side would run into each other: each column's at a height of its own.
+	col := int(math.Round((t.x - l.margin) / (layoutColumns * g)))
+	label := centre + float64(col%3-1)*1.5*g
+	facingCN := cmp.Or(t.down, t.bus, t.loop)
+	if facingCN == "" {
+		// One terminal only: it faces the node it hangs from.
+		ts, k := l.device(t.eq, t.up, t.x, base+out*levelH, centre, -out)
+		if k >= 0 {
+			t.far = ts[k]
+		}
+		l.name(t.eq, t.x, label)
+		return
+	}
+	ts, k := l.device(t.eq, facingCN, t.x, near, centre, out)
+	l.name(t.eq, t.x, label)
+	if k < 0 {
+		t.far = Point{X: t.x, Y: centre}
+		return
+	}
+	facing := ts[k]
+	t.far = facing
+	for i, cn := range l.im.equipmentCNs(t.eq) {
+		if cn == t.up && i < len(ts) {
+			t.far = ts[i]
+		}
+	}
+	switch {
+	case t.bus != "":
+		l.wire(t.bus, []Point{facing, {X: facing.X, Y: rowY(t.bus)}})
+	case t.loop != "":
+		start := Point{X: facing.X, Y: facing.Y - out*g}
+		l.wire(t.loop, []Point{facing, start})
+		l.links = append(l.links, layLink{cn: t.loop, at: start, loop: true, corridor: corridor()})
+	default:
+		jy := facing.Y - out*g
+		if _, seen := l.cnAt[t.down]; !seen {
+			l.cnAt[t.down], l.cnOut[t.down] = Point{X: facing.X, Y: jy}, -out
+		}
+		for _, ch := range t.children {
+			l.placeTree(ch, b, base, out, rowY, corridor)
+			l.wire(t.down, []Point{facing, {X: facing.X, Y: jy}, {X: ch.far.X, Y: jy}, ch.far})
+		}
+	}
+}
+
+// placeDirect draws a device whose terminals are all on busbars between their rows, in its own column at x.
+func (l *cimLayout) placeDirect(c *layCell, x float64, rowY func(string) float64) {
+	eq := c.direct
+	cns := l.im.equipmentCNs(eq)
+	if len(cns) < 2 {
+		return
+	}
+	upper, lower := cns[0], cns[1]
+	if rowY(upper) > rowY(lower) {
+		upper, lower = lower, upper
+	}
+	y1, y2 := rowY(upper), rowY(lower)
+	if y1 == y2 {
+		y1 -= 4 * l.grid
+	}
+	ts, k := l.device(eq, upper, x, y1+l.grid, (y1+y2)/2, 1)
+	l.name(eq, x, (y1+y2)/2)
+	if k < 0 {
+		return
+	}
+	l.wire(upper, []Point{ts[k], {X: x, Y: rowY(upper)}})
+	for i, cn := range cns {
+		if cn == lower && i < len(ts) {
+			l.wire(lower, []Point{ts[i], {X: x, Y: rowY(lower)}})
+		}
+	}
+}
+
+func (l *cimLayout) name(eq *cimObject, x, y float64) {
+	if name := eq.get("name"); name != "" {
+		l.text(eq, name, Point{X: x + 2*l.grid, Y: y})
+	}
+}
+
+// transformers places each transformer on the row under the band of its highest winding (rows; y below the last
+// band), above the bays that reach it, turned so winding 1 is on top, and draws the links to it and the rings.
+func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, maxX, colW float64) {
+	im := l.im
+	g := l.grid
 	xs := map[string][]float64{}
 	for _, k := range l.links {
 		if k.trans != nil {
@@ -576,10 +1045,8 @@ func (l *cimLayout) layout() {
 		}
 	}
 
-	// The links: down (or up) the bay's column into its corridor, along it, and into the winding or busbar.
+	// The links: down (or up) the bay's column into its corridor, along it, and into the winding or the ring's node.
 	for _, k := range l.links {
-
-		var end, turn Point
 		switch {
 		case k.loop:
 			to, ok := l.cnAt[k.cn]
@@ -590,7 +1057,6 @@ func (l *cimLayout) layout() {
 			ay := to.Y + l.cnOut[k.cn]*g
 			side := l.side(to.X, k.corridor, ay, colW)
 			l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: side, Y: k.corridor}, {X: side, Y: ay}, {X: to.X, Y: ay}, to})
-			continue
 		case k.trans != nil:
 			ts := terms[k.trans.id]
 			w := -1
@@ -602,7 +1068,7 @@ func (l *cimLayout) layout() {
 			if w < 0 {
 				continue
 			}
-			end = ts[w]
+			end := ts[w]
 			c := centres[k.trans.id]
 			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) {
 				// A lead up or down: come in vertically, from outside, at a height of its own.
@@ -624,21 +1090,7 @@ func (l *cimLayout) layout() {
 				}
 			}
 			l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: ax, Y: k.corridor}, {X: ax, Y: end.Y}, end})
-			continue
-		default:
-			bl, ok := l.busLine[k.cn]
-			if !ok {
-				continue
-			}
-			x := bl[0]
-			if k.at.X > bl[1] {
-				x = bl[1]
-			}
-			end = Point{X: x, Y: bl[2]}
-			turn = Point{X: x, Y: k.corridor}
-			l.sideUsed[x] = append(l.sideUsed[x], [2]float64{math.Min(k.corridor, end.Y), math.Max(k.corridor, end.Y)})
 		}
-		l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, turn, end})
 	}
 }
 
@@ -697,78 +1149,6 @@ func meanOr(xs []float64, or float64) float64 {
 	return s / float64(len(xs))
 }
 
-// place writes n's subtree at column col and level (1 = next to the bus), growing in direction dir (+1 down, -1
-// up), and the wires within it; at is the point n's terminal toward the bus connects to. Returns where that terminal
-// is drawn (false for a transformer, which is linked through a corridor instead).
-func (l *cimLayout) place(n *layNode, b *layBand, col, level int, dir float64, at Point, colX func(int) float64) (Point, bool) {
-	g := l.grid
-	levelH := layoutLevel * g
-	x := colX(col)
-	corridor := func() float64 {
-		if dir > 0 {
-			b.nextDown++
-			return b.bottom + float64(b.nextDown)*g
-		}
-		b.nextUp++
-		return b.top - float64(b.nextUp)*g
-	}
-	if n.trans != nil {
-		l.links = append(l.links, layLink{cn: n.from, at: at, trans: n.trans, corridor: corridor()})
-		return Point{}, false
-	}
-	if n.busStop != "" || n.loop != "" {
-		// Its own column, from just past the parent's terminal down to the corridor.
-		start := Point{X: x, Y: at.Y + dir*g}
-		l.links = append(l.links, layLink{cn: n.from, at: start, loop: n.loop != "", corridor: corridor()})
-		return start, true
-	}
-	centre := b.busY + dir*(float64(level)-0.5)*levelH
-	near := b.busY + dir*(float64(level-1)*levelH+g) // where the terminal facing the bus goes
-	far := map[string]Point{}                        // the point each other node of n is drawn at
-	facing := Point{X: x, Y: near}
-	if n.line || n.eq.class == "ACLineSegment" {
-		bottom := near + dir*(levelH-3*g)
-		pts := []Point{{X: x, Y: near}, {X: x, Y: bottom}}
-		if cns := l.im.equipmentCNs(n.eq); len(cns) > 1 && cns[1] == n.from {
-			pts[0], pts[1] = pts[1], pts[0] // the points run from terminal 1 to terminal 2
-		}
-		l.object(n.eq, pts, 0)
-		for _, c := range l.im.equipmentCNs(n.eq) {
-			far[c] = Point{X: x, Y: bottom}
-		}
-	} else {
-		ts, k := l.device(n, x, near, centre, dir)
-		for i, c := range l.im.equipmentCNs(n.eq) {
-			if i < len(ts) && i != k {
-				far[c] = ts[i]
-			}
-		}
-		if k >= 0 && k < len(ts) {
-			facing = ts[k]
-		}
-	}
-	if name := n.eq.get("name"); name != "" {
-		l.text(n.eq, name, Point{X: x + 2*g, Y: centre})
-	}
-	c := col
-	for _, ch := range n.children {
-		p, ok := far[ch.from]
-		if !ok {
-			p = Point{X: x, Y: near + dir*(levelH-3*g)}
-		}
-		if _, seen := l.cnAt[ch.from]; !seen && ch.loop == "" && ch.busStop == "" {
-			l.cnAt[ch.from], l.cnOut[ch.from] = p, dir
-		}
-		if cp, ok := l.place(ch, b, c, level+1, dir, p, colX); ok {
-			// Straight down in the same column, else just past the parent's terminal and across.
-			by := p.Y + dir*g
-			l.wire(ch.from, []Point{p, {X: p.X, Y: by}, {X: cp.X, Y: by}, cp})
-		}
-		c += ch.width
-	}
-	return facing, true
-}
-
 // wire adds a drawn wire of node cn along pts.
 func (l *cimLayout) wire(cn string, pts []Point) {
 
@@ -778,18 +1158,18 @@ func (l *cimLayout) wire(cn string, pts []Point) {
 	}
 }
 
-// device places a device of a bay: turned (0° or 180°) so the terminal facing the bus is on the bus side, and moved
-// so that terminal sits at near; one without symbol terminals is centred at centre. Returns its terminals as placed
-// and the facing one's index.
-func (l *cimLayout) device(n *layNode, x, near, centre, dir float64) ([]Point, int) {
-	defClass, defShape, _ := l.im.shapeFor(n.eq.class)
+// device places eq: turned (0° or 180°) so its terminal on node facing is on the busbar side for dir (+1: the
+// busbars are above), and moved so that terminal sits at near; one without symbol terminals is centred at centre.
+// Returns its terminals as placed and the facing one's index (-1 for none).
+func (l *cimLayout) device(eq *cimObject, facingCN string, x, near, centre, dir float64) ([]Point, int) {
+	defClass, defShape, _ := l.im.shapeFor(eq.class)
 	ts := l.im.opt.Terminals[defShape]
 	facing := 0
-	if !cimAuxiliaryClasses[n.eq.class] {
-		facing = max(slices.Index(l.im.equipmentCNs(n.eq), n.from), 0)
+	if !cimAuxiliaryClasses[eq.class] {
+		facing = max(slices.Index(l.im.equipmentCNs(eq), facingCN), 0)
 	}
 	if facing >= len(ts) {
-		l.object(n.eq, []Point{{X: x, Y: centre}}, 0)
+		l.object(eq, []Point{{X: x, Y: centre}}, 0)
 		return nil, -1
 	}
 	ty := ts[facing].Y
@@ -803,7 +1183,7 @@ func (l *cimLayout) device(n *layNode, x, near, centre, dir float64) ([]Point, i
 	probe := Element{Class: defClass, Shape: defShape, Orient: rot}
 	placed := symbolTerminals(&probe, l.im.opt.Terminals)
 	anchor := Point{X: x, Y: near - placed[facing].Y}
-	l.object(n.eq, []Point{anchor}, float64(rot))
+	l.object(eq, []Point{anchor}, float64(rot))
 	for i := range placed {
 		placed[i] = roundPt(Point{X: placed[i].X + anchor.X, Y: placed[i].Y + anchor.Y})
 	}

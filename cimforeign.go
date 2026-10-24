@@ -35,6 +35,44 @@ func (b *cimPageBuilder) terminalWire(t, do *cimObject) {
 	b.termWires = append(b.termWires, cimTermWire{cn: cn, idx: len(b.wires[cn]) - 1, first: first, term: t.id})
 }
 
+// junctionMarks returns whether drawing do of node cn has no end that another drawing of cn (the node's own, or a
+// polyline of a terminal on it) ends at, in the layout's own coordinates: such a short bar only marks a junction.
+func (b *cimPageBuilder) junctionMarks(dos []*cimObject) func(cn string, do *cimObject) bool {
+	type end struct {
+		cn string
+		p  Point
+	}
+	raw := func(do *cimObject) []Point {
+		var out []Point
+		for _, p := range b.im.points[do.id] {
+			x, _ := p.num("xPosition")
+			y, _ := p.num("yPosition")
+			out = append(out, Point{X: x, Y: y})
+		}
+		return out
+	}
+	ends := map[end]int{}
+	for _, do := range dos {
+		o := b.im.objs[do.get("IdentifiedObject")]
+		cn := ""
+		switch {
+		case o == nil:
+		case isNode(o):
+			cn = o.id
+		case o.class == "Terminal":
+			cn = o.get("ConnectivityNode")
+		}
+		if pts := raw(do); cn != "" && len(pts) >= 2 {
+			ends[end{cn, pts[0]}]++
+			ends[end{cn, pts[len(pts)-1]}]++
+		}
+	}
+	return func(cn string, do *cimObject) bool {
+		pts := raw(do)
+		return ends[end{cn, pts[0]}] < 2 && ends[end{cn, pts[len(pts)-1]}] < 2
+	}
+}
+
 // undrawnBusbar is a BusbarSection on node cn that this page neither draws nor has placed yet, or nil.
 func (b *cimPageBuilder) undrawnBusbar(cn string) *cimObject {
 	for _, bb := range b.im.byClass["BusbarSection"] {
@@ -124,11 +162,11 @@ func (b *cimPageBuilder) reattach(e *Element) {
 func (b *cimPageBuilder) dropOverdrawn() {
 	refacing := map[int]*cimObject{}
 	for _, tw := range b.termWires {
-		if w := b.wires[tw.cn][tw.idx]; w == nil || !b.runsOverOthers(tw.cn, w) {
+		t := b.im.objs[tw.term]
+		if w := b.wires[tw.cn][tw.idx]; w == nil || !b.runsOverOthers(tw.cn, w, b.itemOf[t.get("ConductingEquipment")]) {
 			continue
 		}
 		b.wires[tw.cn][tw.idx] = nil
-		t := b.im.objs[tw.term]
 		delete(b.termDrawn, t.id)
 		if id, ok := b.itemOf[t.get("ConductingEquipment")]; ok {
 			refacing[id] = b.im.objs[t.get("ConductingEquipment")]
@@ -211,21 +249,22 @@ func (b *cimPageBuilder) snapTerminalWires() {
 	}
 }
 
-// runsOverOthers reports whether wire w of node cn passes a symbol or a port of another node, its own ends aside.
-func (b *cimPageBuilder) runsOverOthers(cn string, w []Point) bool {
+// runsOverOthers reports whether wire w of node cn, drawn for a terminal of element self, passes another symbol or a
+// port of another node, its own ends and self's own ports aside.
+func (b *cimPageBuilder) runsOverOthers(cn string, w []Point, self int) bool {
 	ends := []Point{w[0], w[len(w)-1]}
 	for k := 1; k < len(w); k++ {
 		a, z := w[k-1], w[k]
 		for other, as := range b.attach {
 			for _, at := range as {
-				if other != cn && !slices.Contains(ends, at.at) && onSeg(at.at, a, z) {
+				if other != cn && at.owner != self && !slices.Contains(ends, at.at) && onSeg(at.at, a, z) {
 					return true
 				}
 			}
 		}
 		for _, e := range b.d.Elements {
 			c := Point{X: e.X, Y: e.Y}
-			if e.Class != ClassBusBarSection && !slices.Contains(ends, c) && segDist(c, a, z) < b.im.opt.Grid/2 &&
+			if e.ID != self && e.Class != ClassBusBarSection && !slices.Contains(ends, c) && segDist(c, a, z) < b.im.opt.Grid/2 &&
 				!slices.Contains(b.portCN[e.ID], cn) {
 				return true
 			}

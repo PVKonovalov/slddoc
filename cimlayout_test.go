@@ -160,3 +160,104 @@ func TestAutoLayout(t *testing.T) {
 		}
 	}
 }
+
+// doubleBusEQ is substation S1 with two 110 kV busbars, BA and BB, and one bay: disconnectors DA and DB to them,
+// joined at a node, a breaker Q and line W1 leaving for S2; plus a coupler: DC1 from BA and DC2 from BB to breaker QC.
+func doubleBusEQ() string {
+	var b strings.Builder
+	obj := func(class, id string, props ...string) {
+		fmt.Fprintf(&b, "<cim:%s rdf:ID=\"_%s\">", class, id)
+		for i := 0; i+1 < len(props); i += 2 {
+			if strings.HasPrefix(props[i+1], "#") {
+				fmt.Fprintf(&b, "<cim:%s rdf:resource=\"#_%s\"/>", props[i], props[i+1][1:])
+			} else {
+				fmt.Fprintf(&b, "<cim:%s>%s</cim:%s>", props[i], props[i+1], props[i])
+			}
+		}
+		fmt.Fprintf(&b, "</cim:%s>\n", class)
+	}
+	term := func(eq, cn string, seq int) {
+		obj("Terminal", fmt.Sprintf("t-%s-%d", eq, seq), "Terminal.ConductingEquipment", "#"+eq,
+			"Terminal.ConnectivityNode", "#"+cn, "ACDCTerminal.sequenceNumber", fmt.Sprint(seq))
+	}
+	b.WriteString(`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">` + "\n")
+	obj("BaseVoltage", "bv", "BaseVoltage.nominalVoltage", "110")
+	obj("Substation", "s1", "IdentifiedObject.name", "S1")
+	obj("Substation", "s2", "IdentifiedObject.name", "S2")
+	obj("VoltageLevel", "v1", "VoltageLevel.Substation", "#s1", "VoltageLevel.BaseVoltage", "#bv")
+	obj("VoltageLevel", "v2", "VoltageLevel.Substation", "#s2", "VoltageLevel.BaseVoltage", "#bv")
+	for _, cn := range []string{"ha", "hb", "m", "n", "c1", "c2"} {
+		obj("ConnectivityNode", cn, "ConnectivityNode.ConnectivityNodeContainer", "#v1")
+	}
+	obj("ConnectivityNode", "far", "ConnectivityNode.ConnectivityNodeContainer", "#v2")
+	for id, cn := range map[string]string{"BA": "ha", "BB": "hb"} {
+		obj("BusbarSection", id, "IdentifiedObject.name", id, "Equipment.EquipmentContainer", "#v1")
+		term(id, cn, 1)
+	}
+	sw := func(class, id, a, z string) {
+		obj(class, id, "IdentifiedObject.name", id, "Equipment.EquipmentContainer", "#v1", "Switch.normalOpen", "false")
+		term(id, a, 1)
+		term(id, z, 2)
+	}
+	sw("Disconnector", "DA", "ha", "m")
+	sw("Disconnector", "DB", "hb", "m")
+	sw("Breaker", "Q", "m", "n")
+	obj("ACLineSegment", "W1", "IdentifiedObject.name", "W1", "ConductingEquipment.BaseVoltage", "#bv")
+	term("W1", "n", 1)
+	term("W1", "far", 2)
+	sw("Disconnector", "DC1", "ha", "c1")
+	sw("Breaker", "QC", "c1", "c2")
+	sw("Disconnector", "DC2", "c2", "hb")
+	b.WriteString("</rdf:RDF>\n")
+	return b.String()
+}
+
+// TestAutoLayoutParallelBusbars: busbars sharing a bay are rows one under another over the same width; each bay
+// device on a busbar has a column of its own and drops straight onto its row; the breaker stands over them, the line
+// beyond it; the coupler comes first, above the busbars.
+func TestAutoLayoutParallelBusbars(t *testing.T) {
+	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}}
+	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection}
+	pages, err := ImportCIM([][]byte{[]byte(doubleBusEQ())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	at := map[string]Element{}
+	for _, e := range d.Elements {
+		at[e.Name] = e
+	}
+	ba, bb := at["BA"], at["BB"]
+	if len(ba.Points) != 2 || len(bb.Points) != 2 || ba.Points[0].X != bb.Points[0].X || ba.Points[1].X != bb.Points[1].X ||
+		ba.Points[0].Y >= bb.Points[0].Y {
+		t.Fatalf("busbars should be parallel rows, BA above BB: %v %v", ba.Points, bb.Points)
+	}
+	da, db, q := at["DA"], at["DB"], at["Q"]
+	if da.X == db.X || q.X <= min(da.X, db.X) || q.X >= max(da.X, db.X) {
+		t.Errorf("DA %v and DB %v should have columns of their own with Q %v between them", da.X, db.X, q.X)
+	}
+	if !(q.Y < da.Y && q.Y < db.Y && da.Y < ba.Points[0].Y && db.Y < ba.Points[0].Y) {
+		t.Errorf("the bay should stand above the busbars, Q over DA and DB: Q %v, DA %v, DB %v, BA %v", q.Y, da.Y, db.Y, ba.Points[0].Y)
+	}
+	if at["QC"].X >= min(da.X, db.X) || at["QC"].Y >= ba.Points[0].Y {
+		t.Errorf("the coupler should come first, above the busbars: QC %v, DA %v", at["QC"], da.X)
+	}
+	for _, c := range d.Connectors {
+		if c.Kind == KindOverheadLine && c.Name == "W1" {
+			if top := min(c.Points[0].Y, c.Points[len(c.Points)-1].Y); top >= q.Y {
+				t.Errorf("line W1 should leave above Q: %v", c.Points)
+			}
+		}
+		if c.Kind == KindBusWork && len(c.Points) > 4 {
+			t.Errorf("a bay needs no long runs: %v", c.Points)
+		}
+	}
+	n := terminalNodes(t, d)
+	for _, group := range [][]string{{"BA/1", "DA/1", "DC1/1"}, {"BB/1", "DB/1", "DC2/2"}, {"DA/2", "DB/2", "Q/1"}, {"Q/2", "W1/1"}} {
+		for _, k := range group {
+			if n[k] == "" || n[k] != n[group[0]] {
+				t.Errorf("%s should share %s's node: %v", k, group[0], n)
+			}
+		}
+	}
+}

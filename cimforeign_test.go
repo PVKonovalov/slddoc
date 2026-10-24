@@ -182,3 +182,34 @@ func TestImportCIMNodeStyleOverdrawnTerminal(t *testing.T) {
 		}
 	}
 }
+
+// TestImportCIMNodeStyleShortChainedDrawing draws QS's busbar terminal as a polyline stopping short of the busbar and
+// the rest as a short drawing of the busbar's node, end to end: unlike a junction bar it is kept, so that connection
+// needs no routing.
+func TestImportCIMNodeStyleShortChainedDrawing(t *testing.T) {
+	dl := strings.Replace(nodeStyleDL, `<cim:DiagramObjectPoint.xPosition>50</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>100</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>`,
+		`<cim:DiagramObjectPoint.xPosition>50</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>97</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>`, 1)
+	if dl == nodeStyleDL {
+		t.Fatal("QS's terminal polyline not found")
+	}
+	dl = strings.Replace(dl, "</rdf:RDF>", `  <cim:DiagramObject rdf:ID="_dshort"><cim:DiagramObject.Diagram rdf:resource="#_d"/><cim:DiagramObject.IdentifiedObject rdf:resource="#_cnb"/></cim:DiagramObject>
+  <cim:DiagramObjectPoint rdf:ID="_dshort_0"><cim:DiagramObjectPoint.DiagramObject rdf:resource="#_dshort"/><cim:DiagramObjectPoint.sequenceNumber>1</cim:DiagramObjectPoint.sequenceNumber><cim:DiagramObjectPoint.xPosition>50</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>97</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>
+  <cim:DiagramObjectPoint rdf:ID="_dshort_1"><cim:DiagramObjectPoint.DiagramObject rdf:resource="#_dshort"/><cim:DiagramObjectPoint.sequenceNumber>2</cim:DiagramObjectPoint.sequenceNumber><cim:DiagramObjectPoint.xPosition>50</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>100</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>
+</rdf:RDF>`, 1)
+	terminals := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "14": {{X: -10}, {X: 10}}}
+	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection, "14": ClassNonIntersection}
+	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(dl)}, CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// QB's connection to QS is drawn by no one either way; QS's to the busbar must not join it.
+	routed := ""
+	for _, m := range pages[0].Messages {
+		if strings.Contains(m, "routed automatically") {
+			routed = m
+		}
+	}
+	if !strings.HasPrefix(routed, "1 connections") {
+		t.Errorf("only QB's connection should be routed: %v", pages[0].Messages)
+	}
+}
