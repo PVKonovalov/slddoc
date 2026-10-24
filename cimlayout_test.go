@@ -2,6 +2,7 @@ package slddoc
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,14 @@ func TestAutoLayout(t *testing.T) {
 	for _, e := range d.Elements {
 		at[e.Name] = e
 	}
+	// Bands without a voltage level name are named after their voltage.
+	names := map[string]bool{}
+	for _, lb := range d.Labels {
+		names[lb.Text] = true
+	}
+	if !names["110 kV"] || !names["10 kV"] {
+		t.Errorf("bands should be named 110 kV and 10 kV: %+v", d.Labels)
+	}
 	// High voltage on top, the transformer between, the consumer at the bottom.
 	if !(at["B110"].Y < at["T1"].Y && at["T1"].Y < at["B10"].Y && at["B10"].Y < at["L1"].Y) {
 		t.Errorf("vertical order: B110 %v, T1 %v, B10 %v, L1 %v", at["B110"].Y, at["T1"].Y, at["B10"].Y, at["L1"].Y)
@@ -184,7 +193,7 @@ func doubleBusEQ() string {
 	obj("BaseVoltage", "bv", "BaseVoltage.nominalVoltage", "110")
 	obj("Substation", "s1", "IdentifiedObject.name", "S1")
 	obj("Substation", "s2", "IdentifiedObject.name", "S2")
-	obj("VoltageLevel", "v1", "VoltageLevel.Substation", "#s1", "VoltageLevel.BaseVoltage", "#bv")
+	obj("VoltageLevel", "v1", "IdentifiedObject.name", "S1_110", "VoltageLevel.Substation", "#s1", "VoltageLevel.BaseVoltage", "#bv")
 	obj("VoltageLevel", "v2", "VoltageLevel.Substation", "#s2", "VoltageLevel.BaseVoltage", "#bv")
 	for _, cn := range []string{"ha", "hb", "m", "n", "c1", "c2"} {
 		obj("ConnectivityNode", cn, "ConnectivityNode.ConnectivityNodeContainer", "#v1")
@@ -216,8 +225,8 @@ func doubleBusEQ() string {
 // device on a busbar has a column of its own and drops straight onto its row; the breaker stands over them, the line
 // beyond it; the coupler comes first, above the busbars.
 func TestAutoLayoutParallelBusbars(t *testing.T) {
-	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}}
-	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection}
+	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "14": {{X: -10}, {X: 10}}}
+	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection, "14": ClassNonIntersection}
 	pages, err := ImportCIM([][]byte{[]byte(doubleBusEQ())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +235,9 @@ func TestAutoLayoutParallelBusbars(t *testing.T) {
 	at := map[string]Element{}
 	for _, e := range d.Elements {
 		at[e.Name] = e
+		if e.Class == ClassNonIntersection {
+			t.Errorf("no wire jump where a bay crosses a busbar of its own voltage class: %+v", e)
+		}
 	}
 	ba, bb := at["BA"], at["BB"]
 	if len(ba.Points) != 2 || len(bb.Points) != 2 || ba.Points[0].X != bb.Points[0].X || ba.Points[1].X != bb.Points[1].X ||
@@ -252,6 +264,16 @@ func TestAutoLayoutParallelBusbars(t *testing.T) {
 			t.Errorf("a bay needs no long runs: %v", c.Points)
 		}
 	}
+	// The voltage level's name over its band, at its top left.
+	named := false
+	for _, lb := range d.Labels {
+		if lb.Text == "S1_110" {
+			named = lb.X <= ba.Points[0].X && lb.Y < q.Y
+		}
+	}
+	if !named {
+		t.Errorf("voltage level S1_110 should be named above its band at the left: %+v", d.Labels)
+	}
 	n := terminalNodes(t, d)
 	for _, group := range [][]string{{"BA/1", "DA/1", "DC1/1"}, {"BB/1", "DB/1", "DC2/2"}, {"DA/2", "DB/2", "Q/1"}, {"Q/2", "W1/1"}} {
 		for _, k := range group {
@@ -260,4 +282,46 @@ func TestAutoLayoutParallelBusbars(t *testing.T) {
 			}
 		}
 	}
+}
+
+// offTerminals lists the device ports whose Node lies off its terminal (within 20) where the Node is that port's
+// alone and only buswork reaches it: the editor's "connection points off their terminals" check.
+func offTerminals(d *Diagram, terms map[string][]Point) []string {
+	owners := map[int]int{}
+	for _, e := range d.Elements {
+		for _, p := range e.Ports {
+			owners[p.Node]++
+		}
+	}
+	busWorkOnly := map[int]bool{}
+	other := map[int]bool{}
+	for _, c := range d.Connectors {
+		for _, n := range []int{c.From, c.To} {
+			if c.Kind == KindBusWork {
+				busWorkOnly[n] = true
+			} else {
+				other[n] = true
+			}
+		}
+	}
+	at := map[int]Point{}
+	for _, n := range d.Nodes {
+		at[n.ID] = Point{X: n.X, Y: n.Y}
+	}
+	var out []string
+	for _, e := range d.Elements {
+		if e.Class == ClassBusBarSection {
+			continue
+		}
+		ts := symbolTerminals(&e, terms)
+		for i, p := range e.Ports {
+			if i >= len(ts) || owners[p.Node] != 1 || !busWorkOnly[p.Node] || other[p.Node] {
+				continue
+			}
+			if dd := math.Hypot(at[p.Node].X-ts[i].X, at[p.Node].Y-ts[i].Y); dd > 1e-6 && dd <= 20 {
+				out = append(out, fmt.Sprintf("%s #%d port %s by %g", e.Class, e.ID, p.Name, dd))
+			}
+		}
+	}
+	return out
 }

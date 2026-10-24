@@ -1,9 +1,11 @@
 package slddoc
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 var testCIMTerminals = map[string][]Point{
@@ -141,11 +143,21 @@ func terminal(id, eq, node, nodeKind string, seq int) string {
 }
 
 // The connections come from the model, never from the drawing: a foreign layout's wire of one node crossing
-// another's gets a wire jump, two busbar sections of one node touching end to end are joined, and a bus-branch
-// model's TopologicalNodes stand in for ConnectivityNodes.
+// another's gets a wire jump when their voltage classes differ (none when they match, as in manual drawing), two
+// busbar sections of one node touching end to end are joined, and a bus-branch model's TopologicalNodes stand in for
+// ConnectivityNodes.
 func TestImportCIMConnectionsFromModel(t *testing.T) {
-	for _, kind := range []string{"ConnectivityNode", "TopologicalNode"} {
-		eq := `<cim:` + kind + ` rdf:ID="a"/><cim:` + kind + ` rdf:ID="b"/>
+	for _, tc := range []struct {
+		kind, bVL string
+		jumps     int
+	}{{"ConnectivityNode", "v2", 1}, {"TopologicalNode", "v2", 1}, {"ConnectivityNode", "v1", 0}} {
+		kind := tc.kind
+		eq := `<cim:BaseVoltage rdf:ID="bv1"><cim:BaseVoltage.nominalVoltage>10</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:BaseVoltage rdf:ID="bv2"><cim:BaseVoltage.nominalVoltage>0.4</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v1"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv1"/></cim:VoltageLevel>
+<cim:VoltageLevel rdf:ID="v2"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv2"/></cim:VoltageLevel>
+<cim:` + kind + ` rdf:ID="a"><cim:` + kind + `.ConnectivityNodeContainer rdf:resource="#v1"/></cim:` + kind + `>
+<cim:` + kind + ` rdf:ID="b"><cim:` + kind + `.ConnectivityNodeContainer rdf:resource="#` + tc.bVL + `"/></cim:` + kind + `>
 <cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name></cim:BusbarSection>` + terminal("tb1", "B1", "a", kind, 1) + `
 <cim:BusbarSection rdf:ID="B2"><cim:IdentifiedObject.name>B2</cim:IdentifiedObject.name></cim:BusbarSection>` + terminal("tb2", "B2", "a", kind, 1) + `
 <cim:Breaker rdf:ID="Q1"><cim:IdentifiedObject.name>Q1</cim:IdentifiedObject.name></cim:Breaker>` + terminal("tq1", "Q1", "a", kind, 1) + terminal("tq2", "Q1", "b", kind, 2) + `
@@ -165,8 +177,8 @@ func TestImportCIMConnectionsFromModel(t *testing.T) {
 				jumps++
 			}
 		}
-		if jumps != 1 {
-			t.Errorf("%s: wire jumps = %d, want 1 where a's wire crosses b's", kind, jumps)
+		if jumps != tc.jumps {
+			t.Errorf("%s, b in %s: wire jumps = %d, want %d where a's wire crosses b's", kind, tc.bVL, jumps, tc.jumps)
 		}
 		n := terminalNodes(t, d)
 		if n["B1/1"] == "" || n["B1/1"] != n["B2/1"] || n["B1/1"] != n["Q1/1"] {
@@ -175,5 +187,95 @@ func TestImportCIMConnectionsFromModel(t *testing.T) {
 		if n["Q1/2"] == "" || n["Q1/2"] != n["L/1"] || n["Q1/2"] == n["Q1/1"] {
 			t.Errorf("%s: Q1/2 and L should share a node of their own: %v", kind, n)
 		}
+	}
+}
+
+// TestCIMJumpsAndJunctionsRoundTrip: a 110 kV wire leaving its busbar crosses a 10 kV busbar. As in manual drawing
+// it gets one wire jump, size step 1 over a busbar, and the busbar–buswork connection a junction point; exported to
+// CIM and imported back, the jump keeps its size (no port off its terminal) and no second junction point appears.
+func TestCIMJumpsAndJunctionsRoundTrip(t *testing.T) {
+	eq := `<cim:BaseVoltage rdf:ID="bv1"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:BaseVoltage rdf:ID="bv2"><cim:BaseVoltage.nominalVoltage>10</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v1"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv1"/></cim:VoltageLevel>
+<cim:VoltageLevel rdf:ID="v2"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv2"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v1"/></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="b"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v1"/></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="x"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v2"/></cim:ConnectivityNode>
+<cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v1"/></cim:BusbarSection>` +
+		terminal("tb1", "B1", "a", "ConnectivityNode", 1) + `
+<cim:BusbarSection rdf:ID="BX"><cim:IdentifiedObject.name>BX</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v2"/></cim:BusbarSection>` +
+		terminal("tbx", "BX", "x", "ConnectivityNode", 1) + `
+<cim:Breaker rdf:ID="Q1"><cim:IdentifiedObject.name>Q1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v1"/></cim:Breaker>` +
+		terminal("tq1", "Q1", "a", "ConnectivityNode", 1) + terminal("tq2", "Q1", "b", "ConnectivityNode", 2) + `
+<cim:EnergyConsumer rdf:ID="L"><cim:IdentifiedObject.name>L</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v1"/></cim:EnergyConsumer>` +
+		terminal("tl", "L", "b", "ConnectivityNode", 1)
+	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
+		dlObject("o1", "B1", 0, 0, 6, 0) + dlObject("o2", "BX", 0, 2, 6, 2) + dlObject("o3", "Q1", 1, 5) + dlObject("o4", "L", 1, 8) +
+		dlObject("o5", "a", 1, 0, 1, 4)
+	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}, "7": {{}}}
+	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection,
+		"7": ClassJunctionPoint}
+	opt := CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}
+	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	census := func(d *Diagram) (jumps []int, dots int) {
+		for _, e := range d.Elements {
+			switch e.Class {
+			case ClassNonIntersection:
+				jumps = append(jumps, e.Scale)
+			case ClassJunctionPoint:
+				dots++
+			}
+		}
+		return jumps, dots
+	}
+	d := pages[0].Diagram
+	jumps, dots := census(d)
+	if !slices.Equal(jumps, []int{1}) || dots != 1 {
+		t.Fatalf("imported: wire jump size steps %v, junction points %d; want [1] and 1", jumps, dots)
+	}
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	back, err := ImportCIM([][]byte{out.EQ, out.DL}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jumps2, dots2 := census(back[0].Diagram); !slices.Equal(jumps2, jumps) || dots2 != dots {
+		t.Errorf("round trip: wire jumps %v -> %v, junction points %d -> %d", jumps, jumps2, dots, dots2)
+	}
+	if off := offTerminals(back[0].Diagram, terms); len(off) > 0 {
+		t.Errorf("round trip: ports off their terminals: %v", off)
+	}
+}
+
+// TestCIMOneJumpPerCrossing: two buswork wires of different voltage classes crossing mid-way get one wire jump, in
+// the first of them; the other passes through its gap, as in manual drawing.
+func TestCIMOneJumpPerCrossing(t *testing.T) {
+	eq := `<cim:BaseVoltage rdf:ID="bv1"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:BaseVoltage rdf:ID="bv2"><cim:BaseVoltage.nominalVoltage>10</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v1"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv1"/></cim:VoltageLevel>
+<cim:VoltageLevel rdf:ID="v2"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv2"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v1"/></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="b"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v2"/></cim:ConnectivityNode>`
+	for _, l := range [][2]string{{"L1", "a"}, {"L2", "a"}, {"L3", "b"}, {"L4", "b"}} {
+		eq += `<cim:EnergyConsumer rdf:ID="` + l[0] + `"><cim:IdentifiedObject.name>` + l[0] + `</cim:IdentifiedObject.name></cim:EnergyConsumer>` +
+			terminal("t"+l[0], l[0], l[1], "ConnectivityNode", 1)
+	}
+	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
+		dlObject("o1", "L1", 0, 5) + dlObject("o2", "L2", 10, 5) + dlObject("o3", "L3", 5, 0) + dlObject("o4", "L4", 5, 10) +
+		dlObject("o5", "a", 0, 5, 10, 5) + dlObject("o6", "b", 5, 0, 5, 10)
+	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumps := 0
+	for _, e := range pages[0].Diagram.Elements {
+		if e.Class == ClassNonIntersection {
+			jumps++
+		}
+	}
+	if jumps != 1 {
+		t.Errorf("wire jumps = %d, want 1 at the crossing", jumps)
 	}
 }

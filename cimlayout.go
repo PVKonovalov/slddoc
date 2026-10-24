@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // Auto-layout for a CIM model without a Diagram Layout: one page per Substation, plus one for equipment outside
@@ -19,7 +20,7 @@ import (
 // and a coupler (no feeder) go above the busbars; the rest below. Transformers sit on a row between the band of their
 // highest winding and the next, linked through corridors. The layout is written as ordinary DiagramObjects of a
 // generated Diagram, so page builds it like any other layout, wiring included. A voltage level without a busbar
-// hangs its bays off its busiest node instead.
+// hangs its bays off its busiest node instead. Each band is labelled with its voltage level's name.
 
 const (
 	layoutColumns = 6 // grid steps between bay columns
@@ -733,6 +734,11 @@ func (l *cimLayout) layout() {
 	maxX := margin
 	rows := map[string]float64{}
 	for _, b := range bands {
+		// The voltage level's name over its band, as PowSyBl writes it.
+		if o, name := l.vlName(b.vl); o != nil {
+			l.text(o, name, Point{X: margin, Y: y + g})
+		}
+		y += 2 * g
 		b.top = y + float64(b.upLinks+1)*g
 		b.busY = b.top + float64(b.upDepth)*levelH + 2*g
 		last := b.busY + float64(max(b.rows-1, 0))*busGap
@@ -767,6 +773,25 @@ func (l *cimLayout) layout() {
 		y = rows[b.vl] + 13*g
 	}
 	l.transformers(trs, rows, y, maxX, colW)
+}
+
+// vlName is the object and name to label voltage level key vl with: the VoltageLevel's name, else its base voltage
+// ("110 kV"); nil for none.
+func (l *cimLayout) vlName(vl string) (*cimObject, string) {
+	o := l.im.objs[vl]
+	if o == nil {
+		o = l.im.objs[strings.TrimPrefix(vl, "bv:")]
+	}
+	if o == nil {
+		return nil, ""
+	}
+	if name := o.get("name"); name != "" && o.class == "VoltageLevel" {
+		return o, name
+	}
+	if kv := l.vlKV[vl]; kv > 0 {
+		return o, strconv.FormatFloat(kv, 'f', -1, 64) + " kV"
+	}
+	return nil, ""
 }
 
 // cellLinks counts the links cell c takes through a corridor: transformers and rings.

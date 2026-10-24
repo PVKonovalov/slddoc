@@ -799,7 +799,7 @@ func (b *cimPageBuilder) element(obj, do *cimObject) {
 	var drawn []Point
 	if b.own && !cimAuxiliaryClasses[obj.class] {
 		drawn = b.terminalPoints(obj, class)
-		b.fit(&e, drawn, true)
+		b.fit(&e, drawn, true, false)
 	} else if b.foreign && !cimAuxiliaryClasses[obj.class] && class != ClassBusBarSection {
 		b.baseOrient[e.ID] = e.Orient
 		b.faced[e.ID] = b.face(&e, b.terminalPoints(obj, class))
@@ -886,18 +886,34 @@ func (b *cimPageBuilder) wireEndsNear(cn string, at Point) []Point {
 
 // fit sets e's mirror and lead spacing so its terminals land on targets: target i on terminal i when ordered (a
 // zero target is ignored), else each target on its nearest terminal. Nothing changes unless some setting fits
-// within a unit. The size step stays 0: a drawn terminal point that matches another step is usually a port Node
-// lying off its terminal, and the port goes there anyway.
-func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered bool) {
+// within a unit. The size step stays 0 for a device: a drawn terminal point that matches another step is usually a
+// port Node lying off its terminal, and the port goes there anyway. With steps (a wire jump or junction), a size step
+// that puts every terminal on a target comes first: such an element is sized to the gap its wire leaves (a jump over
+// a busbar is a step larger).
+func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered, steps bool) {
 	if len(targets) == 0 {
 		return
 	}
-	worst := func(probe *Element) float64 {
+	// worst is how far the farthest target lies from its terminal; byTerminal, the farthest terminal from a target.
+	worst := func(probe *Element, byTerminal bool) float64 {
 		ts := symbolTerminals(probe, b.im.opt.Terminals)
 		if len(ts) == 0 {
 			return math.Inf(1)
 		}
+		nearest := func(p Point, among []Point) float64 {
+			best := math.Inf(1)
+			for _, q := range among {
+				best = math.Min(best, math.Hypot(q.X-p.X, q.Y-p.Y))
+			}
+			return best
+		}
 		w := 0.0
+		if byTerminal {
+			for _, t := range ts {
+				w = math.Max(w, nearest(t, targets))
+			}
+			return w
+		}
 		for i, p := range targets {
 			if ordered {
 				if p == (Point{}) || i >= len(ts) {
@@ -906,11 +922,7 @@ func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered bool) {
 				w = math.Max(w, math.Hypot(ts[i].X-p.X, ts[i].Y-p.Y))
 				continue
 			}
-			best := math.Inf(1)
-			for _, t := range ts {
-				best = math.Min(best, math.Hypot(t.X-p.X, t.Y-p.Y))
-			}
-			w = math.Max(w, best)
+			w = math.Max(w, nearest(p, ts))
 		}
 		return w
 	}
@@ -918,17 +930,34 @@ func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered bool) {
 	if HasLeads(e.Shape) && len(targets) >= 2 && targets[0] != (Point{}) && targets[1] != (Point{}) {
 		spans = append(spans, math.Round(math.Hypot(targets[0].X-targets[1].X, targets[0].Y-targets[1].Y)))
 	}
-	best, bestErr := *e, worst(e)
-	for _, mirror := range []bool{false, true} {
-		for _, span := range spans {
-			probe := *e
-			probe.Scale, probe.Mirror, probe.Span = 0, mirror, span
-			if w := worst(&probe); w < bestErr-1e-9 {
-				best, bestErr = probe, w
+	search := func(scales []int, byTerminal bool) (Element, float64) {
+		best, bestErr := *e, worst(e, byTerminal)
+		for _, scale := range scales {
+			for _, mirror := range []bool{false, true} {
+				for _, span := range spans {
+					probe := *e
+					probe.Scale, probe.Mirror, probe.Span = scale, mirror, span
+					if w := worst(&probe, byTerminal); w < bestErr-1e-9 {
+						best, bestErr = probe, w
+					}
+				}
 			}
 		}
+		return best, bestErr
 	}
-	if bestErr <= 1 {
+	if steps && UsesSizeStep(e.Class) {
+		scales := []int{0}
+		for s := minSizeStep; s <= maxSizeStep; s++ {
+			if s != 0 {
+				scales = append(scales, s)
+			}
+		}
+		if best, err := search(scales, true); err <= 1 {
+			*e = best
+			return
+		}
+	}
+	if best, err := search([]int{0}, false); err <= 1 {
 		*e = best
 	}
 }
@@ -970,7 +999,7 @@ func (b *cimPageBuilder) joinPending() {
 				near = append(near, a.at)
 			}
 		}
-		b.fit(e, near, false)
+		b.fit(e, near, false, pd.optional)
 		ts := symbolTerminals(e, b.im.opt.Terminals)
 		used := map[int]bool{}
 		for k, t := range ts {
@@ -1379,6 +1408,56 @@ func (b *cimPageBuilder) wireNodes() {
 			}
 		}
 	}
+	b.junctionPoints()
+}
+
+// junctionPoints puts a junction point (shape 7) on every Node where a buswork wire meets a busbar's port, unless
+// one is there already, with the busbar's voltage class and layer: the rule of manual drawing
+// (diagramOps.addJunctionPoints).
+func (b *cimPageBuilder) junctionPoints() {
+	shape := ""
+	for code, c := range b.im.opt.Classes {
+		if c == ClassJunctionPoint && (shape == "" || code == "7" || shape != "7" && code < shape) {
+			shape = code
+		}
+	}
+	if shape == "" {
+		return
+	}
+	busOf := map[int]*Element{}
+	dotted := map[int]bool{}
+	dotAt := map[Point]bool{}
+	for i := range b.d.Elements {
+		e := &b.d.Elements[i]
+		for _, p := range e.Ports {
+			switch e.Class {
+			case ClassBusBarSection:
+				if busOf[p.Node] == nil {
+					busOf[p.Node] = e
+				}
+			case ClassJunctionPoint:
+				dotted[p.Node] = true
+			}
+		}
+		if e.Class == ClassJunctionPoint {
+			dotAt[roundPt(Point{X: e.X, Y: e.Y})] = true
+		}
+	}
+	wired := map[int]bool{}
+	for _, c := range b.d.Connectors {
+		if c.Kind == KindBusWork {
+			wired[c.From], wired[c.To] = true, true
+		}
+	}
+	for _, n := range b.d.Nodes {
+		bus := busOf[n.ID]
+		if bus == nil || !wired[n.ID] || dotted[n.ID] || dotAt[roundPt(Point{X: n.X, Y: n.Y})] {
+			continue
+		}
+		b.d.Elements = append(b.d.Elements, Element{ID: b.take(), Class: ClassJunctionPoint, Shape: shape, Layer: bus.Layer,
+			Voltage: bus.Voltage, X: n.X, Y: n.Y, Ports: []Port{{Name: "1", Node: n.ID}}})
+		b.report.Elements++
+	}
 }
 
 // touchesOwn reports whether p lies on a busbar (other than busbar self) or a wire of ConnectivityNode cn.
@@ -1491,61 +1570,38 @@ func (b *cimPageBuilder) splitAtJunctions() {
 	}
 }
 
-// addJumps puts a wire jump (shape 14) into a wire wherever, in a foreign or generated layout, it crosses or touches
-// the drawing of another ConnectivityNode, so the two don't look connected: the wire is cut around the spot and its pieces end
-// on the jump's ports. A jump over a busbar is size step 1. A spot too near a bend, an end or the previous jump for
-// the jump to fit on one straight run, and a terminal on another node's busbar, are only counted in the messages.
+// addJumps puts a wire jump (shape 14) into a buswork wire where, in a foreign or generated layout, it crosses a
+// busbar, another buswork wire, an overhead or cable line or a link to object of a different voltage class: the rules
+// of manual drawing (diagramOps.addCrossingJumps). The wire is cut around the crossing and its pieces end on the
+// jump's ports; a jump over a busbar is size step 1. Each crossing gets one jump: a line already cut there is not cut
+// again. A crossing too near a bend, an end or the previous jump for the jump to fit on one straight run is only
+// counted in the messages.
 func (b *cimPageBuilder) addJumps() {
 	type obstacle struct {
-		segs [][2]Point
-		ends []Point
-		cn   [2]string
-		step int
+		segs    [][2]Point
+		voltage int
+		step    int
 	}
 	var obs []obstacle
 	for _, c := range b.d.Connectors {
-		o := obstacle{ends: []Point{c.Points[0], c.Points[len(c.Points)-1]}, cn: b.connCN[c.ID]}
+		if c.Voltage == 0 || c.Kind != KindBusWork && c.Kind != KindOverheadLine && c.Kind != KindCableLine && c.Kind != KindLinkToObject {
+			continue
+		}
+		o := obstacle{voltage: c.Voltage}
 		for k := 1; k < len(c.Points); k++ {
 			o.segs = append(o.segs, [2]Point{c.Points[k-1], c.Points[k]})
 		}
 		obs = append(obs, o)
 	}
-	busbarTouches := 0
 	for _, e := range b.d.Elements {
-		pc := b.portCN[e.ID]
-		if e.Class == ClassBusBarSection {
-			if len(pc) > 0 {
-				o := obstacle{cn: [2]string{pc[0], pc[0]}, step: 1}
-				for k := 1; k < len(e.Points); k++ {
-					o.segs = append(o.segs, [2]Point{e.Points[k-1], e.Points[k]})
-				}
-				obs = append(obs, o)
-			}
+		if e.Class != ClassBusBarSection || e.Voltage == 0 {
 			continue
 		}
-		ts := b.portAt[e.ID]
-		if ts == nil {
-			ts = symbolTerminals(&e, b.im.opt.Terminals)
+		o := obstacle{voltage: e.Voltage, step: 1}
+		for k := 1; k < len(e.Points); k++ {
+			o.segs = append(o.segs, [2]Point{e.Points[k-1], e.Points[k]})
 		}
-		for k, p := range ts {
-			cn := ""
-			if k < len(pc) {
-				cn = pc[k]
-			}
-			p = roundPt(p)
-			obs = append(obs, obstacle{ends: []Point{p}, cn: [2]string{cn, cn}})
-			for _, bus := range b.d.Elements {
-				if bus.Class != ClassBusBarSection || len(b.portCN[bus.ID]) == 0 || b.portCN[bus.ID][0] == cn {
-					continue
-				}
-				for j := 1; j < len(bus.Points); j++ {
-					if onSeg(p, bus.Points[j-1], bus.Points[j]) {
-						busbarTouches++
-						break
-					}
-				}
-			}
-		}
+		obs = append(obs, o)
 	}
 	half := func(step int) float64 {
 		probe := Element{Class: ClassNonIntersection, Shape: "14", Scale: step}
@@ -1565,10 +1621,11 @@ func (b *cimPageBuilder) addJumps() {
 		step  int
 	}
 	jumps, skipped := 0, 0
+	cut := map[Point]bool{} // crossings already taken by a jump
 	for i := 0; i < len(b.d.Connectors); i++ {
 		w := b.d.Connectors[i]
 		cn := b.connCN[w.ID][0]
-		if w.Kind != KindBusWork || cn == "" {
+		if w.Kind != KindBusWork || cn == "" || w.Voltage == 0 {
 			continue
 		}
 		var hits []hit
@@ -1576,17 +1633,12 @@ func (b *cimPageBuilder) addJumps() {
 		for k := 1; k < len(w.Points); k++ {
 			a, z := w.Points[k-1], w.Points[k]
 			for _, o := range obs {
-				if o.cn[0] == cn || o.cn[1] == cn {
+				if o.voltage == w.Voltage {
 					continue
 				}
 				for _, sg := range o.segs {
-					if at, ok := properCrossing(a, z, sg[0], sg[1]); ok {
+					if at, ok := properCrossing(a, z, sg[0], sg[1]); ok && !cut[at] {
 						hits = append(hits, hit{k - 1, at, along + math.Hypot(at.X-a.X, at.Y-a.Y), o.step})
-					}
-				}
-				for _, p := range o.ends {
-					if onSeg(p, a, z) && p != a && p != z {
-						hits = append(hits, hit{k - 1, p, along + math.Hypot(p.X-a.X, p.Y-a.Y), o.step})
 					}
 				}
 			}
@@ -1622,11 +1674,12 @@ func (b *cimPageBuilder) addJumps() {
 			if len(ts) != 2 {
 				continue
 			}
+			cut[h.at] = true
 			near, far := roundPt(ts[0]), roundPt(ts[1])
 			if math.Hypot(far.X-a.X, far.Y-a.Y) < math.Hypot(near.X-a.X, near.Y-a.Y) {
 				near, far = far, near
 			}
-			b.portAt[j.ID] = []Point{near, far}
+			b.portAt[j.ID] = []Point{roundPt(ts[0]), roundPt(ts[1])} // port i on terminal i; the wire meets them by point
 			b.portCN[j.ID] = []string{cn, cn}
 			b.d.Elements = append(b.d.Elements, j)
 			piece := w
@@ -1653,10 +1706,10 @@ func (b *cimPageBuilder) addJumps() {
 		i += len(pieces) - 1
 	}
 	if jumps > 0 {
-		b.messages = append(b.messages, fmt.Sprintf("%d wire jumps mark where the layout makes unconnected wires cross or touch", jumps))
+		b.messages = append(b.messages, fmt.Sprintf("%d wire jumps mark where wires of different voltage classes cross", jumps))
 	}
-	if skipped+busbarTouches > 0 {
-		b.messages = append(b.messages, fmt.Sprintf("%d places where the layout makes unconnected items touch had no room for a wire jump; they are not connected", skipped+busbarTouches))
+	if skipped > 0 {
+		b.messages = append(b.messages, fmt.Sprintf("%d places where wires of different voltage classes cross had no room for a wire jump; they are not connected", skipped))
 	}
 }
 
