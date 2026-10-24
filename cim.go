@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/xml"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -46,7 +47,9 @@ type CIMOptions struct {
 //   - "shorted": a switch or line has both ends on one node and is left out;
 //   - "windings": a transformer has 4 windings, which some tools (PowSyBl among them) can't read;
 //   - "guessedVoltage": nothing on or around the item has a voltage, so it was given its substation's (or the
-//     diagram's) most common one.
+//     diagram's) most common one;
+//   - "mrid": an mRID the item keeps (its own, a terminal's or a winding's) is another item's too, or unfit for an
+//     rdf:ID, and a new one was given.
 type CIMWarning struct {
 	Kind   string   `json:"kind"`
 	Item   string   `json:"item"`
@@ -304,11 +307,12 @@ func (o *rdfObject) enum(name, value string) *rdfObject {
 }
 
 type cimExporter struct {
-	d    *Diagram
-	opt  CIMOptions
-	eq   []*rdfObject
-	dl   []*rdfObject
-	warn []CIMWarning
+	d     *Diagram
+	opt   CIMOptions
+	fixed map[string]string // object key → the mRID the diagram keeps for it (see fixMRIDs)
+	eq    []*rdfObject
+	dl    []*rdfObject
+	warn  []CIMWarning
 
 	nodes    map[int]Node
 	parent   map[int]int
@@ -368,6 +372,7 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 	}
 	x.subParent, x.subName, x.subs, x.vls, x.badClass = map[int]int{}, map[int]string{}, map[int]string{}, map[[2]int]string{}, map[int]bool{}
 	x.joinNodes()
+	x.fixMRIDs()
 	x.containers()
 	x.substations()
 	x.diagram = x.id("diagram")
@@ -406,13 +411,83 @@ func (x *cimExporter) modelName() string {
 	return x.opt.Name[strings.LastIndex(x.opt.Name, "/")+1:]
 }
 
-// mrid is a name-based (version 5) UUID of the diagram's name and key, so an object keeps its mRID across
-// exports.
+// mrid is the mRID the diagram keeps for the object with the given key (an imported one), else a name-based
+// (version 5) UUID of the diagram's name and key, so an object keeps its mRID across exports.
 func (x *cimExporter) mrid(key string) string {
+	if m, ok := x.fixed[key]; ok {
+		return m
+	}
 	h := sha1.Sum([]byte("sld-editor/cim\x00" + x.opt.Name + "\x00" + key))
 	h[6] = h[6]&0x0f | 0x50
 	h[8] = h[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+}
+
+var mridRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// fixMRIDs takes the mRIDs the diagram keeps (Element.MRID and the like, from a CIM import) for the objects they
+// stand for: an element's equipment, Terminals and PowerTransformerEnds, a line's or link's equipment and
+// Terminals, and a ConnectivityNode whose Nodes keep one mRID between them (Nodes added since keep none; Nodes
+// of several joined since keep several, and then it gets a new one). One taken already, or not fit for an rdf:ID, is left to a derived one, with a "mrid" warning
+// for its element or connector.
+func (x *cimExporter) fixMRIDs() {
+	x.fixed = map[string]string{}
+	taken := map[string]bool{}
+	take := func(key, m string) bool {
+		if m == "" {
+			return true
+		}
+		if taken[m] || !mridRe.MatchString(m) {
+			return false
+		}
+		taken[m] = true
+		x.fixed[key] = m
+		return true
+	}
+	for _, e := range x.d.Elements {
+		key := fmt.Sprintf("el:%d", e.ID)
+		ok := take(key, e.MRID)
+		for i, p := range sortedPorts(e) {
+			ok = take(fmt.Sprintf("%s:t:%d", key, i+1), p.MRID) && ok
+		}
+		for i, w := range e.Windings {
+			ok = take(fmt.Sprintf("%s:end:%d", key, i+1), w.MRID) && ok
+		}
+		if !ok {
+			x.warnf("mrid", "element", e.ID)
+		}
+	}
+	for _, c := range x.d.Connectors {
+		key := fmt.Sprintf("line:%d", c.ID)
+		if c.Kind == KindLinkToObject {
+			key = fmt.Sprintf("link:%d", c.ID)
+		}
+		ok := take(key, c.MRID)
+		ok = take(key+":t:1", c.FromMRID) && ok
+		ok = take(key+":t:2", c.ToMRID) && ok
+		if !ok {
+			x.warnf("mrid", "connector", c.ID)
+		}
+	}
+	kept := map[int]map[string]bool{}
+	for _, n := range x.d.Nodes {
+		r := x.find(n.ID)
+		if n.MRID == "" {
+			continue
+		}
+		if kept[r] == nil {
+			kept[r] = map[string]bool{}
+		}
+		kept[r][n.MRID] = true
+	}
+	roots := slices.Sorted(maps.Keys(kept))
+	for _, r := range roots {
+		if len(kept[r]) == 1 {
+			for m := range kept[r] {
+				take(fmt.Sprintf("cn:%d", r), m)
+			}
+		}
+	}
 }
 
 // id is the rdf:ID of the object with the given key.

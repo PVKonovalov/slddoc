@@ -28,20 +28,20 @@ func cimDiagram() *Diagram {
 		},
 		Elements: []Element{
 			{ID: 1, Class: ClassBusBarSection, Shape: "24", Name: "B1", Voltage: 1,
-				Points: []Point{{0, 0}, {100, 0}}, Ports: []Port{{"1", 10}, {"2", 11}}},
-			{ID: 2, Class: ClassCurrentTransformer, Shape: "34", Voltage: 1, X: 50, Y: 30, Ports: []Port{{"1", 12}, {"2", 13}}},
+				Points: []Point{{0, 0}, {100, 0}}, Ports: []Port{{Name: "1", Node: 10}, {Name: "2", Node: 11}}},
+			{ID: 2, Class: ClassCurrentTransformer, Shape: "34", Voltage: 1, X: 50, Y: 30, Ports: []Port{{Name: "1", Node: 12}, {Name: "2", Node: 13}}},
 			{ID: 3, Class: ClassBreaker, Shape: "41", Name: "Q1", Voltage: 1, X: 50, Y: 80, Orient: -90, State: &open,
-				Ports: []Port{{"1", 14}, {"2", 15}}, Electrical: &Electrical{RatedCurrent: new(1250.0)}},
+				Ports: []Port{{Name: "1", Node: 14}, {Name: "2", Node: 15}}, Electrical: &Electrical{RatedCurrent: new(1250.0)}},
 			{ID: 4, Class: ClassPowerTransformer, Shape: "47", Name: "T1", X: 50, Y: 120,
-				Ports: []Port{{"1", 15}, {"2", 16}},
+				Ports: []Port{{Name: "1", Node: 15}, {Name: "2", Node: 16}},
 				Windings: []TransformerWinding{
 					{Voltage: 1, Scheme: SchemeWyeN, RatedU: new(115.0), RatedS: new(25.0), R: new(2.5), X: new(55.0), G: new(0.0), B: new(0.0)},
 					{Voltage: 2, Scheme: SchemeDelta, PhaseAngleClock: new(11)},
 				}},
 			{ID: 5, Class: ClassKnifeSwitch3, Shape: "175", Name: "S1", Voltage: 1, X: 200, Y: 10, State: &closed,
-				Ports: []Port{{"1", 18}, {"2", 19}, {"3", 20}}},
+				Ports: []Port{{Name: "1", Node: 18}, {Name: "2", Node: 19}, {Name: "3", Node: 20}}},
 			{ID: 6, Class: ClassRectangle, Shape: "3", Points: []Point{{0, 0}, {10, 10}}},
-			{ID: 7, Class: ClassThyristor, Shape: "157", Ports: []Port{{"1", 19}}},
+			{ID: 7, Class: ClassThyristor, Shape: "157", Ports: []Port{{Name: "1", Node: 19}}},
 		},
 		Connectors: []Connector{
 			{ID: 30, Kind: KindBusWork, Voltage: 1, From: 11, To: 12, Points: []Point{{100, 0}, {50, 20}}},
@@ -263,12 +263,12 @@ func TestExportCIMClassChoice(t *testing.T) {
 		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}},
 		Nodes:          []Node{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5}},
 		Elements: []Element{
-			{ID: 10, Class: ClassLoad, Shape: "330001", Voltage: 1, CIM: "NonConformLoad", Ports: []Port{{"1", 1}},
+			{ID: 10, Class: ClassLoad, Shape: "330001", Voltage: 1, CIM: "NonConformLoad", Ports: []Port{{Name: "1", Node: 1}},
 				Electrical: &Electrical{P: new(1.5)}},
-			{ID: 11, Class: ClassSynchronousMotor, Shape: "39", Voltage: 1, CIM: "Breaker", Ports: []Port{{"1", 2}}},
-			{ID: 12, Class: ClassStaticVarCompensator, Shape: "330003", Voltage: 1, Ports: []Port{{"1", 3}}},
-			{ID: 13, Class: ClassReactorShunt, Shape: "397", Voltage: 1, CIM: "PetersenCoil", Ports: []Port{{"1", 4}}},
-			{ID: 14, Class: ClassNetworkInfeed, Shape: "330002", Voltage: 1, Ports: []Port{{"1", 5}}},
+			{ID: 11, Class: ClassSynchronousMotor, Shape: "39", Voltage: 1, CIM: "Breaker", Ports: []Port{{Name: "1", Node: 2}}},
+			{ID: 12, Class: ClassStaticVarCompensator, Shape: "330003", Voltage: 1, Ports: []Port{{Name: "1", Node: 3}}},
+			{ID: 13, Class: ClassReactorShunt, Shape: "397", Voltage: 1, CIM: "PetersenCoil", Ports: []Port{{Name: "1", Node: 4}}},
+			{ID: 14, Class: ClassNetworkInfeed, Shape: "330002", Voltage: 1, Ports: []Port{{Name: "1", Node: 5}}},
 		},
 	}
 	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
@@ -311,8 +311,8 @@ func TestExportCIMObjectLink(t *testing.T) {
 		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}},
 		Nodes:          []Node{{ID: 1, X: 0, Y: 0}, {ID: 2, X: 0, Y: 40}, {ID: 3, X: 0, Y: 100}, {ID: 4, X: 100, Y: 40}, {ID: 5, X: 100, Y: 100}, {ID: 6, X: 200, Y: 100}, {ID: 7, X: 100, Y: 140}},
 		Elements: []Element{
-			{ID: 10, Class: ClassBreaker, Shape: "41", Name: "Q1", Voltage: 1, X: 0, Y: 20, Ports: []Port{{"1", 1}, {"2", 2}}},
-			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "Q2", Voltage: 1, X: 200, Y: 80, Ports: []Port{{"1", 6}, {"2", 6}}},
+			{ID: 10, Class: ClassBreaker, Shape: "41", Name: "Q1", Voltage: 1, X: 0, Y: 20, Ports: []Port{{Name: "1", Node: 1}, {Name: "2", Node: 2}}},
+			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "Q2", Voltage: 1, X: 200, Y: 80, Ports: []Port{{Name: "1", Node: 6}, {Name: "2", Node: 6}}},
 		},
 		Connectors: []Connector{
 			{ID: 20, Kind: KindLinkToObject, Name: "Load A", Voltage: 1, From: 2, To: 3, Points: []Point{{0, 40}, {0, 100}},
@@ -384,10 +384,10 @@ func TestExportCIMVoltageFromNeighbours(t *testing.T) {
 		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}, {ID: 2, Name: "coral"}},
 		Nodes:          []Node{{ID: 1}, {ID: 2}, {ID: 3}},
 		Elements: []Element{
-			{ID: 10, Class: ClassBusBarSection, Shape: "24", Name: "B", Voltage: 1, Points: []Point{{0, 0}, {10, 0}}, Ports: []Port{{"1", 1}}},
-			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "Q", Voltage: 2, Ports: []Port{{"1", 1}, {"2", 2}}},
-			{ID: 12, Class: ClassDisconnector, Shape: "162", Name: "D", Ports: []Port{{"1", 2}, {"2", 3}}},
-			{ID: 13, Class: ClassLoad, Shape: "330001", Name: "L", Ports: []Port{{"1", 3}}},
+			{ID: 10, Class: ClassBusBarSection, Shape: "24", Name: "B", Voltage: 1, Points: []Point{{0, 0}, {10, 0}}, Ports: []Port{{Name: "1", Node: 1}}},
+			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "Q", Voltage: 2, Ports: []Port{{Name: "1", Node: 1}, {Name: "2", Node: 2}}},
+			{ID: 12, Class: ClassDisconnector, Shape: "162", Name: "D", Ports: []Port{{Name: "1", Node: 2}, {Name: "2", Node: 3}}},
+			{ID: 13, Class: ClassLoad, Shape: "330001", Name: "L", Ports: []Port{{Name: "1", Node: 3}}},
 		},
 	}
 	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
@@ -451,8 +451,8 @@ func TestCIMClassTable(t *testing.T) {
 	d := &Diagram{
 		Nodes: []Node{{ID: 1}, {ID: 2}, {ID: 3, Y: 10}, {ID: 4}, {ID: 5}},
 		Elements: []Element{
-			{ID: 10, Class: ClassDisconnector, Shape: "162", Name: "D1", Ports: []Port{{"1", 1}, {"2", 2}}},
-			{ID: 11, Class: ClassBreaker, Shape: "43", Name: "Q43", Ports: []Port{{"1", 4}, {"2", 5}}},
+			{ID: 10, Class: ClassDisconnector, Shape: "162", Name: "D1", Ports: []Port{{Name: "1", Node: 1}, {Name: "2", Node: 2}}},
+			{ID: 11, Class: ClassBreaker, Shape: "43", Name: "Q43", Ports: []Port{{Name: "1", Node: 4}, {Name: "2", Node: 5}}},
 		},
 		Connectors: []Connector{{ID: 20, Kind: KindLinkToObject, Name: "W", From: 2, To: 3, Points: []Point{{0, 0}, {0, 10}}}},
 	}
@@ -487,8 +487,8 @@ func TestExportCIMSubstations(t *testing.T) {
 		VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV"}},
 		Nodes:          []Node{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5}},
 		Elements: []Element{
-			{ID: 10, Class: ClassBreaker, Shape: "41", Name: "QA", Voltage: 1, Ports: []Port{{"1", 1}, {"2", 2}}},
-			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "QB", Voltage: 1, Ports: []Port{{"1", 3}, {"2", 4}}},
+			{ID: 10, Class: ClassBreaker, Shape: "41", Name: "QA", Voltage: 1, Ports: []Port{{Name: "1", Node: 1}, {Name: "2", Node: 2}}},
+			{ID: 11, Class: ClassBreaker, Shape: "41", Name: "QB", Voltage: 1, Ports: []Port{{Name: "1", Node: 3}, {Name: "2", Node: 4}}},
 		},
 		Connectors: []Connector{
 			{ID: 20, Kind: KindOverheadLine, Name: "AB", Voltage: 1, From: 2, To: 3, Points: []Point{{0, 0}, {10, 0}}},

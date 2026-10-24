@@ -904,9 +904,10 @@ func (r *repairer) joinPortNodes(id int) {
 			}
 			second := r.takeID()
 			first := c
-			first.To, first.Points = node.ID, before
+			first.To, first.Points, first.ToMRID = node.ID, before, ""
 			tail := c
 			tail.ID, tail.Name, tail.From, tail.Points = second, defaultConnectorName(c.Kind, second, c.Name), node.ID, after
+			tail.MRID, tail.FromMRID = "", ""
 			split = append(split, first, tail)
 			touched[c.ID] = true
 		}
@@ -1170,12 +1171,13 @@ func (r *repairer) splitWireAt(c Connector, k int, at Point, nodeID int) {
 	for i := range d.Connectors {
 		if d.Connectors[i].ID == c.ID {
 			first := c
-			first.To, first.Points = nodeID, simplifyPath(joinPoints(c.Points[:k+1], at))
+			first.To, first.Points, first.ToMRID = nodeID, simplifyPath(joinPoints(c.Points[:k+1], at)), ""
 			d.Connectors[i] = first
 		}
 	}
 	tail := c
 	tail.ID, tail.Name, tail.From, tail.Electrical = second, defaultConnectorName(c.Kind, second, c.Name), nodeID, nil
+	tail.MRID, tail.FromMRID = "", ""
 	tail.Points = simplifyPath(joinPoints([]Point{at}, c.Points[k+1:]...))
 	d.Connectors = append(d.Connectors, tail)
 }

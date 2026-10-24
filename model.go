@@ -124,6 +124,8 @@ type Node struct {
 	ID int     `xml:"id,attr" json:"id"`
 	X  float64 `xml:"x,attr" json:"x"`
 	Y  float64 `xml:"y,attr" json:"y"`
+	// MRID is the CIM ConnectivityNode it came from (see Element.MRID).
+	MRID string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
 }
 
 // Port is one electrical terminal of an Element, in the element's own local
@@ -131,6 +133,8 @@ type Node struct {
 type Port struct {
 	Name string `xml:"name,attr" json:"name"`
 	Node int    `xml:"node,attr" json:"node"`
+	// MRID is the CIM Terminal it came from (see Element.MRID).
+	MRID string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
 }
 
 // Class names an Element's real-world equipment kind, independent of the
@@ -909,6 +913,9 @@ type Element struct {
 	// CIM is the CIM class this element stands for when its Class allows more than one (see CIMClasses);
 	// empty means the default.
 	CIM string `xml:"cim,attr,omitempty" json:"cim,omitempty"`
+	// MRID is the IdentifiedObject.mRID of the CIM equipment it was imported from, kept so a CIM export gives it
+	// the same identity; empty for items drawn here (or copied), which get one derived from the diagram.
+	MRID string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
 }
 
 // SubstationSector is one sector of a Substation pictogram: Voltage
@@ -989,6 +996,8 @@ type TransformerWinding struct {
 	// on; empty falls back to this winding's own conventional default for
 	// the transformer's winding count (see defaultTerminal in render.go).
 	Terminal TerminalDirection `xml:"terminal,attr,omitempty" json:"terminal,omitempty"`
+	// MRID is the CIM PowerTransformerEnd it came from (see Element.MRID).
+	MRID string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
 
 	// The winding's nameplate parameters, named as CIM's PowerTransformerEnd:
 	// rated voltage (kV) and power (MVA), series resistance/reactance (Ω),
@@ -1088,6 +1097,11 @@ type Connector struct {
 	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
 	// CIM is the CIM class a LinkToObject exports as (see ConnectorCIMClasses); empty means the default.
 	CIM string `xml:"cim,attr,omitempty" json:"cim,omitempty"`
+	// MRID is the CIM equipment (an AC line segment, a consumer or source) it came from, and FromMRID/ToMRID its
+	// Terminals at From and To (see Element.MRID).
+	MRID     string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
+	FromMRID string `xml:"fromMrid,attr,omitempty" json:"fromMrid,omitempty"`
+	ToMRID   string `xml:"toMrid,attr,omitempty" json:"toMrid,omitempty"`
 }
 
 // Point is one X,Y coordinate in the diagram's own coordinate space.

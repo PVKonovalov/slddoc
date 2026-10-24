@@ -28,6 +28,7 @@ type CIMImportOptions struct {
 	Classes    map[string]Class
 	Grid       float64
 	CIMClasses CIMClassTable // which CIM classes a shape stands for (nil: the built-in lists)
+	AutoLayout bool          // lay the equipment out automatically even when the documents hold a diagram layout
 }
 
 // CIMPage is one imported diagram: Title is the DL Diagram's name, Report counts what was made (Skipped by CIM
@@ -37,7 +38,17 @@ type CIMPage struct {
 	Diagram  *Diagram
 	Report   Report
 	Messages []string
+	Layout   CIMLayoutKind
 }
+
+// CIMLayoutKind says who drew a page: this editor's export, another tool's diagram layout, or the automatic layout.
+type CIMLayoutKind string
+
+const (
+	CIMLayoutOwn       CIMLayoutKind = "own"
+	CIMLayoutForeign   CIMLayoutKind = "foreign"
+	CIMLayoutGenerated CIMLayoutKind = "generated"
+)
 
 // ErrNoDiagramLayout is returned when the documents hold nothing to draw: no DL Diagram that places any equipment and
 // no equipment to lay out.
@@ -76,6 +87,12 @@ func cimRef(s string) string {
 	return strings.TrimPrefix(s, "_")
 }
 
+// cimGeneralClasses are abstract CIM classes a profile may describe an object by instead of its own.
+var cimGeneralClasses = map[string]bool{"IdentifiedObject": true, "PowerSystemResource": true, "Equipment": true,
+	"ConductingEquipment": true, "ACDCTerminal": true, "RegulatingCondEq": true, "RotatingMachine": true,
+	"ShuntCompensator": true, "TapChanger": true, "OperationalLimit": true, "ConnectivityNodeContainer": true,
+	"EquipmentContainer": true}
+
 // parseCIM reads RDF/XML documents into one object store, merging objects that several profiles describe.
 func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
 	objs := map[string]*cimObject{}
@@ -102,10 +119,10 @@ func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
 					if strings.Contains(tk.Name.Space, "ModelDescription") || strings.Contains(tk.Name.Space, "rdf-syntax") {
 						continue
 					}
-					id := ""
+					id, defines := "", false
 					for _, a := range tk.Attr {
 						if a.Name.Local == "ID" || a.Name.Local == "about" {
-							id = cimRef(a.Value)
+							id, defines = cimRef(a.Value), a.Name.Local == "ID"
 						}
 					}
 					if id == "" {
@@ -116,7 +133,9 @@ func parseCIM(docs [][]byte) (map[string]*cimObject, error) {
 						o = &cimObject{id: id, props: map[string][]string{}}
 						objs[id] = o
 					}
-					if o.class == "" {
+					// Another profile may describe an object by a general class (SSH's Equipment.inService of a busbar):
+					// the defining rdf:ID's class wins, and a specific one over a general one, whatever the order.
+					if o.class == "" || defines || cimGeneralClasses[o.class] && !cimGeneralClasses[tk.Name.Local] {
 						o.class = tk.Name.Local
 					}
 					cur = o
@@ -303,7 +322,7 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 		sort.SliceStable(list, func(i, j int) bool { return seq(list[i]) < seq(list[j]) })
 	}
 	diagrams := im.byClass["Diagram"]
-	if len(diagrams) == 0 {
+	if len(diagrams) == 0 || opt.AutoLayout {
 		diagrams = im.autoLayout()
 	}
 	var pages []CIMPage
@@ -357,8 +376,9 @@ type cimPageBuilder struct {
 	foreign    bool             // neither own nor synthetic: drawn by another tool
 	termDrawn  map[string]Point // Terminal id → where a foreign layout draws it (its polyline's device end)
 	termWires  []cimTermWire
-	faced      map[int]bool // element id → turned to face the terminals its layout draws
-	baseOrient map[int]int  // element id → its orientation in the layout, before turning to face its terminals
+	faced      map[int]bool   // element id → turned to face the terminals its layout draws
+	nodeCN     map[int]string // Node id → the ConnectivityNode it stands for
+	baseOrient map[int]int    // element id → its orientation in the layout, before turning to face its terminals
 }
 
 // cimTermWire is a Terminal a foreign layout draws as a polyline: wire idx of node cn, its device end first or last.
@@ -490,14 +510,26 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 	b.finishKnives()
 	b.joinPending()
 	b.wireNodes()
+	b.identities()
 	b.labels(dos)
+	if b.foreign && !slices.ContainsFunc(dos, func(do *cimObject) bool { return do.class == "TextDiagramObject" }) {
+		if n := b.nameLabels(); n > 0 {
+			b.messages = append(b.messages, fmt.Sprintf("the layout writes no names: %d labels added from the equipment's names", n))
+		}
+	}
 	b.d.LastID = b.nextID
 	b.report.Nodes = len(b.d.Nodes)
 	title := dg.get("name")
 	if title == "" {
 		title = "diagram"
 	}
-	return CIMPage{Title: title, Diagram: b.d, Report: b.report, Messages: b.messages}, true
+	kind := CIMLayoutForeign
+	if b.own {
+		kind = CIMLayoutOwn
+	} else if b.synthetic {
+		kind = CIMLayoutGenerated
+	}
+	return CIMPage{Title: title, Diagram: b.d, Report: b.report, Messages: b.messages, Layout: kind}, true
 }
 
 // transform sets the page's coordinate mapping: y flipped for a y-up diagram; a layout this editor exported (its
@@ -514,7 +546,11 @@ func (b *cimPageBuilder) transform(dg *cimObject, dos []*cimObject) {
 				b.d.Width, b.d.Height = math.Max(b.d.Width, x+10*b.im.opt.Grid), math.Max(b.d.Height, y+6*b.im.opt.Grid)
 			}
 		}
-		b.messages = append(b.messages, "the file has no diagram layout: laid out automatically from the connections")
+		if len(b.im.byClass["Diagram"]) > 0 {
+			b.messages = append(b.messages, "the file's diagram layout set aside: laid out automatically from the connections")
+		} else {
+			b.messages = append(b.messages, "the file has no diagram layout: laid out automatically from the connections")
+		}
 		return
 	}
 	flip := strings.HasSuffix(dg.get("orientation"), "positive")
@@ -1343,6 +1379,7 @@ func (b *cimPageBuilder) wireNodes() {
 	}
 	nodes := map[key]int{}
 	nodeCN := map[int]string{}
+	b.nodeCN = nodeCN
 	node := func(cn string, p Point) int {
 		p = roundPt(p)
 		if id, ok := nodes[key{cn, p}]; ok && cn != "" {
@@ -1896,6 +1933,196 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		routed++
 	}
 	return routed
+}
+
+// mridOf is CIM object o's mRID: its IdentifiedObject.mRID, else its id without the leading "_".
+func mridOf(o *cimObject) string {
+	if m := o.get("mRID"); m != "" {
+		return m
+	}
+	return strings.TrimPrefix(o.id, "_")
+}
+
+// identities gives every item drawn for a CIM object that object's mRID, so an export keeps it: an element its
+// equipment's (and each port its Terminal's, each winding its PowerTransformerEnd's), a line or link its own and its
+// ends' Terminals', a Node its ConnectivityNode's. A changeover knife switch, two Disconnectors in one element, keeps
+// none.
+func (b *cimPageBuilder) identities() {
+	objsOf := map[int][]*cimObject{}
+	for id, item := range b.itemOf {
+		if o := b.im.objs[id]; o != nil && !isNode(o) {
+			objsOf[item] = append(objsOf[item], o)
+		}
+	}
+	terms := func(o *cimObject) []string {
+		var out []string
+		for _, t := range b.im.terminals[o.id] {
+			out = append(out, mridOf(t))
+		}
+		return out
+	}
+	for i := range b.d.Elements {
+		e := &b.d.Elements[i]
+		objs := objsOf[e.ID]
+		if len(objs) != 1 {
+			continue
+		}
+		o := objs[0]
+		e.MRID = mridOf(o)
+		ts := terms(o)
+		if e.Class == ClassPowerTransformer {
+			ts = ts[:0]
+			for k, end := range b.im.transformerEnds(o) {
+				if k < len(e.Windings) {
+					e.Windings[k].MRID = mridOf(end)
+				}
+				t := ""
+				if to := b.im.objs[end.get("Terminal")]; to != nil {
+					t = mridOf(to)
+				}
+				ts = append(ts, t)
+			}
+		}
+		if cimAuxiliaryClasses[o.class] {
+			continue
+		}
+		for k := range e.Ports {
+			if k < len(ts) && (e.Class != ClassBusBarSection || k == 0) {
+				e.Ports[k].MRID = ts[k]
+			}
+		}
+	}
+	for i := range b.d.Connectors {
+		c := &b.d.Connectors[i]
+		objs := objsOf[c.ID]
+		if len(objs) != 1 {
+			continue
+		}
+		o := objs[0]
+		c.MRID = mridOf(o)
+		ts := b.im.terminals[o.id]
+		if len(ts) > 0 {
+			c.FromMRID = mridOf(ts[0])
+		}
+		if len(ts) > 1 {
+			c.ToMRID = mridOf(ts[1])
+			if ends := b.connCN[c.ID]; ends[0] != ts[0].get("ConnectivityNode") && ends[0] == ts[1].get("ConnectivityNode") {
+				c.FromMRID, c.ToMRID = c.ToMRID, c.FromMRID
+			}
+		}
+	}
+	for i := range b.d.Nodes {
+		if o := b.im.objs[b.nodeCN[b.d.Nodes[i].ID]]; o != nil && o.class == "ConnectivityNode" {
+			b.d.Nodes[i].MRID = mridOf(o)
+		}
+	}
+}
+
+// nameLabels labels each named device, busbar and line with its name, as the automatic layout places them: beside an
+// upright device, over a lying one, over a busbar's first end and beside a line's longest run; a name that would
+// overlap one already placed, or a busbar, steps away from its item a line-height at a time, then the same ending
+// at its item. Returns how many.
+func (b *cimPageBuilder) nameLabels() int {
+	g := b.im.opt.Grid
+	box := func(at Point, text string) [4]float64 {
+		return [4]float64{at.X, at.Y - 10, at.X + 6*float64(len([]rune(text))), at.Y + 2}
+	}
+	var placed [][4]float64
+	named := map[int]bool{}
+	for _, l := range b.d.Labels {
+		named[l.For] = true
+		placed = append(placed, box(Point{X: l.X, Y: l.Y}, l.Text))
+	}
+	for _, e := range b.d.Elements {
+		for i := 1; e.Class == ClassBusBarSection && i < len(e.Points); i++ {
+			p, q := e.Points[i-1], e.Points[i]
+			placed = append(placed, [4]float64{math.Min(p.X, q.X) - 2, math.Min(p.Y, q.Y) - 2, math.Max(p.X, q.X) + 2, math.Max(p.Y, q.Y) + 2})
+		}
+	}
+	n := 0
+	// add places text at the first of at, at+step, at+2·step… (then at−step… when back is set) clear of the others.
+	add := func(item, layer int, at, step Point, back bool, text string) {
+		if named[item] {
+			return
+		}
+		pick, found := at, false
+		w := 6 * float64(len([]rune(text)))
+		for _, dx := range []float64{0, 2*g - w} {
+			for k := range 12 {
+				m := float64(k)
+				if back {
+					m = float64((k + 1) / 2)
+					if k%2 == 0 {
+						m = -m
+					}
+				}
+				cand := at.add(Point{X: dx + step.X*m, Y: step.Y * m})
+				if !slices.ContainsFunc(placed, func(o [4]float64) bool { return overlaps(o, box(cand, text)) }) {
+					pick, found = cand, true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		placed = append(placed, box(pick, text))
+		b.d.Labels = append(b.d.Labels, Label{ID: b.take(), For: item, Layer: layer, X: pick.X, Y: pick.Y, Size: 10, Text: text})
+		b.report.Labels++
+		n++
+	}
+	up, down := Point{Y: -1.5 * g}, Point{Y: 1.5 * g}
+	for _, e := range b.d.Elements {
+		if e.Name == "" {
+			continue
+		}
+		if e.Class == ClassBusBarSection {
+			if len(e.Points) < 2 {
+				continue
+			}
+			a, z := e.Points[0], e.Points[len(e.Points)-1]
+			if math.Abs(z.X-a.X) >= math.Abs(z.Y-a.Y) {
+				add(e.ID, e.Layer, Point{X: math.Min(a.X, z.X), Y: a.Y - g}, up, false, e.Name)
+			} else {
+				add(e.ID, e.Layer, Point{X: a.X + g, Y: math.Min(a.Y, z.Y) - g}, up, false, e.Name)
+			}
+			continue
+		}
+		x1, y1, x2, y2 := 0.0, 0.0, 0.0, 0.0
+		for i, t := range symbolTerminals(&e, b.im.opt.Terminals) {
+			if i == 0 {
+				x1, y1, x2, y2 = t.X, t.Y, t.X, t.Y
+			}
+			x1, y1, x2, y2 = math.Min(x1, t.X), math.Min(y1, t.Y), math.Max(x2, t.X), math.Max(y2, t.Y)
+		}
+		switch {
+		case x2-x1 > y2-y1:
+			add(e.ID, e.Layer, Point{X: e.X - g, Y: math.Min(y1, e.Y) - 2*g}, up, false, e.Name)
+		case e.Class == ClassPowerTransformer:
+			add(e.ID, e.Layer, Point{X: e.X + 5*g, Y: e.Y}, down, true, e.Name)
+		default:
+			add(e.ID, e.Layer, Point{X: e.X + 2*g, Y: e.Y}, down, true, e.Name)
+		}
+	}
+	for _, c := range b.d.Connectors {
+		if c.Name == "" || len(c.Points) < 2 || c.Kind == KindBusWork {
+			continue
+		}
+		k := 1
+		for i := 2; i < len(c.Points); i++ {
+			if pathLength(c.Points[i-1:i+1]) > pathLength(c.Points[k-1:k+1]) {
+				k = i
+			}
+		}
+		a, z := c.Points[k-1], c.Points[k]
+		mid := Point{X: (a.X + z.X) / 2, Y: (a.Y + z.Y) / 2}
+		if math.Abs(z.X-a.X) >= math.Abs(z.Y-a.Y) {
+			add(c.ID, c.Layer, Point{X: mid.X, Y: mid.Y - g}, up, true, c.Name)
+		} else {
+			add(c.ID, c.Layer, Point{X: mid.X + g, Y: mid.Y}, down, true, c.Name)
+		}
+	}
+	return n
 }
 
 // labels turns TextDiagramObjects into labels, linked to the item they name.

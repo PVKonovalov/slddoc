@@ -1,6 +1,7 @@
 package slddoc
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -278,5 +279,154 @@ func TestCIMOneJumpPerCrossing(t *testing.T) {
 	}
 	if jumps != 1 {
 		t.Errorf("wire jumps = %d, want 1 at the crossing", jumps)
+	}
+}
+
+// TestCIMNamesWithoutTexts: a foreign layout that writes no texts gets each named device and busbar labelled with
+// its name, two names that would overlap one over the other; one that writes a text keeps just its own. The pages
+// tell who drew them, and AutoLayout lays the same documents out automatically.
+func TestCIMNamesWithoutTexts(t *testing.T) {
+	eq := `<cim:BaseVoltage rdf:ID="bv"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="b"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>BUS1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:BusbarSection>` +
+		terminal("tb", "B1", "a", "ConnectivityNode", 1) + `
+<cim:Breaker rdf:ID="Q1"><cim:IdentifiedObject.name>BREAKER1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:Breaker>` +
+		terminal("tq1", "Q1", "a", "ConnectivityNode", 1) + terminal("tq2", "Q1", "b", "ConnectivityNode", 2) + `
+<cim:Breaker rdf:ID="Q2"><cim:IdentifiedObject.name>BREAKER2</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:Breaker>` +
+		terminal("tq3", "Q2", "b", "ConnectivityNode", 1) + terminal("tq4", "Q2", "a", "ConnectivityNode", 2)
+	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
+		dlObject("o1", "B1", 0, 0, 10, 0) + dlObject("o2", "Q1", 2, 4) + dlObject("o3", "Q2", 3, 4)
+	opt := CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}
+	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages[0].Layout != CIMLayoutForeign {
+		t.Errorf("layout = %q, want foreign", pages[0].Layout)
+	}
+	byText := map[string]Label{}
+	for _, l := range pages[0].Diagram.Labels {
+		byText[l.Text] = l
+	}
+	for _, name := range []string{"BUS1", "BREAKER1", "BREAKER2"} {
+		if _, ok := byText[name]; !ok {
+			t.Errorf("no label %q in %+v", name, pages[0].Diagram.Labels)
+		}
+	}
+	if a, b := byText["BREAKER1"], byText["BREAKER2"]; a.Y == b.Y && math.Abs(a.X-b.X) < 6*float64(len(a.Text)) {
+		t.Errorf("names overlap: %+v %+v", a, b)
+	}
+
+	text := `<cim:TextDiagramObject rdf:ID="x"><cim:DiagramObject.Diagram rdf:resource="#d"/><cim:DiagramObject.IdentifiedObject rdf:resource="#Q1"/><cim:TextDiagramObject.text>Q1</cim:TextDiagramObject.text></cim:TextDiagramObject>` +
+		`<cim:DiagramObjectPoint rdf:ID="xp"><cim:DiagramObjectPoint.DiagramObject rdf:resource="#x"/><cim:DiagramObjectPoint.xPosition>2</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>3</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>`
+	pages, err = ImportCIM([][]byte{cimDoc(eq), cimDoc(dl + text)}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(pages[0].Diagram.Labels); n != 1 {
+		t.Errorf("a layout with its own texts keeps them alone: %d labels", n)
+	}
+
+	opt.AutoLayout = true
+	pages, err = ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages[0].Layout != CIMLayoutGenerated {
+		t.Errorf("auto layout = %q, want generated", pages[0].Layout)
+	}
+}
+
+// TestCIMKeepsMRIDs: an import keeps the mRIDs of the equipment, its terminals and connectivity nodes, and an
+// export writes them back; a copy that kept one gets a new one and a warning, and Nodes joined from two
+// connectivity nodes make a new one.
+func TestCIMKeepsMRIDs(t *testing.T) {
+	eq := `<cim:BaseVoltage rdf:ID="bv"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="_a"><cim:IdentifiedObject.mRID>node-a</cim:IdentifiedObject.mRID><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="_b"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:BusbarSection rdf:ID="_B1"><cim:IdentifiedObject.mRID>bus-1</cim:IdentifiedObject.mRID><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:BusbarSection>` +
+		terminal("_tb", "_B1", "_a", "ConnectivityNode", 1) + `
+<cim:Breaker rdf:ID="_Q1"><cim:IdentifiedObject.mRID>breaker-1</cim:IdentifiedObject.mRID><cim:IdentifiedObject.name>Q1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:Breaker>` +
+		terminal("_tq1", "_Q1", "_a", "ConnectivityNode", 1) + terminal("_tq2", "_Q1", "_b", "ConnectivityNode", 2) + `
+<cim:EnergyConsumer rdf:ID="_L"><cim:IdentifiedObject.name>L</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:EnergyConsumer>` +
+		terminal("_tl", "_L", "_b", "ConnectivityNode", 1)
+	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
+		dlObject("o1", "_B1", 0, 0, 10, 0) + dlObject("o2", "_Q1", 2, 4) + dlObject("o3", "_L", 2, 8)
+	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}}
+	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad}
+	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	byName := map[string]Element{}
+	for _, e := range d.Elements {
+		byName[e.Name] = e
+	}
+	q := byName["Q1"]
+	if q.MRID != "breaker-1" || byName["B1"].MRID != "bus-1" || byName["L"].MRID != "L" {
+		t.Fatalf("element mRIDs: %q %q %q", q.MRID, byName["B1"].MRID, byName["L"].MRID)
+	}
+	if len(q.Ports) != 2 || q.Ports[0].MRID != "tq1" || q.Ports[1].MRID != "tq2" {
+		t.Errorf("Q1 ports: %+v", q.Ports)
+	}
+	nodeMRIDs := map[string]bool{}
+	for _, n := range d.Nodes {
+		nodeMRIDs[n.MRID] = true
+	}
+	if !nodeMRIDs["node-a"] || !nodeMRIDs["b"] {
+		t.Errorf("node mRIDs: %v", nodeMRIDs)
+	}
+
+	out := string(ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ)
+	for _, id := range []string{"breaker-1", "bus-1", "L", "tq1", "tq2", "tb", "tl", "node-a", "b"} {
+		if !strings.Contains(out, `rdf:ID="_`+id+`"`) || !strings.Contains(out, "<cim:IdentifiedObject.mRID>"+id+"<") {
+			t.Errorf("export lacks mRID %q", id)
+		}
+	}
+
+	// A copy of Q1 that kept its mRIDs.
+	cp := q
+	cp.ID = d.LastID + 1
+	cp.Ports = []Port{{Name: "1", Node: q.Ports[0].Node, MRID: "tq1"}, {Name: "2", Node: q.Ports[1].Node, MRID: "tq2"}}
+	copied := *d
+	copied.Elements = append(slices.Clone(d.Elements), cp)
+	exp := ExportCIM(&copied, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	if !slices.ContainsFunc(exp.Warnings, func(w CIMWarning) bool { return w.Kind == "mrid" && w.ID == cp.ID }) {
+		t.Errorf("the copy should be warned about: %+v", exp.Warnings)
+	}
+	if n := strings.Count(string(exp.EQ), `rdf:ID="_breaker-1"`); n != 1 {
+		t.Errorf("breaker-1 written %d times", n)
+	}
+
+	// The two connectivity nodes joined by a wire.
+	joined := *d
+	joined.Connectors = append(slices.Clone(d.Connectors), Connector{ID: d.LastID + 2, Kind: KindBusWork,
+		From: q.Ports[0].Node, To: q.Ports[1].Node, Points: []Point{{}, {}}})
+	if out := string(ExportCIM(&joined, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ); strings.Contains(out, `rdf:ID="_node-a"`) {
+		t.Error("joined nodes keep no mRID")
+	}
+}
+
+// TestCIMClassFromAnyOrder: another profile describing an object by a general class (an SSH file's
+// Equipment.inService of a busbar), read before the EQ that defines it, leaves it the class EQ gives.
+func TestCIMClassFromAnyOrder(t *testing.T) {
+	ssh := cimDoc(`<cim:Equipment rdf:about="#B1"><cim:Equipment.inService>true</cim:Equipment.inService></cim:Equipment>`)
+	eq := cimDoc(`<cim:BaseVoltage rdf:ID="bv"><cim:BaseVoltage.nominalVoltage>110</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:BusbarSection>` +
+		terminal("tb", "B1", "a", "ConnectivityNode", 1))
+	for _, docs := range [][][]byte{{eq, ssh}, {ssh, eq}} {
+		pages, err := ImportCIM(docs, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(pages[0].Diagram.Elements, func(e Element) bool { return e.Class == ClassBusBarSection }) {
+			t.Errorf("the busbar is lost when SSH comes first: %+v", pages[0].Diagram.Elements)
+		}
 	}
 }

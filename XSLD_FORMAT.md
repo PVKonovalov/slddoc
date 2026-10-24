@@ -157,6 +157,7 @@ the same node id is electrically connected — this is the whole topology model.
 |---|---|---|---|
 | `id` | int | yes | Node id |
 | `x`, `y` | number | yes | Position of the junction (informational: used for display/editing, not for connectivity) |
+| `mrid` | string | no | The CIM ConnectivityNode it was imported from (see §4.9) |
 
 ### 4.4 `<elements>` / `<element>`
 
@@ -180,6 +181,7 @@ decorative shape (rectangle, line, table, ...).
 | `scale` | int | no | xsde2svg size step: the symbol template is drawn √2^`scale` times its library size about the anchor, stroke width unchanged; a terminal (tx,ty) sits at (int(tx·√2^s), int(ty·√2^s)). Only for template-drawn classes (`UsesSizeStep`); 0 = library size. Extract sets it for lead shapes (from the drawn body); for the rest the editor infers it on SVG import from where the ports sit |
 | `span` | number | no | Lead shapes only (breakers 41, load-break switch 42, disconnectors 71/162, 163, 164, 166, fuse 203, 399 — `HasLeads`): distance between the two terminals in diagram units. The leads are drawn out to ±`span`/2 along the local y axis; the body keeps its size step. 0 = the library's spacing at that step. Extract reads it from the two port points |
 | `cim` | string | no | The CIM class the element exports as, when its class allows more than one (see §7.1); absent = the default |
+| `mrid` | string | no | The `IdentifiedObject.mRID` of the CIM equipment it was imported from (see §4.9) |
 
 **Children**
 
@@ -199,6 +201,7 @@ decorative shape (rectangle, line, table, ...).
 |---|---|---|
 | `name` | string | Terminal name: `"1"`, `"2"`, ... in order |
 | `node` | id → `node` | The node this terminal is connected to |
+| `mrid` | string | The CIM Terminal it was imported from (a busbar: its first port only; see §4.9) |
 
 Decorative shapes (Rectangle, Arrow, Circle, Line, Polygon, Arc, Road, Button, WindowIcon, PostPole,
 Table, Table2, PowerflowIndicator) never have ports. See §5 for how ports
@@ -219,6 +222,7 @@ A drawn wire: a polyline whose two ends are nodes.
 | `dashed` | bool | no | Draw dashed |
 | `lineStyle` | enum | no | `CableLine` only: `solid`, `dashed` (default), `dashDot`, `dotted` |
 | `cim` | string | no | `LinkToObject` only: the CIM class it exports as, `EnergyConsumer` (default, absent) or `EnergySource` |
+| `mrid`, `fromMrid`, `toMrid` | string | no | `OverheadLine`/`CableLine`/`LinkToObject`: the CIM equipment it was imported from, and its Terminals at `from` and `to` (see §4.9) |
 | `from` | id → `node` | yes | Node at the first point |
 | `to` | id → `node` | yes | Node at the last point |
 
@@ -277,6 +281,24 @@ the client) and keeps only the most recent entries. Not rendered.
 ```xml
 <revision time="2026-10-15T10:42:07Z" ip="10.0.3.41"/>
 ```
+
+### 4.9 CIM identities — `mrid`
+
+A CIM import (slddoc `ImportCIM`) writes the `IdentifiedObject.mRID` of what each item stands for, or the
+object's `rdf:ID` without its leading `_` when it has none: on an element (its equipment), a port (its Terminal),
+a winding (its PowerTransformerEnd), a line or link (its equipment, and `fromMrid`/`toMrid` its Terminals) and a
+node (its ConnectivityNode; never a bus-branch model's TopologicalNode). A changeover knife switch, two
+Disconnectors in one element, keeps none.
+
+The CIM export writes each object it makes for such an item with that mRID and `rdf:ID="_<mrid>"`; one that is
+already taken (a copy that kept it) or is not of letters, digits, `.`, `_` and `-` gets the usual derived one, and
+the export notes it (`mrid`). A ConnectivityNode takes the mRID its Nodes keep when they keep exactly one between
+them (Nodes added since keep none); joined ones keep several and get a derived one. Containers, base voltages and
+everything else the export derives get derived mRIDs.
+
+Items drawn in the editor have no `mrid`. Copying (paste, duplicate, a custom element, "Save as custom element")
+drops it, and splitting a line leaves the equipment and its `from` Terminal with the first piece and its `to`
+Terminal with the second.
 
 ## 5. Topology
 
@@ -415,8 +437,9 @@ larger side.
 | `r`, `x` | Series resistance and reactance (Ω) |
 | `g`, `b` | Magnetizing conductance and susceptance (S) |
 | `phaseAngleClock` | Vector group clock number, 0–11 |
+| `mrid` | The CIM PowerTransformerEnd it was imported from (see §4.9) |
 
-The last five rows are nameplate parameters (CIM `PowerTransformerEnd`); like
+The `ratedU` … `phaseAngleClock` rows are nameplate parameters (CIM `PowerTransformerEnd`); like
 §6.6, each is optional.
 
 ### 6.5 Table2 (313) — grid
