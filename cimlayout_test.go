@@ -3,6 +3,7 @@ package slddoc
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -368,5 +369,114 @@ func arranged(t *testing.T, eq string) {
 				t.Errorf("T1 winding %s should have a straight lead: %v", p.Name, c.Points)
 			}
 		}
+	}
+}
+
+// TestAutoLayoutGeneratorsUnderTransformers: three step-up transformers on adjacent 110 kV bays, each feeding a 10 kV
+// voltage level of its own with a long name. The bays are narrower than the transformers, so these spread out and
+// their leads from the bays turn without crossing; the 10 kV levels stay together on one row, each straight under its
+// transformer.
+func TestAutoLayoutGeneratorsUnderTransformers(t *testing.T) {
+	var b strings.Builder
+	obj := func(class, id string, props ...string) {
+		fmt.Fprintf(&b, "<cim:%s rdf:ID=\"_%s\">", class, id)
+		for i := 0; i+1 < len(props); i += 2 {
+			if strings.HasPrefix(props[i+1], "#") {
+				fmt.Fprintf(&b, "<cim:%s rdf:resource=\"#_%s\"/>", props[i], props[i+1][1:])
+			} else {
+				fmt.Fprintf(&b, "<cim:%s>%s</cim:%s>", props[i], props[i+1], props[i])
+			}
+		}
+		fmt.Fprintf(&b, "</cim:%s>\n", class)
+	}
+	term := func(eq, cn string, seq int) {
+		obj("Terminal", fmt.Sprintf("t-%s-%d", eq, seq), "Terminal.ConductingEquipment", "#"+eq,
+			"Terminal.ConnectivityNode", "#"+cn, "ACDCTerminal.sequenceNumber", fmt.Sprint(seq))
+	}
+	b.WriteString(`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">` + "\n")
+	obj("BaseVoltage", "bv110", "BaseVoltage.nominalVoltage", "110")
+	obj("BaseVoltage", "bv10", "BaseVoltage.nominalVoltage", "10")
+	obj("Substation", "s1", "IdentifiedObject.name", "S1")
+	obj("VoltageLevel", "hv", "IdentifiedObject.name", "S1_110", "VoltageLevel.Substation", "#s1", "VoltageLevel.BaseVoltage", "#bv110")
+	obj("ConnectivityNode", "h", "ConnectivityNode.ConnectivityNodeContainer", "#hv")
+	obj("BusbarSection", "B110", "IdentifiedObject.name", "B110", "Equipment.EquipmentContainer", "#hv")
+	term("B110", "h", 1)
+	for k := 1; k <= 3; k++ {
+		n := fmt.Sprint(k)
+		obj("VoltageLevel", "g"+n, "IdentifiedObject.name", "GENERATOR_"+n+"_BUS", "VoltageLevel.Substation", "#s1",
+			"VoltageLevel.BaseVoltage", "#bv10")
+		obj("ConnectivityNode", "c"+n, "ConnectivityNode.ConnectivityNodeContainer", "#hv")
+		obj("ConnectivityNode", "n"+n, "ConnectivityNode.ConnectivityNodeContainer", "#g"+n)
+		obj("Breaker", "Q"+n, "IdentifiedObject.name", "Q"+n, "Equipment.EquipmentContainer", "#hv", "Switch.normalOpen", "false")
+		term("Q"+n, "h", 1)
+		term("Q"+n, "c"+n, 2)
+		obj("PowerTransformer", "T"+n, "IdentifiedObject.name", "T"+n+"_STEP_UP", "Equipment.EquipmentContainer", "#s1")
+		term("T"+n, "c"+n, 1)
+		term("T"+n, "n"+n, 2)
+		obj("PowerTransformerEnd", "T"+n+"e1", "PowerTransformerEnd.PowerTransformer", "#T"+n, "TransformerEnd.Terminal",
+			"#t-T"+n+"-1", "TransformerEnd.endNumber", "1", "TransformerEnd.BaseVoltage", "#bv110")
+		obj("PowerTransformerEnd", "T"+n+"e2", "PowerTransformerEnd.PowerTransformer", "#T"+n, "TransformerEnd.Terminal",
+			"#t-T"+n+"-2", "TransformerEnd.endNumber", "2", "TransformerEnd.BaseVoltage", "#bv10")
+		obj("EnergyConsumer", "G"+n, "IdentifiedObject.name", "G"+n, "Equipment.EquipmentContainer", "#g"+n)
+		term("G"+n, "n"+n, 1)
+	}
+	b.WriteString("</rdf:RDF>\n")
+
+	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}}
+	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection}
+	pages, err := ImportCIM([][]byte{[]byte(b.String())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	var gens []float64
+	var up [][]Point
+	for _, e := range d.Elements {
+		if e.Class == ClassNonIntersection {
+			t.Errorf("nothing should cross: wire jump %+v", e)
+		}
+		if e.Class == ClassLoad {
+			gens = append(gens, e.X)
+		}
+		if e.Class != ClassPowerTransformer {
+			continue
+		}
+		for _, p := range e.Ports {
+			for _, c := range d.Connectors {
+				if c.From != p.Node && c.To != p.Node {
+					continue
+				}
+				if p.Name == "2" && (len(c.Points) != 2 || c.Points[0].X != c.Points[1].X) {
+					t.Errorf("%s winding 2 should have a straight lead: %v", e.Name, c.Points)
+				}
+				if p.Name == "1" {
+					up = append(up, c.Points)
+				}
+			}
+		}
+	}
+	for i, a := range up {
+		for _, b := range up[i+1:] {
+			for j := 1; j < len(a); j++ {
+				for k := 1; k < len(b); k++ {
+					if _, hit := properCrossing(a[j-1], a[j], b[k-1], b[k]); hit {
+						t.Errorf("leads from the bays cross: %v and %v", a, b)
+					}
+				}
+			}
+		}
+	}
+	gy := map[float64]bool{}
+	for _, e := range d.Elements {
+		if e.Class == ClassLoad {
+			gy[e.Y] = true
+		}
+	}
+	if len(gy) != 1 {
+		t.Errorf("the generators should be on one row: %v", gy)
+	}
+	slices.Sort(gens)
+	if len(gens) != 3 || gens[2]-gens[0] > 600 {
+		t.Errorf("the generators should stay together: %v", gens)
 	}
 }

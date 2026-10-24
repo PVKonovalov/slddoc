@@ -35,6 +35,7 @@ type layLink struct {
 	trans    *cimObject
 	loop     bool
 	corridor float64
+	band     *layBand // whose corridor it takes
 }
 
 type cimLayout struct {
@@ -787,6 +788,7 @@ func (l *cimLayout) layout() {
 			// The voltage level's name, as PowSyBl writes it, left of its main busbars, half way down their rows.
 			if o, name := l.vlName(b.vl); o != nil && gi == b.main {
 				l.text(o, name, Point{X: x1 - b.nameW, Y: b.busY + float64(len(gr.cns)-1)*busGap/2 + 3})
+				r.name, r.nameDX = r.dos[len(r.dos)-1], x2+g-(x1-b.nameW)
 			}
 			for i, bus := range gr.buses {
 				yy := b.busY + float64(i)*busGap
@@ -810,6 +812,7 @@ func (l *cimLayout) layout() {
 			}
 			maxX = math.Max(maxX, colX(gr.col+gr.cols))
 			for i := firstLink; i < len(l.links); i++ {
+				l.links[i].band = b
 				r.links = append(r.links, i)
 			}
 			for cn := range l.cnAt {
@@ -1112,6 +1115,19 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 		if name := tr.get("name"); name != "" {
 			l.text(tr, name, Point{X: x + 5*g, Y: rowY})
 		}
+	}
+
+	var leads []corrLead
+	for i, k := range l.links {
+		if k.trans == nil {
+			continue
+		}
+		if w := l.winding(k.trans, k.cn); w >= 0 && w < len(terms[k.trans.id]) {
+			leads = append(leads, corrLead{i, k.band, k.at, terms[k.trans.id][w], k.corridor})
+		}
+	}
+	for i, y := range corridors(leads) {
+		l.links[i].corridor = y
 	}
 
 	// The links: down (or up) the bay's column into its corridor, along it, and into the winding or the ring's node.

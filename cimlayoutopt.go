@@ -1,17 +1,17 @@
 package slddoc
 
 import (
+	"cmp"
 	"maps"
 	"math"
+	"slices"
 	"strconv"
 )
 
 // Arranging a generated layout: after the bands are drawn, each busbar group with its bays (a region) may move as a
-// whole, its inner layout untouched, to straighten the links to transformers. Each transformer goes under the bay
-// that feeds it from its highest voltage; each region of a lower voltage slides sideways so its bays to transformers
-// lie under them, and rises beside the band above where nothing is in the way, higher voltages staying above lower
-// ones. The moves are kept only when they lower the layout's error: crossings between voltage classes first, then
-// the links' bends and length.
+// whole, its inner layout untouched, to straighten the links to transformers, and the regions of a voltage class
+// move together as a block on one row, never split by another class. The moves are kept only when they lower the
+// layout's error: crossings first, then the links' bends and length.
 
 // layRegion is what one busbar group drew: its DiagramObjects, links and the nodes it first drew, and its box.
 type layRegion struct {
@@ -21,7 +21,24 @@ type layRegion struct {
 	links []int    // indexes into cimLayout.links
 	cns   []string // nodes whose cnAt it set
 	box   [4]float64
-	d     Point // its move
+	parts [][4]float64 // a box per drawn object
+	d     Point        // its move
+
+	name    *cimObject    // its band's name, left of its busbars
+	nameDX  float64       // the name's move to the right of its busbars
+	flipped bool          // whether box and parts are those with the name moved
+	other   [2][4]float64 // box and the name's part of the other side
+	namePt  int           // the name's index in parts
+}
+
+// flip puts the region's name, in its box and parts, right of its busbars or back left.
+func (r *layRegion) flip(right bool) {
+	if r.name == nil || r.flipped == right {
+		return
+	}
+	r.box, r.other[0] = r.other[0], r.box
+	r.parts[r.namePt], r.other[1] = r.other[1], r.parts[r.namePt]
+	r.flipped = right
 }
 
 // transformerProbe is transformer tr centred at (x, y), turned so winding 1 is on top.
@@ -55,11 +72,19 @@ func (l *cimLayout) winding(tr *cimObject, cn string) int {
 	return w
 }
 
-// arrange moves the regions and places the transformers (l.transX) where that lowers the layout's error, starting
-// from the layout as drawn: each transformer may go under or over any bay linked to it, each region of a lower
-// voltage under or over any transformer it links to, or just clear of another transformer's leads, rising beside the
-// band above where nothing is in the way. Moves are tried until none lowers the error; regions never overlap, nor
-// do transformers on a row. rows are the transformer rows by band.
+// layBlock is a voltage class's regions: they move together, side by side, so a voltage class is never split.
+type layBlock struct {
+	kv      float64
+	regions []*layRegion
+}
+
+// arrange places the transformers (l.transX) and moves the regions where that lowers the layout's error, starting
+// from the layout as drawn. The regions of a voltage class form a block, kept in one piece: each of its regions goes
+// under the transformers it links to, in their order, the others close beside, and the block rises beside the one
+// above where nothing is in the way, never above it. Each transformer may go under or over any bay linked to it, or
+// beside another block; a block may also step clear of a transformer's leads. Moves are tried until none lowers the
+// error; regions never overlap, nor do transformers on a row, and all stays right of the page margin. rows are the
+// transformer rows by band.
 func (l *cimLayout) arrange(regions []*layRegion, trs []*cimObject, rows map[string]float64) {
 	g := l.grid
 	if len(regions) < 2 || len(trs) == 0 {
@@ -67,6 +92,17 @@ func (l *cimLayout) arrange(regions []*layRegion, trs []*cimObject, rows map[str
 	}
 	for _, r := range regions {
 		l.measureRegion(r)
+	}
+	var blocks []*layBlock
+	for _, r := range regions {
+		kv := l.vlKV[r.band.vl]
+		if n := len(blocks); n == 0 || blocks[n-1].kv != kv {
+			blocks = append(blocks, &layBlock{kv: kv})
+		}
+		blocks[len(blocks)-1].regions = append(blocks[len(blocks)-1].regions, r)
+	}
+	if len(blocks) < 2 {
+		return
 	}
 	region := map[int]*layRegion{}
 	for _, r := range regions {
@@ -101,92 +137,348 @@ func (l *cimLayout) arrange(regions []*layRegion, trs []*cimObject, rows map[str
 			transX[tr.id] = math.Round(meanOr(xs[tr.id], 0)/g) * g
 		}
 	}
-	d := map[*layRegion]Point{}
-	start := l.layoutError(regions, d, transX, rows)
-	best := start
-
-	try := func(nd map[*layRegion]Point, nt map[string]float64) bool {
-		l.lift(regions, nd, nt, rows)
-		if !l.fits(regions, nd, nt, trs, rows) {
-			return false
-		}
-		if e := l.layoutError(regions, nd, nt, rows); e < best-1e-6 {
-			best, d, transX = e, nd, nt
-			return true
-		}
-		return false
-	}
-	for range 8 {
-		improved := false
-		for _, tr := range trs {
-			if _, ok := transX[tr.id]; !ok {
-				continue
-			}
-			for i, k := range l.links {
-				if k.trans != tr {
-					continue
-				}
-				x, ok := centreFor(tr, l.winding(tr, k.cn), k.at.X+d[region[i]].X)
-				if !ok || x == transX[tr.id] {
-					continue
-				}
-				nt := maps.Clone(transX)
-				nt[tr.id] = x
-				improved = try(maps.Clone(d), nt) || improved
-			}
-		}
+	l.spaceRows(trs, transX, rows)
+	still := map[*layRegion]Point{}
+	start := l.layoutError(regions, still, transX, rows)
+	best, bestT, bestS := start, transX, map[*layBlock]float64{}
+	var bestD map[*layRegion]Point
+	bestF := map[*layRegion]bool{}
+	setFlips := func(f map[*layRegion]bool) {
 		for _, r := range regions {
-			if r.band == regions[0].band {
+			r.flip(f[r])
+		}
+	}
+
+	top := map[*layRegion]bool{}
+	for _, r := range blocks[0].regions {
+		top[r] = true
+	}
+	try1 := func(nt map[string]float64, ns map[*layBlock]float64) (map[*layRegion]Point, bool) {
+		l.spaceRows(trs, nt, rows)
+		d := l.placeBlocks(blocks, nt, ns, rows)
+		if !l.fits(regions, d, nt, trs, rows) {
+			return d, false
+		}
+		if e := l.layoutError(regions, d, nt, rows); e < best-1e-6 {
+			best, bestT, bestS, bestD = e, nt, ns, d
+			bestF = map[*layRegion]bool{}
+			for _, r := range regions {
+				bestF[r] = r.flipped
+			}
+			return d, true
+		}
+		return d, false
+	}
+	// try also has every transformer follow what hangs under it, as placed, so a voltage class kept together lines up
+	// with its transformers.
+	try := func(nt map[string]float64, ns map[*layBlock]float64) bool {
+		d, ok := try1(nt, ns)
+		follow := maps.Clone(nt)
+		for i, k := range l.links {
+			r := region[i]
+			if k.trans == nil || r == nil || top[r] || l.transTop[k.trans.id] == r.band.vl {
 				continue
 			}
-			var cands []float64
+			if x, ok := centreFor(k.trans, l.winding(k.trans, k.cn), k.at.X+d[r].X); ok {
+				follow[k.trans.id] = x
+			}
+		}
+		if maps.Equal(follow, nt) {
+			return ok
+		}
+		_, ok2 := try1(follow, maps.Clone(ns))
+		return ok || ok2
+	}
+	// Starts: the transformers as drawn, and each lined up with its leads from the top block.
+	up := maps.Clone(transX)
+	for i, k := range l.links {
+		if k.trans != nil && top[region[i]] {
+			if x, ok := centreFor(k.trans, l.winding(k.trans, k.cn), k.at.X); ok {
+				up[k.trans.id] = x
+			}
+		}
+	}
+	type state struct {
+		e float64
+		t map[string]float64
+		s map[*layBlock]float64
+		d map[*layRegion]Point
+		f map[*layRegion]bool
+	}
+	won := state{e: start, t: transX}
+	for _, st := range []map[string]float64{transX, up} {
+		best, bestT, bestS, bestD, bestF = math.Inf(1), st, map[*layBlock]float64{}, nil, map[*layRegion]bool{}
+		try(maps.Clone(st), map[*layBlock]float64{})
+		for range 8 {
+			improved := false
+			setFlips(bestF)
+			cur := bestD
+			if cur == nil {
+				cur = still
+			}
+			for _, tr := range trs {
+				if _, ok := bestT[tr.id]; !ok {
+					continue
+				}
+				var cands []float64
+				for i, k := range l.links {
+					if k.trans == tr {
+						if x, ok := centreFor(tr, l.winding(tr, k.cn), k.at.X+cur[region[i]].X); ok {
+							cands = append(cands, x)
+						}
+					}
+				}
+				for _, b := range blocks[1:] {
+					u := union(b.regions, cur)
+					cands = append(cands, math.Round((u[0]-4*layoutColumns*g)/g)*g, math.Round((u[2]+4*layoutColumns*g)/g)*g)
+				}
+				for _, x := range cands {
+					if x == bestT[tr.id] {
+						continue
+					}
+					nt := maps.Clone(bestT)
+					nt[tr.id] = x
+					improved = try(nt, maps.Clone(bestS)) || improved
+				}
+			}
+			for _, b := range blocks[1:] {
+				u := union(b.regions, cur)
+				cands := []float64{0}
+				for _, tr := range trs {
+					tx, ok := bestT[tr.id]
+					y, ok2 := row(tr)
+					if !ok || !ok2 {
+						continue
+					}
+					left, right := l.reach(tr, y)
+					cands = append(cands, bestS[b]+tx+right-u[0], bestS[b]+tx+left-u[2])
+				}
+				for _, sh := range cands {
+					sh = math.Round(sh/g) * g
+					if sh == bestS[b] {
+						continue
+					}
+					ns := maps.Clone(bestS)
+					ns[b] = sh
+					improved = try(maps.Clone(bestT), ns) || improved
+				}
+			}
+			if !improved {
+				break
+			}
+		}
+		if bestD != nil && best < won.e-1e-6 {
+			won = state{best, bestT, bestS, bestD, bestF}
+		}
+	}
+	best, bestT, bestD, bestF = won.e, won.t, won.d, won.f
+	if bestD == nil || best >= start-1e-6 {
+		setFlips(nil)
+		return
+	}
+	setFlips(bestF)
+	for _, r := range regions {
+		if r.flipped {
+			for _, p := range l.im.points[r.name.id] {
+				p.props["xPosition"] = []string{strconv.FormatFloat(pointOf(p).X+r.nameDX, 'f', -1, 64)}
+			}
+		}
+		r.d = bestD[r]
+		l.shiftRegion(r)
+	}
+	l.transX = bestT
+}
+
+// placeBlocks moves the blocks below the first, given the transformers at transX and each block's extra shift: its
+// regions on one row, side by side in the order their leads up to transformers want them (the others with the
+// block's median), each as close to that as being clear of the others and at most layoutBlockGap columns further
+// allows, a band's name going right of its busbars when only it is in the way; then the block rises beside the one
+// above as far as that block's top, what is drawn over it and the transformers allow.
+func (l *cimLayout) placeBlocks(blocks []*layBlock, transX map[string]float64, shift map[*layBlock]float64, rows map[string]float64) map[*layRegion]Point {
+	g := l.grid
+	d := map[*layRegion]Point{}
+	for _, b := range blocks {
+		for _, r := range b.regions {
+			r.flip(false)
+		}
+	}
+	var done []*layRegion
+	for _, r := range blocks[0].regions {
+		d[r] = Point{}
+		done = append(done, r)
+	}
+	prevTop := union(blocks[0].regions, d)[1]
+	for _, b := range blocks[1:] {
+		// A voltage class's regions on one row, at the top of its first.
+		rise := map[*layRegion]float64{}
+		for _, r := range b.regions {
+			rise[r] = b.regions[0].box[1] - r.box[1]
+		}
+		type item struct {
+			r    *layRegion
+			want float64
+			has  bool
+		}
+		var items []item
+		var all []float64
+		for _, r := range b.regions {
+			var dxs []float64
 			for _, i := range r.links {
 				k := l.links[i]
-				if k.trans == nil {
+				if k.trans == nil || l.transTop[k.trans.id] == r.band.vl {
 					continue
 				}
 				tx, ok := transX[k.trans.id]
-				if !ok {
-					continue
-				}
-				y, _ := row(k.trans)
-				ts := symbolTerminals(new(l.transformerProbe(k.trans, tx, y)), l.im.opt.Terminals)
-				if w := l.winding(k.trans, k.cn); w >= 0 && w < len(ts) {
-					cands = append(cands, ts[w].X-k.at.X)
-				}
-			}
-			for _, tr := range trs {
-				tx, ok := transX[tr.id]
-				y, ok2 := row(tr)
+				y, ok2 := rows[l.transTop[k.trans.id]]
 				if !ok || !ok2 {
 					continue
 				}
-				left, right := l.reach(tr, y)
-				cands = append(cands, tx+right-r.box[0], tx+left-r.box[2])
-			}
-			cands = append(cands, 0)
-			for _, dx := range cands {
-				dx = math.Round(dx/g) * g
-				if dx == d[r].X {
+				w := l.winding(k.trans, k.cn)
+				ts := symbolTerminals(new(l.transformerProbe(k.trans, tx, y)), l.im.opt.Terminals)
+				if w < 0 || w >= len(ts) || ts[w].Y <= y {
 					continue
 				}
-				nd := maps.Clone(d)
-				nd[r] = Point{X: dx}
-				improved = try(nd, maps.Clone(transX)) || improved
+				dxs = append(dxs, ts[w].X-k.at.X)
+			}
+			it := item{r: r}
+			if len(dxs) > 0 {
+				slices.Sort(dxs)
+				it.want, it.has = r.box[0]+dxs[len(dxs)/2], true
+				all = append(all, dxs[len(dxs)/2])
+			}
+			items = append(items, it)
+		}
+		mid := 0.0
+		if len(all) > 0 {
+			slices.Sort(all)
+			mid = all[len(all)/2]
+		}
+		for i := range items {
+			if !items[i].has {
+				items[i].want = items[i].r.box[0] + mid
 			}
 		}
-		if !improved {
-			break
+		// Moves on the grid, so a region lined up under its transformer stays exactly under it.
+		slices.SortStableFunc(items, func(a, c item) int { return cmp.Compare(a.want, c.want) })
+		most := layoutBlockGap * layoutColumns * g // boxes already hold a margin and the names
+		lay := func(first float64) []float64 {
+			moves := make([]float64, len(items))
+			for i, it := range items {
+				if i == 0 {
+					moves[i] = math.Round(first/g) * g
+					continue
+				}
+				least := func() float64 {
+					lo := math.Inf(-1)
+					for j := range i {
+						lo = math.Max(lo, clearOf(it.r, rise[it.r], items[j].r, Point{X: moves[j], Y: rise[items[j].r]}))
+					}
+					return math.Ceil(lo/g) * g
+				}
+				want := math.Round((it.want-it.r.box[0])/g) * g
+				lo := least()
+				// The name goes right of the busbars when only it keeps the region from lining up.
+				if it.has && want < lo && it.r.name != nil {
+					it.r.flip(true)
+					if l2 := least(); l2 < lo {
+						lo = l2
+					} else {
+						it.r.flip(false)
+					}
+				}
+				moves[i] = lo
+				if it.has {
+					moves[i] = math.Min(math.Max(want, lo), lo+most)
+				}
+			}
+			return moves
+		}
+		first := 0.0
+		if items[0].has {
+			first = items[0].want - items[0].r.box[0]
+		} else if len(all) > 0 {
+			first = mid
+		}
+		for i, m := range lay(first) {
+			d[items[i].r] = Point{X: m + shift[b], Y: rise[items[i].r]}
+		}
+		u := union(b.regions, d)
+		if edge := l.margin / 2; u[0] < edge {
+			for _, r := range b.regions {
+				d[r] = Point{X: d[r].X + math.Ceil((edge-u[0])/g)*g, Y: d[r].Y}
+			}
+			u = union(b.regions, d)
+		}
+		newTop := prevTop
+		for _, o := range done {
+			for _, r := range b.regions {
+				for _, p := range r.parts {
+					p = shifted(p, d[r])
+					for _, q := range o.parts {
+						if q = shifted(q, d[o]); spanOverlap(p[0], p[2], q[0], q[2]) {
+							newTop = math.Max(newTop, u[1]+q[3]+2*g-p[1])
+						}
+					}
+				}
+			}
+		}
+		for id, tx := range transX {
+			y, ok := rows[l.transTop[id]]
+			if !ok {
+				continue
+			}
+			left, right := l.reach(l.im.objs[id], y)
+			if spanOverlap(u[0], u[2], tx+left, tx+right) {
+				newTop = math.Max(newTop, y+8*g)
+			}
+		}
+		dy := math.Round((newTop-u[1])/g) * g
+		for _, r := range b.regions {
+			d[r] = Point{X: d[r].X, Y: d[r].Y + dy}
+			done = append(done, r)
+		}
+		prevTop = u[1] + dy
+	}
+	return d
+}
+
+// layoutBlockGap is how many columns may part two regions of a voltage class, to line them up under their
+// transformers.
+const layoutBlockGap = 2
+
+// spaceRows pushes apart, in their order along each row, transformers at transX that would overlap.
+func (l *cimLayout) spaceRows(trs []*cimObject, transX map[string]float64, rows map[string]float64) {
+	var placed []*cimObject
+	for _, tr := range trs {
+		if _, ok := transX[tr.id]; ok {
+			placed = append(placed, tr)
 		}
 	}
-	if best >= start-1e-6 {
-		return
+	slices.SortStableFunc(placed, func(a, b *cimObject) int { return cmp.Compare(transX[a.id], transX[b.id]) })
+	last := map[float64]float64{}
+	for _, tr := range placed {
+		y, ok := rows[l.transTop[tr.id]]
+		if !ok {
+			continue
+		}
+		left, right := l.reach(tr, y)
+		x := transX[tr.id]
+		if prev, ok := last[y]; ok && x+left < prev {
+			x = math.Ceil((prev-left)/l.grid) * l.grid
+		}
+		transX[tr.id] = x
+		last[y] = x + right
 	}
+}
+
+// union is the box around regions moved by d.
+func union(regions []*layRegion, d map[*layRegion]Point) [4]float64 {
+	u := [4]float64{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
 	for _, r := range regions {
-		r.d = d[r]
-		l.shiftRegion(r)
+		b := shifted(r.box, d[r])
+		u = [4]float64{math.Min(u[0], b[0]), math.Min(u[1], b[1]), math.Max(u[2], b[2]), math.Max(u[3], b[3])}
 	}
-	l.transX = transX
+	return u
 }
 
 // measureRegion sets region r's box sideways from what it drew, names included (its height comes from its band).
@@ -204,53 +496,70 @@ func (l *cimLayout) measureRegion(r *layRegion) {
 	if x1 <= x2 {
 		r.box[0], r.box[2] = x1-l.grid, x2+l.grid
 	}
+	r.parts = r.parts[:0]
+	for _, do := range r.dos {
+		b := [4]float64{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
+		for _, p := range l.im.points[do.id] {
+			q := pointOf(p)
+			b = [4]float64{math.Min(b[0], q.X), math.Min(b[1], q.Y), math.Max(b[2], q.X), math.Max(b[3], q.Y)}
+		}
+		if b[0] > b[2] {
+			continue
+		}
+		if do.class == "TextDiagramObject" {
+			b = [4]float64{b[0], b[1] - 10, b[2] + 6*float64(len([]rune(do.get("text")))), b[3] + 2}
+		} else if len(l.im.points[do.id]) > 1 {
+			b = [4]float64{b[0] - l.grid/2, b[1] - l.grid/2, b[2] + l.grid/2, b[3] + l.grid/2}
+		} else {
+			b = [4]float64{b[0] - 1.5*l.grid, b[1] - 1.5*l.grid, b[2] + 1.5*l.grid, b[3] + 1.5*l.grid}
+		}
+		if do == r.name {
+			r.namePt = len(r.parts)
+		}
+		r.parts = append(r.parts, [4]float64{b[0] - l.grid/2, b[1], b[2] + l.grid/2, b[3]})
+	}
+	if r.name != nil {
+		r.flipped = false
+		np := shifted(r.parts[r.namePt], Point{X: r.nameDX})
+		box := r.box
+		box[0] = math.Inf(1)
+		for i, p := range r.parts {
+			if i != r.namePt {
+				box[0] = math.Min(box[0], p[0])
+			}
+		}
+		box[2] = math.Max(box[2], np[2]+l.grid)
+		r.other = [2][4]float64{box, np}
+	}
 }
 
-// lift raises each region of a lower voltage (d's moves sideways given) beside the band above as far as that band's
-// top, the regions over it and the transformers allow, setting d's moves up.
-func (l *cimLayout) lift(regions []*layRegion, d map[*layRegion]Point, transX map[string]float64, rows map[string]float64) {
-	g := l.grid
-	var done []*layRegion
-	prevTop := math.Inf(-1)
-	for i := 0; i < len(regions); {
-		band := regions[i].band
-		curTop := math.Inf(1)
-		for ; i < len(regions) && regions[i].band == band; i++ {
-			r := regions[i]
-			m := d[r]
-			m.Y = 0
-			if band != regions[0].band {
-				newTop := prevTop
-				for _, o := range done {
-					if o.band == band {
-						continue
-					}
-					ob := shifted(o.box, d[o])
-					if spanOverlap(r.box[0]+m.X, r.box[2]+m.X, ob[0], ob[2]) {
-						newTop = math.Max(newTop, ob[3]+2*g)
-					}
-				}
-				for id, tx := range transX {
-					tr := l.im.objs[id]
-					y, ok := rows[l.transTop[id]]
-					if !ok {
-						continue
-					}
-					left, right := l.reach(tr, y)
-					if spanOverlap(r.box[0]+m.X, r.box[2]+m.X, tx+left, tx+right) {
-						newTop = math.Max(newTop, y+8*g)
-					}
-				}
-				if newTop < r.box[1] {
-					m.Y = math.Round((newTop-r.box[1])/g) * g
-				}
+// clearOf is the least move of region a, raised by ay, that puts each of its parts right of every part of region b
+// (moved by bd) beside it.
+func clearOf(a *layRegion, ay float64, b *layRegion, bd Point) float64 {
+	lo := math.Inf(-1)
+	for _, p := range a.parts {
+		for _, q := range b.parts {
+			if spanOverlap(p[1]+ay, p[3]+ay, q[1]+bd.Y, q[3]+bd.Y) {
+				lo = math.Max(lo, q[2]+bd.X-p[0])
 			}
-			d[r] = m
-			curTop = math.Min(curTop, r.box[1]+m.Y)
-			done = append(done, r)
 		}
-		prevTop = curTop
 	}
+	return lo
+}
+
+// collide reports whether any part of region a, moved by da, overlaps one of region b, moved by db.
+func collide(a, b *layRegion, da, db Point) bool {
+	if !overlaps(shifted(a.box, da), shifted(b.box, db)) {
+		return false
+	}
+	for _, p := range a.parts {
+		for _, q := range b.parts {
+			if overlaps(shifted(p, da), shifted(q, db)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // fits reports whether everything stays right of the page's margin, and no two regions overlap, nor two transformers
@@ -264,7 +573,7 @@ func (l *cimLayout) fits(regions []*layRegion, d map[*layRegion]Point, transX ma
 	}
 	for i, a := range regions {
 		for _, b := range regions[i+1:] {
-			if overlaps(shifted(a.box, d[a]), shifted(b.box, d[b])) {
+			if collide(a, b, d[a], d[b]) {
 				return false
 			}
 		}
@@ -296,18 +605,19 @@ func (l *cimLayout) fits(regions []*layRegion, d map[*layRegion]Point, transX ma
 	return true
 }
 
-// reach is how far transformer tr's terminals reach left and right of its centre on row y.
+// reach is how far transformer tr, its terminals and its name, reaches left and right of its centre on row y.
 func (l *cimLayout) reach(tr *cimObject, y float64) (float64, float64) {
 	left, right := 0.0, 0.0
 	for _, t := range symbolTerminals(new(l.transformerProbe(tr, 0, y)), l.im.opt.Terminals) {
 		left, right = math.Min(left, t.X), math.Max(right, t.X)
 	}
-	return left - 3*l.grid, right + 3*l.grid
+	right = math.Max(right+3*l.grid, 5*l.grid+6*float64(len([]rune(tr.get("name")))))
+	return left - 3*l.grid, right
 }
 
 // layoutError estimates the layout with regions moved by d and transformers at transX (nil: where the links' mean
-// puts them): crossings of links with busbars, wires and other links of another voltage class, then the links' bends
-// and length.
+// puts them): crossings of links with each other and with busbars and wires of another voltage class (a million
+// each), then each bend of a link (a thousand, a quarter more below its transformer), then the links' length.
 func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, transX map[string]float64, rows map[string]float64) float64 {
 	type seg struct {
 		a, z Point
@@ -345,8 +655,7 @@ func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, tr
 			xs[k.trans.id] = append(xs[k.trans.id], k.at.X+d[regionOf[i]].X)
 		}
 	}
-	errSum := 0.0
-	var linkSegs []seg
+	var leads []corrLead
 	for i, k := range l.links {
 		if k.trans == nil {
 			continue
@@ -364,14 +673,23 @@ func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, tr
 		if w < 0 || w >= len(ts) {
 			continue
 		}
-		at := k.at.add(d[regionOf[i]])
-		end := ts[w]
+		leads = append(leads, corrLead{i, k.band, k.at.add(d[regionOf[i]]), ts[w], k.corridor + d[regionOf[i]].Y})
+	}
+	levels := corridors(leads)
+	errSum := 0.0
+	var linkSegs []seg
+	for _, ld := range leads {
+		k, at, end := l.links[ld.i], ld.at, ld.end
 		pts := []Point{at, end}
 		if math.Abs(at.X-end.X) > 1e-6 {
-			corr := k.corridor + d[regionOf[i]].Y
-			pts = []Point{at, {X: at.X, Y: corr}, {X: end.X, Y: corr}, end}
-			errSum += 2e3
+			corr := cmp.Or(levels[ld.i], ld.y)
+			pts = simplifyPath([]Point{at, {X: at.X, Y: corr}, {X: end.X, Y: corr}, end})
 		}
+		bend := 1e3
+		if end.Y < at.Y {
+			bend = 1.25e3 // what hangs under a transformer, like a generator, best lines up with it
+		}
+		errSum += bend * float64(max(len(pts)-2, 0))
 		vl := l.cnVL(k.cn)
 		for j := 1; j < len(pts); j++ {
 			errSum += math.Abs(pts[j].X-pts[j-1].X) + math.Abs(pts[j].Y-pts[j-1].Y)
@@ -384,10 +702,8 @@ func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, tr
 				}
 			}
 			for _, o := range linkSegs {
-				if o.vl != vl {
-					if _, hit := properCrossing(s.a, s.z, o.a, o.z); hit {
-						errSum += 1e6
-					}
+				if _, hit := properCrossing(s.a, s.z, o.a, o.z); hit {
+					errSum += 1e6
 				}
 			}
 			linkSegs = append(linkSegs, s)
@@ -434,3 +750,99 @@ func overlaps(a, b [4]float64) bool {
 }
 
 func spanOverlap(a1, a2, b1, b2 float64) bool { return a1 < b2 && b1 < a2 }
+
+// corrLead is a lead through a corridor: link i from at, along the corridor at y, to end.
+type corrLead struct {
+	i       int
+	band    *layBand
+	at, end Point
+	y       float64
+}
+
+// corridors gives the leads leaving each side of a band its corridors again, so that none crosses another: a lead
+// whose run along the corridor passes another's bay turns farther out than that one, and one passing another's way
+// on to its transformer nearer. A side whose leads can't all be so keeps its corridors. Returns the corridor by link.
+func corridors(leads []corrLead) map[int]float64 {
+	type side struct {
+		band *layBand
+		down bool
+	}
+	sides := map[side][]corrLead{}
+	var order []side
+	for _, k := range leads {
+		if math.Abs(k.at.X-k.end.X) < 1e-6 {
+			continue
+		}
+		s := side{k.band, k.y > k.at.Y}
+		if sides[s] == nil {
+			order = append(order, s)
+		}
+		sides[s] = append(sides[s], k)
+	}
+	out := map[int]float64{}
+	for _, s := range order {
+		ks := sides[s]
+		near := func(a, b float64) bool { return a < b == s.down }
+		slices.SortStableFunc(ks, func(a, b corrLead) int {
+			if a.y == b.y {
+				return 0
+			}
+			if near(a.y, b.y) {
+				return -1
+			}
+			return 1
+		})
+		inside := func(x float64, k corrLead) bool {
+			return x > math.Min(k.at.X, k.end.X)+1e-6 && x < math.Max(k.at.X, k.end.X)-1e-6
+		}
+		// before[a][b]: a must turn nearer than b.
+		before := make([][]bool, len(ks))
+		ins := make([]int, len(ks))
+		for a := range ks {
+			before[a] = make([]bool, len(ks))
+		}
+		for a := range ks {
+			for b := range ks {
+				if a == b {
+					continue
+				}
+				if inside(ks[b].at.X, ks[a]) && !before[b][a] {
+					before[b][a] = true
+					ins[a]++
+				}
+				if inside(ks[b].end.X, ks[a]) && !before[a][b] {
+					before[a][b] = true
+					ins[b]++
+				}
+			}
+		}
+		var seq []int
+		used := make([]bool, len(ks))
+		for len(seq) < len(ks) {
+			next := -1
+			for a := range ks {
+				if !used[a] && ins[a] == 0 {
+					next = a
+					break
+				}
+			}
+			if next < 0 {
+				break
+			}
+			used[next] = true
+			seq = append(seq, next)
+			for b := range ks {
+				if before[next][b] {
+					ins[b]--
+				}
+			}
+		}
+		if len(seq) < len(ks) {
+			continue
+		}
+		for n, a := range seq {
+			out[ks[a].i] = ks[n].y
+		}
+	}
+	return out
+}
