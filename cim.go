@@ -24,6 +24,7 @@ const (
 	cimNS           = "http://iec.ch/TC57/CIM100#"
 	cimProfileEQ    = "http://iec.ch/TC57/ns/CIM/CoreEquipment-EU/3.0"
 	cimProfileDL    = "http://iec.ch/TC57/ns/CIM/DiagramLayout-EU/3.0"
+	cimProfileSC    = "http://iec.ch/TC57/ns/CIM/ShortCircuit-EU/3.0"
 	cimAuthoritySet = "urn:sld-editor"
 )
 
@@ -49,7 +50,8 @@ type CIMOptions struct {
 //   - "guessedVoltage": nothing on or around the item has a voltage, so it was given its substation's (or the
 //     diagram's) most common one;
 //   - "mrid": an mRID the item keeps (its own, a terminal's or a winding's) is another item's too, or unfit for an
-//     rdf:ID, and a new one was given.
+//     rdf:ID, and a new one was given;
+//   - "mridFormat": an mRID the item keeps is written as it is but is not a UUID, which CGMES 3.0 requires.
 type CIMWarning struct {
 	Kind   string   `json:"kind"`
 	Item   string   `json:"item"`
@@ -395,11 +397,16 @@ func ExportCIM(d *Diagram, opt CIMOptions) *CIMExport {
 	x.gluePoints()
 	x.layers()
 
+	x.finish()
+	eqProfiles := []string{cimProfileEQ}
+	if x.shortCircuit() {
+		eqProfiles = append(eqProfiles, cimProfileSC)
+	}
 	eqModel := x.mrid("model:EQ:" + opt.Created.UTC().Format(time.RFC3339Nano))
 	dlModel := x.mrid("model:DL:" + opt.Created.UTC().Format(time.RFC3339Nano))
 	return &CIMExport{
-		EQ:       x.document(eqModel, cimProfileEQ, "", x.eq),
-		DL:       x.document(dlModel, cimProfileDL, eqModel, x.dl),
+		EQ:       x.document(eqModel, eqProfiles, "", x.eq),
+		DL:       x.document(dlModel, []string{cimProfileDL}, eqModel, x.dl),
 		Warnings: x.warn,
 	}
 }
@@ -423,7 +430,10 @@ func (x *cimExporter) mrid(key string) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
 }
 
-var mridRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var (
+	mridRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+)
 
 // fixMRIDs takes the mRIDs the diagram keeps (Element.MRID and the like, from a CIM import) for the objects they
 // stand for: an element's equipment, Terminals and PowerTransformerEnds, a line's or link's equipment and
@@ -433,6 +443,7 @@ var mridRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 func (x *cimExporter) fixMRIDs() {
 	x.fixed = map[string]string{}
 	taken := map[string]bool{}
+	notUUID := false
 	take := func(key, m string) bool {
 		if m == "" {
 			return true
@@ -442,6 +453,7 @@ func (x *cimExporter) fixMRIDs() {
 		}
 		taken[m] = true
 		x.fixed[key] = m
+		notUUID = notUUID || !uuidRe.MatchString(m)
 		return true
 	}
 	for _, e := range x.d.Elements {
@@ -455,7 +467,10 @@ func (x *cimExporter) fixMRIDs() {
 		}
 		if !ok {
 			x.warnf("mrid", "element", e.ID)
+		} else if notUUID {
+			x.warnf("mridFormat", "element", e.ID)
 		}
+		notUUID = false
 	}
 	for _, c := range x.d.Connectors {
 		key := fmt.Sprintf("line:%d", c.ID)
@@ -467,7 +482,10 @@ func (x *cimExporter) fixMRIDs() {
 		ok = take(key+":t:2", c.ToMRID) && ok
 		if !ok {
 			x.warnf("mrid", "connector", c.ID)
+		} else if notUUID {
+			x.warnf("mridFormat", "connector", c.ID)
 		}
+		notUUID = false
 	}
 	kept := map[int]map[string]bool{}
 	for _, n := range x.d.Nodes {
@@ -487,6 +505,64 @@ func (x *cimExporter) fixMRIDs() {
 				take(fmt.Sprintf("cn:%d", r), m)
 			}
 		}
+	}
+}
+
+// cimShortCircuitProps are the attributes the export writes that CGMES 3.0 keeps in the ShortCircuit profile.
+var cimShortCircuitProps = map[string]bool{"ACLineSegment.r0": true, "ACLineSegment.x0": true, "ACLineSegment.b0ch": true,
+	"ACLineSegment.g0ch": true, "BusbarSection.ipMax": true}
+
+// shortCircuit reports whether the EQ document holds ShortCircuit profile data (cimShortCircuitProps).
+func (x *cimExporter) shortCircuit() bool {
+	for _, o := range x.eq {
+		for _, p := range o.props {
+			if cimShortCircuitProps[p.name] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// finish writes what CGMES expects of every object once all are made: Equipment.aggregate false on each
+// equipment (each stands for one real item), and a name on each diagram object, its object's (or "<class> <n>").
+func (x *cimExporter) finish() {
+	names := map[string]string{}
+	for _, o := range x.eq {
+		container := false
+		for _, p := range o.props {
+			switch p.name {
+			case "IdentifiedObject.name":
+				names[o.id] = p.value
+			case "Equipment.EquipmentContainer":
+				container = true
+			}
+		}
+		if container {
+			o.lit("Equipment.aggregate", "false")
+		}
+	}
+	for i, o := range x.dl {
+		if o.class != "DiagramObject" && o.class != "TextDiagramObject" {
+			continue
+		}
+		name, named := "", false
+		for _, p := range o.props {
+			switch p.name {
+			case "IdentifiedObject.name":
+				named = true
+			case "DiagramObject.IdentifiedObject":
+				name = names[p.value]
+			}
+		}
+		if named {
+			continue
+		}
+		if name == "" {
+			name = fmt.Sprintf("%s %d", o.class, i+1)
+		}
+		// After the mRID, where the other objects have it.
+		o.props = slices.Insert(o.props, min(1, len(o.props)), rdfProp{name: "IdentifiedObject.name", value: name, kind: 'l'})
 	}
 }
 
@@ -1469,7 +1545,7 @@ func xmlText(s string) string {
 	return b.String()
 }
 
-func (x *cimExporter) document(model, profile, dependsOn string, objs []*rdfObject) []byte {
+func (x *cimExporter) document(model string, profiles []string, dependsOn string, objs []*rdfObject) []byte {
 	var b bytes.Buffer
 	created := x.opt.Created.UTC().Format("2006-01-02T15:04:05Z")
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>` + "\n")
@@ -1479,7 +1555,9 @@ func (x *cimExporter) document(model, profile, dependsOn string, objs []*rdfObje
 	fmt.Fprintf(&b, "    <md:Model.scenarioTime>%s</md:Model.scenarioTime>\n", created)
 	fmt.Fprintf(&b, "    <md:Model.description>%s</md:Model.description>\n", xmlText(x.modelName()))
 	fmt.Fprintf(&b, "    <md:Model.modelingAuthoritySet>%s</md:Model.modelingAuthoritySet>\n", cimAuthoritySet)
-	fmt.Fprintf(&b, "    <md:Model.profile>%s</md:Model.profile>\n", profile)
+	for _, profile := range profiles {
+		fmt.Fprintf(&b, "    <md:Model.profile>%s</md:Model.profile>\n", profile)
+	}
 	b.WriteString("    <md:Model.version>1</md:Model.version>\n")
 	if dependsOn != "" {
 		fmt.Fprintf(&b, "    <md:Model.DependentOn rdf:resource=\"urn:uuid:%s\"/>\n", dependsOn)

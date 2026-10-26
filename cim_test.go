@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"io"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -504,5 +505,54 @@ func TestExportCIMSubstations(t *testing.T) {
 	}
 	if subs != 2 {
 		t.Errorf("Substations = %d, want 2: QA's and QB's (the bare end of B-end joining QB's)", subs)
+	}
+}
+
+// TestExportCIMConformity: what the CGMES 3.0 conformity models write and the export now writes too: every
+// equipment with Equipment.aggregate false, every diagram object named, and the ShortCircuit profile in the EQ
+// header only when short-circuit data (a line's zero-sequence values) is written; an mRID kept from an import that
+// is not a UUID is written and noted.
+func TestExportCIMConformity(t *testing.T) {
+	d := cimDiagram()
+	eq := string(ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ)
+	if strings.Contains(eq, "ShortCircuit-EU") {
+		t.Error("no short-circuit data, no ShortCircuit profile")
+	}
+	objects := regexp.MustCompile(`(?s)<cim:(\w+) rdf:ID="[^"]*">(.*?)</cim:(\w+)>\n  <`).FindAllStringSubmatch(eq+"  <", -1)
+	if len(objects) < 10 {
+		t.Fatalf("only %d objects read", len(objects))
+	}
+	for _, m := range objects {
+		if strings.Contains(m[2], "Equipment.EquipmentContainer") && !strings.Contains(m[2], "<cim:Equipment.aggregate>false<") {
+			t.Errorf("a %s without Equipment.aggregate", m[1])
+		}
+	}
+	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	dl := string(out.DL)
+	if n, named := strings.Count(dl, "<cim:DiagramObject rdf:ID")+strings.Count(dl, "<cim:TextDiagramObject rdf:ID"),
+		strings.Count(dl, "<cim:IdentifiedObject.name>")-strings.Count(dl, "<cim:DiagramObjectStyle rdf:ID")-
+			strings.Count(dl, "<cim:VisibilityLayer rdf:ID")-strings.Count(dl, "<cim:Diagram rdf:ID"); n == 0 || named != n {
+		t.Errorf("%d diagram objects, %d named", n, named)
+	}
+	if !strings.Contains(dl, "<cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name>") {
+		t.Error("the busbar's diagram object should be named after it")
+	}
+
+	r0 := 0.5
+	for i := range d.Connectors {
+		if d.Connectors[i].Kind == KindOverheadLine {
+			d.Connectors[i].Electrical = &Electrical{R0: &r0}
+		}
+	}
+	d.Elements[1].MRID = "breaker-q1"
+	out = ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	if !strings.Contains(string(out.EQ), "<md:Model.profile>http://iec.ch/TC57/ns/CIM/ShortCircuit-EU/3.0</md:Model.profile>") {
+		t.Error("a line's r0 is short-circuit data: the header should list the ShortCircuit profile")
+	}
+	if !slices.ContainsFunc(out.Warnings, func(w CIMWarning) bool { return w.Kind == "mridFormat" && w.ID == d.Elements[1].ID }) {
+		t.Errorf("a non-UUID mRID should be noted: %+v", out.Warnings)
+	}
+	if !strings.Contains(string(out.EQ), `rdf:ID="_breaker-q1"`) {
+		t.Error("the non-UUID mRID is still written")
 	}
 }
