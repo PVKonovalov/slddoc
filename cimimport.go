@@ -42,6 +42,7 @@ type CIMPage struct {
 	Diagram  *Diagram
 	Report   Report
 	Messages []string
+	Warnings []string // what in the file looks wrong (a nominal voltage no grid has)
 	Layout   CIMLayoutKind
 }
 
@@ -436,6 +437,7 @@ type cimPageBuilder struct {
 	d          *Diagram
 	report     Report
 	messages   []string
+	warnings   []string
 	nextID     int
 	voltages   map[string]int         // BaseVoltage id → VoltageClass id
 	layers     map[string]int         // VisibilityLayer id → Layer id
@@ -611,7 +613,7 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 	} else if b.synthetic {
 		kind = CIMLayoutGenerated
 	}
-	return CIMPage{Title: title, Diagram: b.d, Report: b.report, Messages: b.messages, Layout: kind}, true
+	return CIMPage{Title: title, Diagram: b.d, Report: b.report, Messages: b.messages, Warnings: b.warnings, Layout: kind}, true
 }
 
 // transform sets the page's coordinate mapping: y flipped for a y-up diagram; a layout this editor exported (its
@@ -779,6 +781,9 @@ func (b *cimPageBuilder) layer(do *cimObject) int {
 	return id
 }
 
+// cimMaxNominalKV is the highest nominal voltage, in kV, taken without a warning; no AC grid runs above about 1200 kV.
+const cimMaxNominalKV = 2000
+
 // voltage returns the VoltageClass of BaseVoltage bv (0 for none), creating it, named "<kV> kV", on first use.
 func (b *cimPageBuilder) voltage(bv string) int {
 	o := b.im.objs[bv]
@@ -790,6 +795,10 @@ func (b *cimPageBuilder) voltage(bv string) int {
 	}
 	kv, _ := o.num("nominalVoltage")
 	name := strconv.FormatFloat(kv, 'f', -1, 64) + " kV"
+	if kv > cimMaxNominalKV {
+		b.warnings = append(b.warnings, fmt.Sprintf("base voltage %q has a nominal voltage of %s kV, more than any grid "+
+			"has: CIM's nominalVoltage is in kV, and the file may have written volts", cmp.Or(o.get("name"), bv), strconv.FormatFloat(kv, 'f', -1, 64)))
+	}
 	for _, vc := range b.d.VoltageClasses {
 		if vc.Name == name {
 			b.voltages[bv] = vc.ID

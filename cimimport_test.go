@@ -430,3 +430,24 @@ func TestCIMClassFromAnyOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestCIMImplausibleVoltage: a nominal voltage no grid has (a file writing volts where CIM wants kV) is taken as it
+// is, with a warning in the import log.
+func TestCIMImplausibleVoltage(t *testing.T) {
+	eq := `<cim:BaseVoltage rdf:ID="bv"><cim:IdentifiedObject.name>33 kV</cim:IdentifiedObject.name><cim:BaseVoltage.nominalVoltage>33000</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:BusbarSection>` +
+		terminal("tb", "B1", "a", "ConnectivityNode", 1)
+	pages, err := ImportCIM([][]byte{cimDoc(eq)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pages[0]
+	if len(p.Diagram.VoltageClasses) != 1 || p.Diagram.VoltageClasses[0].Name != "33000 kV" {
+		t.Errorf("the voltage is taken as it is: %+v", p.Diagram.VoltageClasses)
+	}
+	if !slices.ContainsFunc(p.Warnings, func(m string) bool { return strings.Contains(m, `"33 kV"`) && strings.Contains(m, "33000 kV") }) {
+		t.Errorf("no warning: %v", p.Warnings)
+	}
+}
