@@ -48,8 +48,9 @@ func (h *routeHeap) Pop() any {
 }
 
 // route finds a lead from `from`, leaving along fromDir, to `to`, arriving along toDir (both unit grid
-// directions), through cells nothing drawn lies on but node cn's own wires and transformer self. Returns its points,
-// or false when there is no way.
+// directions), through cells nothing drawn lies on but transformer self; node cn's own wires are solid, so the lead
+// never crosses nor runs along them, and meets them only at its two ends. Returns its points, or false when there
+// is no way.
 func (l *cimLayout) route(from, fromDir, to, toDir Point, cn string, self *cimObject) ([]Point, bool) {
 	g := l.grid
 	cell := func(v float64) int { return int(math.Round(v / g)) }
@@ -69,10 +70,15 @@ func (l *cimLayout) route(from, fromDir, to, toDir Point, cn string, self *cimOb
 			minX, minY, maxX, maxY = math.Min(minX, q.X), math.Min(minY, q.Y), math.Max(maxX, q.X), math.Max(maxY, q.Y)
 		}
 		eq := do.get("IdentifiedObject")
-		if eq == cn || self != nil && eq == self.id {
+		if self != nil && eq == self.id {
 			continue
 		}
 		switch {
+		case eq == cn:
+			for i := 1; i < len(pts); i++ {
+				p, q := pointOf(pts[i-1]), pointOf(pts[i])
+				mark(p.X, p.Y, q.X, q.Y, cellSolid)
+			}
 		case do.class == "TextDiagramObject":
 			if len(pts) > 0 {
 				p := pointOf(pts[0])
@@ -173,13 +179,15 @@ func (l *cimLayout) route(from, fromDir, to, toDir Point, cn string, self *cimOb
 }
 
 // symbolBox is the box the symbol drawn by DiagramObject do at p covers: reach around it for most symbols (half a
-// symbol's size), out to its farthest terminals both ways for a transformer.
+// symbol's size); for a transformer, out to its farthest terminals along its axis and, across it, half that plus
+// half of reach (its windings' circles, with room beside them).
 func (l *cimLayout) symbolBox(do *cimObject, p Point, reach float64) [4]float64 {
 	rx, ry := reach, reach
 	if o := l.im.objs[do.get("IdentifiedObject")]; o != nil && o.class == "PowerTransformer" {
 		for _, t := range symbolTerminals(new(l.transformerProbe(o, p.X, p.Y)), l.im.opt.Terminals) {
 			rx, ry = math.Max(rx, math.Abs(t.X-p.X)), math.Max(ry, math.Abs(t.Y-p.Y))
 		}
+		rx, ry = math.Max(rx, ry/2+reach/2), math.Max(ry, rx/2+reach/2)
 	}
 	return [4]float64{p.X - rx, p.Y - ry, p.X + rx, p.Y + ry}
 }

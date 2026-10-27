@@ -1159,15 +1159,34 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 			}
 			end := ts[w]
 			c := centres[k.trans.id]
-			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) && math.Abs(k.at.X-end.X) < 1e-6 {
+			// lead draws pts when they keep the layout's rules; else it routes the lead on the grid, arriving along
+			// arrive, and draws that, or pts after all with a warning when even that finds no way.
+			lead := func(pts []Point, arrive Point) {
+				if l.leadClear(pts, k.cn, k.trans, c) {
+					l.wire(k.cn, pts)
+					return
+				}
+				if r, ok := l.route(k.at, Point{Y: math.Copysign(1, k.corridor-k.at.Y)}, end, arrive, k.cn, nil); ok &&
+					l.leadClear(r, k.cn, k.trans, c) {
+					l.wire(k.cn, r)
+					return
+				}
+				l.im.layoutWarnings[l.diagram.id] = append(l.im.layoutWarnings[l.diagram.id],
+					fmt.Sprintf("the lead to transformer %q could not be routed clear of the symbols and its own wires; "+
+						"check it on the diagram", k.trans.get("name")))
+				l.wire(k.cn, pts)
+			}
+			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) && math.Abs(k.at.X-end.X) < 1e-6 &&
+				l.leadClear([]Point{k.at, end}, k.cn, k.trans, c) {
 				// Lined up under (or over) its bay: one straight lead.
 				l.wire(k.cn, []Point{k.at, end})
 				continue
 			}
-			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) && l.clearRun(end.X, k.corridor, end.Y, k.cn, k.trans) &&
-				l.free(end.X, k.corridor, end.Y) {
+			if jog := []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: end.X, Y: k.corridor}, end}; math.Abs(end.Y-c.Y) >=
+				math.Abs(end.X-c.X) && l.clearRun(end.X, k.corridor, end.Y, k.cn, k.trans) &&
+				l.leadClear(jog, k.cn, k.trans, c) && l.free(end.X, k.corridor, end.Y) {
 				// Along the corridor to over (or under) the winding and straight in: one jog.
-				l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: end.X, Y: k.corridor}, end})
+				l.wire(k.cn, jog)
 				continue
 			}
 			if math.Abs(end.Y-c.Y) >= math.Abs(end.X-c.X) {
@@ -1180,13 +1199,10 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 					// Something drawn (another band) is in the way: go around it, else find a way on the grid.
 					if x, ok := l.around(k.at.X, k.corridor, ay, end.X, 0, k.cn, k.trans); ok {
 						side = x
-					} else if pts, ok := l.route(k.at, Point{Y: math.Copysign(1, k.corridor-k.at.Y)}, end,
-						Point{Y: -out}, k.cn, nil); ok {
-						l.wire(k.cn, pts)
-						continue
 					}
 				}
-				l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: side, Y: k.corridor}, {X: side, Y: ay}, {X: end.X, Y: ay}, end})
+				lead([]Point{k.at, {X: k.at.X, Y: k.corridor}, {X: side, Y: k.corridor}, {X: side, Y: ay}, {X: end.X, Y: ay}, end},
+					Point{Y: -out})
 				continue
 			}
 			// A lead to the side: come down beyond it, at a distance of its own, and in horizontally.
@@ -1204,13 +1220,9 @@ func (l *cimLayout) transformers(trs []*cimObject, rows map[string]float64, y, m
 				// way on the grid.
 				if x, ok := l.around(k.at.X, k.corridor, end.Y, end.X, out, k.cn, k.trans); ok {
 					ax = x
-				} else if pts, ok := l.route(k.at, Point{Y: math.Copysign(1, k.corridor-k.at.Y)}, end, Point{X: -out},
-					k.cn, nil); ok {
-					l.wire(k.cn, pts)
-					continue
 				}
 			}
-			l.wire(k.cn, []Point{k.at, {X: k.at.X, Y: k.corridor}, {X: ax, Y: k.corridor}, {X: ax, Y: end.Y}, end})
+			lead([]Point{k.at, {X: k.at.X, Y: k.corridor}, {X: ax, Y: k.corridor}, {X: ax, Y: end.Y}, end}, Point{X: -out})
 		}
 	}
 }
@@ -1280,6 +1292,115 @@ func (l *cimLayout) clearSeg(a, b Point, cn string, self *cimObject) bool {
 		}
 	}
 	return true
+}
+
+// leadClear reports whether lead pts, for node cn into a winding of transformer self centred at centre, keeps the
+// layout's rules: it crosses nor touches none of its own segments, nor node cn's other wires but where it starts; it
+// runs along no other wire; and it passes over no symbol or name, but for the one at its start (the bay's device)
+// and self, which only its last segment may reach, coming in from outside.
+func (l *cimLayout) leadClear(pts []Point, cn string, self *cimObject, centre Point) bool {
+	n := len(pts)
+	if n < 2 {
+		return false
+	}
+	g := l.grid
+	segBox := func(a, b Point) [4]float64 {
+		return [4]float64{math.Min(a.X, b.X), math.Min(a.Y, b.Y), math.Max(a.X, b.X), math.Max(a.Y, b.Y)}
+	}
+	for i := 1; i < n; i++ {
+		for j := i + 2; j < n; j++ {
+			if segmentsMeet(pts[i-1], pts[i], pts[j-1], pts[j]) {
+				return false
+			}
+		}
+	}
+	end := pts[n-1]
+	for _, do := range l.im.dos[l.diagram.id] {
+		eq := do.get("IdentifiedObject")
+		dpts := l.im.points[do.id]
+		switch {
+		case do.class == "TextDiagramObject":
+			if len(dpts) == 0 {
+				continue
+			}
+			p := pointOf(dpts[0])
+			w := 6 * float64(len([]rune(do.get("text"))))
+			box := [4]float64{p.X - g/2, p.Y - 10, p.X + w + g/2, p.Y + 2}
+			for i := 1; i < n; i++ {
+				if overlaps(segBox(pts[i-1], pts[i]), box) {
+					return false
+				}
+			}
+		case len(dpts) == 1:
+			box := l.symbolBox(do, pointOf(dpts[0]), g)
+			for i := 1; i < n; i++ {
+				if !overlaps(segBox(pts[i-1], pts[i]), box) {
+					continue
+				}
+				switch {
+				case self != nil && eq == self.id:
+					from := pts[n-2]
+					if i < n-1 || (from.X-end.X)*(end.X-centre.X)+(from.Y-end.Y)*(end.Y-centre.Y) <= 0 {
+						return false
+					}
+				case i == 1 && inBox(pts[0], box):
+				default:
+					return false
+				}
+			}
+		default:
+			for k := 1; k < len(dpts); k++ {
+				p, q := pointOf(dpts[k-1]), pointOf(dpts[k])
+				for i := 1; i < n; i++ {
+					a, b := pts[i-1], pts[i]
+					if eq == cn {
+						if segmentsMeet(a, b, p, q) && !(i == 1 && touchOnlyAt(a, b, p, q, pts[0])) {
+							return false
+						}
+					} else if collinearOverlap(a, b, p, q) {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+func inBox(p Point, b [4]float64) bool {
+	return b[0] <= p.X && p.X <= b[2] && b[1] <= p.Y && p.Y <= b[3]
+}
+
+// segmentsMeet reports whether segments a–b and p–q share any point.
+func segmentsMeet(a, b, p, q Point) bool {
+	if _, ok := properCrossing(a, b, p, q); ok {
+		return true
+	}
+	return onSeg(a, p, q) || onSeg(b, p, q) || onSeg(p, a, b) || onSeg(q, a, b)
+}
+
+// touchOnlyAt reports whether segments a–b and p–q share no point but at.
+func touchOnlyAt(a, b, p, q, at Point) bool {
+	if _, ok := properCrossing(a, b, p, q); ok || collinearOverlap(a, b, p, q) {
+		return false
+	}
+	for _, x := range []Point{a, b, p, q} {
+		if !samePt(x, at) && onSeg(x, a, b) && onSeg(x, p, q) {
+			return false
+		}
+	}
+	return true
+}
+
+// collinearOverlap reports whether segments a–b and p–q lie on one line and share more than a point.
+func collinearOverlap(a, b, p, q Point) bool {
+	dx, dy := b.X-a.X, b.Y-a.Y
+	if math.Abs((p.X-a.X)*dy-(p.Y-a.Y)*dx) > repairEpsilon || math.Abs((q.X-a.X)*dy-(q.Y-a.Y)*dx) > repairEpsilon {
+		return false
+	}
+	proj := func(r Point) float64 { return (r.X-a.X)*dx + (r.Y-a.Y)*dy }
+	lo, hi := math.Min(proj(p), proj(q)), math.Max(proj(p), proj(q))
+	return math.Min(hi, dx*dx+dy*dy)-math.Max(lo, 0) > repairEpsilon
 }
 
 // around finds, for a lead from its corridor at height cy (leaving its bay at ax) to the height ay it comes in at,

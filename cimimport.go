@@ -33,6 +33,9 @@ type CIMImportOptions struct {
 	Grid       float64
 	CIMClasses CIMClassTable // which CIM classes a shape stands for (nil: the built-in lists)
 	AutoLayout bool          // lay the equipment out automatically even when the documents hold a diagram layout
+	// WindingVoltages gives transformer ends (by mRID) a voltage (kV) of their own, and with it what is joined to
+	// them up to the next transformer (see CIMSameVoltageTransformers); applied before anything is drawn.
+	WindingVoltages map[string]float64
 }
 
 // CIMPage is one imported diagram: Title is the DL Diagram's name, Report counts what was made (Skipped by CIM
@@ -302,10 +305,39 @@ type cimImporter struct {
 	points    map[string][]*cimObject // DiagramObject id → its points, in order
 	dos       map[string][]*cimObject // Diagram id → its DiagramObjects
 	layerOf   map[string]string       // DiagramObject id → VisibilityLayer id
+	// layoutWarnings are the auto-layout's notes on a Diagram it made, by Diagram id (a lead it could not route
+	// clear of symbols and its own node's wires).
+	layoutWarnings map[string][]string
+	notes          []string // warnings on the whole model, given with the first page
 }
 
 // ImportCIM converts CIM documents to diagrams, one per DL Diagram that places at least one item.
 func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
+	im, err := newCIMImporter(docs, opt)
+	if err != nil {
+		return nil, err
+	}
+	im.applyWindingVoltages(opt.WindingVoltages)
+	diagrams := im.byClass["Diagram"]
+	im.ownLayout = len(diagrams) > 0
+	if len(diagrams) == 0 || opt.AutoLayout {
+		diagrams = im.autoLayout()
+	}
+	var pages []CIMPage
+	for _, dg := range diagrams {
+		if p, ok := im.page(dg); ok {
+			pages = append(pages, p)
+		}
+	}
+	if len(pages) == 0 {
+		return nil, ErrNoDiagramLayout
+	}
+	pages[0].Warnings = append(im.notes, pages[0].Warnings...)
+	return pages, nil
+}
+
+// newCIMImporter parses CIM documents docs and indexes their objects.
+func newCIMImporter(docs [][]byte, opt CIMImportOptions) (*cimImporter, error) {
 	if opt.Grid <= 0 {
 		opt.Grid = 10
 	}
@@ -315,7 +347,8 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 	}
 	nameVoltages(objs)
 	im := &cimImporter{opt: opt, objs: objs, byClass: map[string][]*cimObject{}, terminals: map[string][]*cimObject{},
-		points: map[string][]*cimObject{}, dos: map[string][]*cimObject{}, layerOf: map[string]string{}}
+		points: map[string][]*cimObject{}, dos: map[string][]*cimObject{}, layerOf: map[string]string{},
+		layoutWarnings: map[string][]string{}}
 	ids := make([]string, 0, len(objs))
 	for id := range objs {
 		ids = append(ids, id)
@@ -357,21 +390,7 @@ func ImportCIM(docs [][]byte, opt CIMImportOptions) ([]CIMPage, error) {
 	for _, list := range im.points {
 		sort.SliceStable(list, func(i, j int) bool { return seq(list[i]) < seq(list[j]) })
 	}
-	diagrams := im.byClass["Diagram"]
-	im.ownLayout = len(diagrams) > 0
-	if len(diagrams) == 0 || opt.AutoLayout {
-		diagrams = im.autoLayout()
-	}
-	var pages []CIMPage
-	for _, dg := range diagrams {
-		if p, ok := im.page(dg); ok {
-			pages = append(pages, p)
-		}
-	}
-	if len(pages) == 0 {
-		return nil, ErrNoDiagramLayout
-	}
-	return pages, nil
+	return im, nil
 }
 
 // nameVoltages gives a VoltageLevel whose BaseVoltage is missing (often in a file not sent along) or holds no
@@ -613,6 +632,7 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 	} else if b.synthetic {
 		kind = CIMLayoutGenerated
 	}
+	b.warnings = append(b.warnings, b.im.layoutWarnings[dg.id]...)
 	return CIMPage{Title: title, Diagram: b.d, Report: b.report, Messages: b.messages, Warnings: b.warnings, Layout: kind}, true
 }
 
