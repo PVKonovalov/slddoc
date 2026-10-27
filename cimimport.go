@@ -2031,21 +2031,35 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		if i == hub {
 			continue
 		}
-		from, to, bd := Point{}, Point{}, math.Inf(1)
+		type pair struct {
+			from, to Point
+			d        float64
+		}
+		var pairs []pair
 		cands := slices.Clone(p.pts)
 		for _, s := range p.segs {
 			cands = append(cands, s[0], s[1])
 		}
 		for _, q := range cands {
-			if t, d := main.nearest(q); d < bd {
-				from, to, bd = q, t, d
+			t, d := main.nearest(q)
+			pairs = append(pairs, pair{q, t, d})
+		}
+		slices.SortStableFunc(pairs, func(a, c pair) int { return cmp.Compare(a.d, c.d) })
+		// The nearest way that runs over no symbol, bending either way; else the nearest.
+		var route []Point
+		for _, pr := range pairs {
+			ways := [][]Point{{pr.from, pr.to}}
+			if pr.from.X != pr.to.X && pr.from.Y != pr.to.Y {
+				ways = [][]Point{{pr.from, {X: pr.from.X, Y: pr.to.Y}, pr.to}, {pr.from, {X: pr.to.X, Y: pr.from.Y}, pr.to}}
+			}
+			if route == nil {
+				route = ways[0]
+			}
+			if k := slices.IndexFunc(ways, b.clearOfSymbols); k >= 0 {
+				route = ways[k]
+				break
 			}
 		}
-		route := []Point{from}
-		if from.X != to.X && from.Y != to.Y {
-			route = append(route, Point{X: from.X, Y: to.Y})
-		}
-		route = append(route, to)
 		addWire(route)
 		main.pts = append(main.pts, p.pts...)
 		main.segs = append(main.segs, p.segs...)
@@ -2055,6 +2069,42 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		routed++
 	}
 	return routed
+}
+
+// clearOfSymbols reports whether wire pts runs over no device drawn so far, but where it ends on one's terminal from
+// outside. A device's box is its centre and terminals, at least 8 either side of its axis.
+func (b *cimPageBuilder) clearOfSymbols(pts []Point) bool {
+	for i := range b.d.Elements {
+		e := &b.d.Elements[i]
+		switch e.Class {
+		case ClassBusBarSection, ClassJunctionPoint, ClassNonIntersection:
+			continue
+		}
+		ts := symbolTerminals(e, b.im.opt.Terminals)
+		box := [4]float64{e.X, e.Y, e.X, e.Y}
+		for _, t := range ts {
+			box = [4]float64{math.Min(box[0], t.X), math.Min(box[1], t.Y), math.Max(box[2], t.X), math.Max(box[3], t.Y)}
+		}
+		const half = 8
+		if box[2]-box[0] < 2*half {
+			box[0], box[2] = e.X-half, e.X+half
+		}
+		if box[3]-box[1] < 2*half {
+			box[1], box[3] = e.Y-half, e.Y+half
+		}
+		terminal := func(q Point) bool { return slices.ContainsFunc(ts, func(t Point) bool { return samePt(t, q) }) }
+		for k := 1; k < len(pts); k++ {
+			a, z := pts[k-1], pts[k]
+			if !overlaps([4]float64{math.Min(a.X, z.X), math.Min(a.Y, z.Y), math.Max(a.X, z.X), math.Max(a.Y, z.Y)}, box) {
+				continue
+			}
+			if terminal(a) && !inBox(z, box) || terminal(z) && !inBox(a, box) {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 // containerBV is the BaseVoltage of container c: its own, or a Bay's voltage level's.

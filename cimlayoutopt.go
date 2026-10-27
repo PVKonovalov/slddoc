@@ -23,6 +23,7 @@ type layRegion struct {
 	box   [4]float64
 	parts [][4]float64 // a box per drawn object
 	d     Point        // its move
+	cols  []float64    // its bay columns' x, before its move
 
 	name    *cimObject    // its band's name, left of its busbars
 	nameDX  float64       // the name's move to the right of its busbars
@@ -307,13 +308,9 @@ func (l *cimLayout) placeBlocks(blocks []*layBlock, transX map[string]float64, s
 		d[r] = Point{}
 		done = append(done, r)
 	}
-	prevTop := union(blocks[0].regions, d)[1]
 	for _, b := range blocks[1:] {
-		// A voltage class's regions on one row, at the top of its first.
+		// A voltage class's regions stay on the row of bands they were drawn on.
 		rise := map[*layRegion]float64{}
-		for _, r := range b.regions {
-			rise[r] = b.regions[0].box[1] - r.box[1]
-		}
 		type item struct {
 			r    *layRegion
 			want float64
@@ -409,35 +406,29 @@ func (l *cimLayout) placeBlocks(blocks []*layBlock, transX map[string]float64, s
 			}
 			u = union(b.regions, d)
 		}
-		newTop := prevTop
-		for _, o := range done {
-			for _, r := range b.regions {
-				for _, p := range r.parts {
-					p = shifted(p, d[r])
-					for _, q := range o.parts {
-						if q = shifted(q, d[o]); spanOverlap(p[0], p[2], q[0], q[2]) {
-							newTop = math.Max(newTop, u[1]+q[3]+2*g-p[1])
+		// Clear of what is already placed on its row: further right, never up or down.
+		for range 100 {
+			push := 0.0
+			for _, o := range done {
+				for _, r := range b.regions {
+					for _, p := range r.parts {
+						p = shifted(p, d[r])
+						for _, q := range o.parts {
+							if q = shifted(q, d[o]); overlaps([4]float64{p[0] - g, p[1], p[2] + g, p[3]}, q) {
+								push = math.Max(push, q[2]+2*g-p[0])
+							}
 						}
 					}
 				}
 			}
-		}
-		for id, tx := range transX {
-			y, ok := rows[l.transTop[id]]
-			if !ok {
-				continue
+			if push <= 0 {
+				break
 			}
-			left, right := l.reach(l.im.objs[id], y)
-			if spanOverlap(u[0], u[2], tx+left, tx+right) {
-				newTop = math.Max(newTop, y+8*g)
+			for _, r := range b.regions {
+				d[r] = Point{X: d[r].X + math.Ceil(push/g)*g, Y: d[r].Y}
 			}
 		}
-		dy := math.Round((newTop-u[1])/g) * g
-		for _, r := range b.regions {
-			d[r] = Point{X: d[r].X, Y: d[r].Y + dy}
-			done = append(done, r)
-		}
-		prevTop = u[1] + dy
+		done = append(done, b.regions...)
 	}
 	return d
 }
@@ -676,7 +667,19 @@ func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, tr
 		leads = append(leads, corrLead{i, k.band, k.at.add(d[regionOf[i]]), ts[w], k.corridor + d[regionOf[i]].Y})
 	}
 	levels := corridors(leads)
+	// The page's size counts too: a straighter lead is not worth a page much wider or taller.
 	errSum := 0.0
+	page := [4]float64{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
+	for _, r := range regions {
+		b := shifted(r.box, d[r])
+		page = [4]float64{math.Min(page[0], b[0]), math.Min(page[1], b[1]), math.Max(page[2], b[2]), math.Max(page[3], b[3])}
+	}
+	for _, x := range transX {
+		page[0], page[2] = math.Min(page[0], x), math.Max(page[2], x)
+	}
+	if page[2] > page[0] {
+		errSum += layoutPageWeight * (page[2] - page[0] + page[3] - page[1])
+	}
 	var linkSegs []seg
 	for _, ld := range leads {
 		k, at, end := l.links[ld.i], ld.at, ld.end
@@ -709,6 +712,10 @@ func (l *cimLayout) layoutError(regions []*layRegion, d map[*layRegion]Point, tr
 	}
 	return errSum
 }
+
+// layoutPageWeight is what a unit of the page's width or height costs in layoutError, against 1 for a unit of lead
+// and 1000 for a bend.
+const layoutPageWeight = 3
 
 // shiftRegion moves everything region r drew by r.d.
 func (l *cimLayout) shiftRegion(r *layRegion) {

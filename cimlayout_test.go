@@ -485,8 +485,8 @@ func TestAutoLayoutGeneratorsUnderTransformers(t *testing.T) {
 }
 
 // TestAutoLayoutThreeWindings: two 110/35/10 kV transformers, each with a bay in every level. The voltage levels'
-// BaseVoltage is missing, so their names give the voltages (bands top to bottom 110, 35, 10, every wire with its
-// class), and the nodes are listed by their containers only (the inverse role). No lead crosses a busbar of another
+// BaseVoltage is missing, so their names give the voltages (110 on top, 35 and 10 side by side under the
+// transformers, every wire with its class), and the nodes are listed by their containers only (the inverse role). No lead crosses a busbar of another
 // class or runs along a wire of another node.
 func TestAutoLayoutThreeWindings(t *testing.T) {
 	var b strings.Builder
@@ -561,8 +561,8 @@ func TestAutoLayoutThreeWindings(t *testing.T) {
 			busbars = append(busbars, e)
 		}
 	}
-	if !(busY["110 kV"] < busY["35 kV"] && busY["35 kV"] < busY["10 kV"]) {
-		t.Fatalf("bands should run 110, 35, 10 kV from the top: %v", busY)
+	if !(busY["110 kV"] < busY["35 kV"] && busY["35 kV"] == busY["10 kV"]) {
+		t.Fatalf("110 kV should be on top, 35 and 10 kV side by side under it: %v", busY)
 	}
 	var trPorts []Port
 	for _, e := range d.Elements {

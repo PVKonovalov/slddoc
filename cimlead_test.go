@@ -147,3 +147,169 @@ func TestAutoLayoutTransformerLeads(t *testing.T) {
 func slicesAny(pts []Point, f func(Point) bool) bool {
 	return slices.ContainsFunc(pts, f)
 }
+
+// TestAutoLayoutSpacing checks the spacing hand-drawn diagrams use: bays 9 grid steps apart on a busbar up to 20 kV
+// and 12 above, the busbar 2 steps past its outermost bays, a bay's first device terminal 2 steps from the busbar,
+// devices 6 steps apart down a bay, and each device's name on its own row, right of it.
+func TestAutoLayoutSpacing(t *testing.T) {
+	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}},
+		"330001": {{X: 0, Y: 0}}, "330002": {{X: 0, Y: 0}}}
+	for _, c := range []struct {
+		kv    float64
+		pitch float64
+	}{{11, 90}, {33, 120}} {
+		opt := CIMImportOptions{Terminals: terms, Grid: 10}
+		if c.kv != 33 {
+			opt.WindingVoltages = map[string]float64{"Te2": c.kv}
+		}
+		pages, err := ImportCIM([][]byte{[]byte(transformerUnderBaysEQ())}, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := pages[0].Diagram
+		at := map[string]Element{}
+		var bus Element
+		for _, e := range d.Elements {
+			at[e.Name] = e
+			if e.Class == ClassBusBarSection {
+				bus = e
+			}
+		}
+		var xs []float64
+		for i := 2; i <= 5; i++ {
+			xs = append(xs, at[fmt.Sprintf("Q%d", i)].X)
+		}
+		for i := 1; i < len(xs); i++ {
+			if xs[i]-xs[i-1] != c.pitch {
+				t.Errorf("%v kV: bays at %v, want %v apart", c.kv, xs, c.pitch)
+			}
+		}
+		if len(bus.Points) != 2 {
+			t.Fatalf("busbar = %+v", bus)
+		}
+		lo, hi := math.Min(bus.Points[0].X, bus.Points[1].X), math.Max(bus.Points[0].X, bus.Points[1].X)
+		first, last := math.Inf(1), math.Inf(-1)
+		for _, e := range d.Elements {
+			if e.Class == ClassBreaker {
+				first, last = math.Min(first, e.X), math.Max(last, e.X)
+			}
+		}
+		if first-lo != 20 || hi-last != 20 {
+			t.Errorf("%v kV: busbar %v–%v for bays %v–%v, want 20 past each", c.kv, lo, hi, first, last)
+		}
+		busY := bus.Points[0].Y
+		q, l := at["Q2"], at["L1"]
+		if math.Abs(q.Y-busY) != 30 {
+			t.Errorf("%v kV: breaker centre %v from the busbar at %v, want its terminal 20 from it", c.kv, q.Y, busY)
+		}
+		if math.Abs(l.Y-q.Y) > 60 {
+			t.Errorf("%v kV: load %v and breaker %v more than a level apart", c.kv, l.Y, q.Y)
+		}
+		for _, lb := range d.Labels {
+			if lb.Text == "Q2" && (lb.X != q.X+20 || lb.Y != q.Y+5) {
+				t.Errorf("%v kV: Q2's name at (%v,%v), device at (%v,%v)", c.kv, lb.X, lb.Y, q.X, q.Y)
+			}
+		}
+	}
+}
+
+// TestAutoLayoutEarthingTaps: a bay whose nodes carry earthing switches (one behind its own disconnector) is one
+// straight run of its switches, its earthing drawn sideways off it, each at its node and clear of the others.
+func TestAutoLayoutEarthingTaps(t *testing.T) {
+	var b strings.Builder
+	obj := func(class, id string, props ...string) {
+		fmt.Fprintf(&b, "<cim:%s rdf:ID=\"_%s\">", class, id)
+		for i := 0; i+1 < len(props); i += 2 {
+			if strings.HasPrefix(props[i+1], "#") {
+				fmt.Fprintf(&b, "<cim:%s rdf:resource=\"#_%s\"/>", props[i], props[i+1][1:])
+			} else {
+				fmt.Fprintf(&b, "<cim:%s>%s</cim:%s>", props[i], props[i+1], props[i])
+			}
+		}
+		fmt.Fprintf(&b, "</cim:%s>\n", class)
+	}
+	term := func(eq, cn string, seq int) {
+		obj("Terminal", fmt.Sprintf("t-%s-%d", eq, seq), "Terminal.ConductingEquipment", "#"+eq,
+			"Terminal.ConnectivityNode", "#"+cn, "ACDCTerminal.sequenceNumber", fmt.Sprint(seq))
+	}
+	b.WriteString(`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">` + "\n")
+	obj("BaseVoltage", "bv", "BaseVoltage.nominalVoltage", "35")
+	obj("Substation", "s", "IdentifiedObject.name", "S")
+	obj("VoltageLevel", "v", "VoltageLevel.Substation", "#s", "VoltageLevel.BaseVoltage", "#bv")
+	for _, cn := range []string{"bus", "a", "b", "c", "e"} {
+		obj("ConnectivityNode", cn, "ConnectivityNode.ConnectivityNodeContainer", "#v")
+	}
+	obj("BusbarSection", "B", "IdentifiedObject.name", "B", "Equipment.EquipmentContainer", "#v")
+	term("B", "bus", 1)
+	two := func(class, id, x, y string) {
+		obj(class, id, "IdentifiedObject.name", id, "Equipment.EquipmentContainer", "#v", "Switch.normalOpen", "false")
+		term(id, x, 1)
+		term(id, y, 2)
+	}
+	one := func(class, id, x string) {
+		obj(class, id, "IdentifiedObject.name", id, "Equipment.EquipmentContainer", "#v", "Switch.normalOpen", "true")
+		term(id, x, 1)
+	}
+	// Busbar, bus disconnector, breaker, line disconnector, a load beyond; earthing on each node between them, the
+	// one on the line side behind a disconnector of its own.
+	two("Disconnector", "DB", "bus", "a")
+	two("Breaker", "Q", "a", "b")
+	two("Disconnector", "DL", "b", "c")
+	obj("EnergyConsumer", "L", "IdentifiedObject.name", "L", "Equipment.EquipmentContainer", "#v")
+	term("L", "c", 1)
+	one("GroundDisconnector", "EA", "a")
+	one("GroundDisconnector", "EB", "b")
+	two("Disconnector", "DE", "c", "e")
+	one("GroundDisconnector", "EC", "e")
+	b.WriteString("</rdf:RDF>\n")
+
+	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}},
+		"54": {{X: 0, Y: 10}}, "330001": {{X: 0, Y: 0}}}
+	pages, err := ImportCIM([][]byte{[]byte(b.String())}, CIMImportOptions{Terminals: terms, Grid: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	at := map[string]Element{}
+	for _, e := range d.Elements {
+		at[e.Name] = e
+	}
+	axis := at["Q"].X
+	for _, name := range []string{"DB", "Q", "DL", "L"} {
+		if at[name].X != axis || at[name].Orient%180 != 0 {
+			t.Errorf("%s at x %v orient %d, want on the bay's axis %v, upright", name, at[name].X, at[name].Orient, axis)
+		}
+	}
+	nodes := map[int]Node{}
+	for _, n := range d.Nodes {
+		nodes[n.ID] = n
+	}
+	for _, name := range []string{"EA", "EB", "EC", "DE"} {
+		e := at[name]
+		if e.Orient%180 == 0 || e.X <= axis {
+			t.Errorf("%s at (%v,%v) orient %d, want sideways right of the axis %v", name, e.X, e.Y, e.Orient, axis)
+		}
+	}
+	if at["EC"].X <= at["DE"].X || at["EC"].Y != at["DE"].Y {
+		t.Errorf("EC (%v,%v) should follow its disconnector DE (%v,%v) on its row", at["EC"].X, at["EC"].Y, at["DE"].X, at["DE"].Y)
+	}
+	for _, e := range d.Elements {
+		if e.Class == ClassBusBarSection || e.Class == ClassJunctionPoint {
+			continue
+		}
+		ts := symbolTerminals(&e, terms)
+		box := [4]float64{e.X - 8, e.Y - 8, e.X + 8, e.Y + 8}
+		for _, p := range ts {
+			box = [4]float64{math.Min(box[0], p.X), math.Min(box[1], p.Y), math.Max(box[2], p.X), math.Max(box[3], p.Y)}
+		}
+		for _, c := range d.Connectors {
+			for k := 1; k < len(c.Points); k++ {
+				p, q := c.Points[k-1], c.Points[k]
+				onTerm := slices.ContainsFunc(ts, func(x Point) bool { return samePt(x, p) || samePt(x, q) })
+				if !onTerm && overlaps([4]float64{math.Min(p.X, q.X), math.Min(p.Y, q.Y), math.Max(p.X, q.X), math.Max(p.Y, q.Y)}, box) {
+					t.Errorf("wire %d %v runs over %s", c.ID, c.Points, e.Name)
+				}
+			}
+		}
+	}
+}
