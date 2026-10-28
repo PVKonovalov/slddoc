@@ -331,7 +331,7 @@ func TestParseTwoPortDevice_Capacitor(t *testing.T) {
 }
 
 // TestParseVoltageTransformer uses the exact real xsde2svg markup
-// (sld-viewer's own PS_110kV_Example.svg, id="4473") that surfaced this
+// (id="4473") that surfaced this
 // gap: a real shape-55 instance carries no data-voltage attribute
 // anywhere, unlike every other one-port device — its own voltage color
 // only lives in the primary winding's own style="stroke:...".
@@ -416,7 +416,7 @@ func TestParseJunctionPoint(t *testing.T) {
 }
 
 func TestParseLamp(t *testing.T) {
-	n := parseFirst(t, `<circle cx="382" cy="203" r="11" style="fill:none;stroke:slategray;stroke-width:2" data-type="106" data-state="0" data-fill="0:none,1:red" data-name="АВ Валдай" id="148704876" />`)
+	n := parseFirst(t, `<circle cx="382" cy="203" r="11" style="fill:none;stroke:slategray;stroke-width:2" data-type="106" data-state="0" data-fill="0:none,1:red" data-name="АВ Лесная" id="148704876" />`)
 
 	el, err := parseLamp(n)
 	if err != nil {
@@ -468,7 +468,7 @@ func TestParseFaultPassageIndicator(t *testing.T) {
 }
 
 func TestParsePowerflowIndicator(t *testing.T) {
-	// Real corpus markup (PS_Novaya_L2_PS_Nelushka_L3.svg): the "←" variant,
+	// Real corpus markup: the "←" variant,
 	// with a non-zero rotation.
 	n := parseFirst(t, `<text x="1380" y="452" style="font-size:18;fill:skyblue;font-weight: bold" transform="rotate(90,1380,450)" id="148791591" data-type="320001" data-angle="90" >←</text>`)
 
@@ -655,8 +655,7 @@ func TestParseConnector(t *testing.T) {
 // Buswork) must resolve to KindBusWork, not KindBusbarWire, which has no
 // code of its own at all (see connectorKindByType's own doc comment) —
 // this is the exact real corpus data that surfaced the bug this test
-// guards against (a real data-type="21" connector, id=148795659, from
-// "Энергомониторинг_Л-5_Почеп - Л-3_Зеленая.svg").
+// guards against (a real data-type="21" connector, id=148795659).
 func TestParseConnector_Kind(t *testing.T) {
 	cases := []struct {
 		dataType string
@@ -1313,7 +1312,7 @@ func TestParseKnifeSwitch3(t *testing.T) {
 }
 
 // TestParseKnifeSwitch uses real xsde2svg markup for shape 44 (ctrlroom
-// sld1 corpus: Switches.svg id 7, unrotated, and id 7163, rotated -90):
+// sld1 corpus: id 7, unrotated, and id 7163, rotated -90):
 // the same three circles as shape 175, with the blade on the left contact.
 func TestParseKnifeSwitch(t *testing.T) {
 	cases := []struct {
@@ -1369,7 +1368,7 @@ func TestParseKnifeSwitch(t *testing.T) {
 }
 
 // TestWindowIcon_RealCorpusRoundTrip extracts a real xsde2svg Window icon
-// (shape 302, ПС 35 кВ 49С Валаам.svg, id 120957326) and renders it back:
+// (shape 302, id 120957326) and renders it back:
 // the same box, and the label at the same 12px position, with its empty
 // "fill:" written as the black a browser draws it in.
 func TestWindowIcon_RealCorpusRoundTrip(t *testing.T) {
@@ -1416,16 +1415,16 @@ func TestWindowIcon_RealCorpusRoundTrip(t *testing.T) {
 
 // TestContainer_RealCorpus reads real xsde2svg Containers (shape 310) in
 // both export forms: the older one (caption alone in the group, the
-// outline as the bare <path> after it; ПС 110 Демянск.svg and a rotated
-// caption from another real file) and the patched one (outline and
+// outline as the bare <path> after it; a plain and a rotated caption
+// from real files) and the patched one (outline and
 // caption in one group, from Test_310_conteyner.xsde), captioned or not.
 // Each renders back in the patched form at the same geometry.
 func TestContainer_RealCorpus(t *testing.T) {
 	const svg = `<?xml version="1.0"?>
 <svg width="10000" height="5000" xmlns="http://www.w3.org/2000/svg">
 <!-- контейнер:310 -->
-<g data-type="310" data-name="ПС 110 кВ Демянск" data-event="dc" data-layer="10" id="120996397" >
-<text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial"  >ПС 110 кВ Демянск</text>
+<g data-type="310" data-name="ПС 110 кВ Северная" data-event="dc" data-layer="10" id="120996397" >
+<text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial"  >ПС 110 кВ Северная</text>
 </g>
 <path d="M 670 440 L300 440 L300 130 L670 130 z" style="fill:none;stroke:dimgray;stroke-dasharray: 3,2;stroke-width:1 " />
 <g data-type="310" data-name="ПС Сельхозкомплекс" data-event="dc" data-layer="10" id="120991010" >
@@ -1454,11 +1453,11 @@ func TestContainer_RealCorpus(t *testing.T) {
 		}
 		byID[e.ID] = e
 	}
-	dem := byID[120996397]
-	if len(dem.Points) != 4 || dem.Points[0] != (Point{670, 440}) || dem.Stroke != "dimgray" || dem.LineStyle != LineStyleDotted ||
-		dem.PropertyText != "ПС 110 кВ Демянск" || dem.TextColor != "none" || dem.TextSize != 28 ||
-		dem.TextAnchor != "middle" || dem.TextBaseline != "text-before-edge" || dem.TextDx != 185 || dem.TextDy != 310 || dem.Layer != 10 {
-		t.Errorf("Демянск = %+v", dem)
+	older := byID[120996397]
+	if len(older.Points) != 4 || older.Points[0] != (Point{670, 440}) || older.Stroke != "dimgray" || older.LineStyle != LineStyleDotted ||
+		older.PropertyText != "ПС 110 кВ Северная" || older.TextColor != "none" || older.TextSize != 28 ||
+		older.TextAnchor != "middle" || older.TextBaseline != "text-before-edge" || older.TextDx != 185 || older.TextDy != 310 || older.Layer != 10 {
+		t.Errorf("older = %+v", older)
 	}
 	rot := byID[120991010]
 	if rot.Orient != -90 || rot.TextDx != 89 || rot.TextDy != 194 || rot.TextAnchor != "end" || rot.TextBaseline != "baseline" {
@@ -1476,9 +1475,9 @@ func TestContainer_RealCorpus(t *testing.T) {
 	out := buf.String()
 	for _, s := range []string{
 		`<!-- Container:310 -->`,
-		`<g data-layer="10" id="120996397" data-type="310" data-name="ПС 110 кВ Демянск" data-voltage="dimgray">
+		`<g data-layer="10" id="120996397" data-type="310" data-name="ПС 110 кВ Северная" data-voltage="dimgray">
 <path d="M 670 440 L300 440 L300 130 L670 130 z" style="fill:none;stroke:dimgray;stroke-dasharray: 3,2;stroke-width:1" />
-<text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial">ПС 110 кВ Демянск</text>
+<text x="485" y="440" style="fill:none;text-anchor:middle;dominant-baseline:text-before-edge;font-size:28px;font-family:Arial">ПС 110 кВ Северная</text>
 </g>`,
 		`<text x="9409" y="3554" style="fill:white;text-anchor:end;dominant-baseline:baseline;font-size:39px;font-family:Arial" transform="rotate(-90,9409,3554)">ПС Сельхозкомплекс</text>`,
 		`<g data-layer="10" id="148694366" data-type="310" data-voltage="dimgray">
@@ -1496,8 +1495,7 @@ func TestContainer_RealCorpus(t *testing.T) {
 }
 
 // TestPowerPole_RealCorpus extracts real xsde2svg Power poles (shape 146:
-// ПС 110 кВ Крутая.svg rotated 180, Поопорная схема ТП Кувизино rotated
-// 90, and an unrotated one) as two-terminal devices anchored at the
+// one rotated 180, one rotated 90, and an unrotated one) as two-terminal devices anchored at the
 // circle's center with ports at the lead tips, and renders one back to the
 // same path.
 func TestPowerPole_RealCorpus(t *testing.T) {
@@ -1563,8 +1561,7 @@ func TestPowerPole_RealCorpus(t *testing.T) {
 }
 
 // TestLampOnPole_RealCorpus reads real xsde2svg Lamps on pole (shape
-// 320002, Поопорная схема ТП ул.Энергетиков д.20 Л-3 ПС Валдай.svg and a
-// rotated one), plus the old source's duplicated data-voltage, and renders
+// 320002, an unrotated and a rotated one), plus the old source's duplicated data-voltage, and renders
 // one back to the same circle and diagonals.
 func TestLampOnPole_RealCorpus(t *testing.T) {
 	const svg = `<?xml version="1.0"?>
@@ -1625,10 +1622,9 @@ func TestLampOnPole_RealCorpus(t *testing.T) {
 
 // TestConnectorArrow_RealCorpus reads real xsde2svg Connector arrows
 // (shape 83) in both of element_83.go's forms — an axis-aligned one
-// (Поопорная схема ТП ул.Энергетиков д.20 Л-3 ПС Валдай.svg, pointing left
-// from the end of its overhead line Л-1, here in the current named-<g>
-// line form) and a diagonal one under rotate(137) — and renders the first
-// back at the same geometry.
+// (pointing left from the end of its overhead line Л-1, here in the
+// current named-<g> line form) and a diagonal one under rotate(137) — and
+// renders the first back at the same geometry.
 func TestConnectorArrow_RealCorpus(t *testing.T) {
 	const svg = `<?xml version="1.0"?>
 <svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
@@ -1697,8 +1693,7 @@ func TestConnectorArrow_RealCorpus(t *testing.T) {
 }
 
 // TestSmallWindow_RealCorpus reads real xsde2svg Small windows (shape 319):
-// two from older exports without an id (PS_110kV_Gazovaya.svg,
-// PS_110kV_Demyansk.svg), which get fresh ids, and one from the patched
+// two from older exports without an id, which get fresh ids, and one from the patched
 // element_319.go with its id; none of their colors becomes a voltage class.
 // Each renders back as the same bare <rect>.
 func TestSmallWindow_RealCorpus(t *testing.T) {
@@ -1742,7 +1737,7 @@ func TestSmallWindow_RealCorpus(t *testing.T) {
 }
 
 // TestConnectorPoint_RealCorpus reads a real xsde2svg Connector (shape 10,
-// ПС 35 кВ 45С Тохма.svg id 1359) with the overhead line and object link
+// id 1359) with the overhead line and object link
 // that end at its center: both wires and its one port share one node, and
 // its magenta doesn't become a voltage class. It renders back as the same
 // 10x10 square.
@@ -1865,10 +1860,10 @@ func portPoints(t *testing.T, d *Diagram, el Element) []Point {
 
 // TestTwoPortLeadTips_RealCorpus checks that a two-port device's ports are
 // its lead tips, from real corpus markup with the wires ending on them:
-//   - a Capacitor (388, PS_35kV_Nevskaya id 2138): plates 24 wide over a
+//   - a Capacitor (388, id 2138): plates 24 wide over a
 //     20-unit span, rotated 90°. The dominant-axis search used to pick the
 //     plate corners, (1135,288)/(1135,312), leaving both wires unconnected;
-//   - a Starter (76, PS_110kV_Zarya id 3), unrotated: its ends are 10-wide
+//   - a Starter (76, id 3), unrotated: its ends are 10-wide
 //     bars, whose middles, not ends, are the terminals;
 //   - a Wire jump (14, CRP_Yupiter_i_Profbumaga id 4429), drawn horizontally
 //     in its own frame and rotated -90°.

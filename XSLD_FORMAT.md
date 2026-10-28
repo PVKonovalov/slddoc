@@ -63,7 +63,7 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diagram width="1800" height="1200" source="PS_110kV.svg" lastId="42">
+<diagram width="1800" height="1200" source="diagram.svg" lastId="42">
   <editor gridSpacing="10" snap="true" showGrid="true" background="#12161d"
           defaultVoltage="1" showNodes="true"/>
   <layers>          <layer .../>          ... </layers>
@@ -86,7 +86,7 @@ Child sections always appear in this order when written; each one is optional.
 |---|---|---|---|
 | `width` | number | yes | Canvas width in diagram units |
 | `height` | number | yes | Canvas height in diagram units |
-| `source` | string | no | File the diagram was extracted from (e.g. `PS_110kV.svg`); informational |
+| `source` | string | no | File the diagram was extracted from (e.g. `diagram.svg`); informational |
 | `lastId` | int | no | Id high-water mark (see §2) |
 
 ### 3.2 `<editor>` (optional)

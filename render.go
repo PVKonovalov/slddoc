@@ -338,7 +338,7 @@ var connectorKindName = map[string]string{
 // Shape-as-data-type: the xsde2svg type code for a generic object-to-object
 // connection (this schema's ClassObjectLink/KindBusWork — what
 // diagramOps.connectElements creates) is 21, KindOverheadLine's is 22
-// (confirmed against sld-viewer/assets/sld/IEEE9bus.svg's own real
+// (confirmed against a real corpus file's own
 // xsde2svg-catalog-code documentation), KindCableLine's is 23, and
 // KindLinkToObject's is 28. A Kind absent from this map renders with no
 // data-type, same as before this existed.
@@ -2089,8 +2089,7 @@ func writePowerflowIndicator(w io.Writer, e Element, mode RenderMode) {
 // transform every anchor-based symbol uses, rather than an absolute-Points
 // one. Two independent, per-instance visual traits, confirmed against the
 // real source (internal/modus/element_385.go, element385) and directly
-// against a real xsde2svg v1.4.12 corpus export
-// (sld-svg/examples/sld/Shema_sety_VRES.svg): NType selects between this
+// against a real xsde2svg v1.4.12 corpus export: NType selects between this
 // shape's own two real appearance variants — 0/unset (the common case)
 // draws a 36-unit outer square, an 18-unit-wide rectangle centered inside
 // it, and a short lead stub above the top edge (the real terminal's own
@@ -2434,8 +2433,7 @@ func writeArrow(w io.Writer, e Element, mode RenderMode) {
 // its own polyline — unlike every other connector kind (and a busbar),
 // which writePolyline renders as a single flat polyline with no wrapping
 // <g>, and no data-name, at all. Overhead line confirmed against both a
-// real corpus file (sld-viewer/assets/sld/IEEE9bus.svg, id="302"
-// data-name="Line2") and a user-supplied example matching it exactly;
+// real corpus file (id="302" data-name="Line2") and a user-supplied example matching it exactly;
 // cable line given the same <g>-wrapping treatment for consistency
 // between the two "named" kinds, since both are meant to carry a real
 // identity (Connector.Name) a plain wire never does — though its own

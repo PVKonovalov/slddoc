@@ -9,8 +9,7 @@ import (
 
 // Static output follows real xsde2svg's own placement convention: every
 // coordinate is absolute, and a rotated symbol carries
-// transform="rotate(angle,x,y)" around its own anchor (see
-// PS_110kV_Valdai.svg's breakers and transformer). The symbol templates and
+// transform="rotate(angle,x,y)" around its own anchor. The symbol templates and
 // the hand-written emitters in render.go instead draw in the symbol's local
 // frame, placed by transform="translate(x,y) rotate(angle)[ scale(-1,1)]" —
 // the form the live canvas (Interactive) needs, since it drags an element by

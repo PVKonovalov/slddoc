@@ -6,7 +6,7 @@ import (
 )
 
 // TestExtract_RTFTextBecomesLabel checks that RTF text (391), from real
-// markup (sld-svg examples/test/Test_391_text_RTF.svg, an equipment list),
+// markup (an equipment list),
 // is read as a plain Text label: every line, its position, size, colour and
 // font, a fresh id, and nothing reported as skipped.
 func TestExtract_RTFTextBecomesLabel(t *testing.T) {

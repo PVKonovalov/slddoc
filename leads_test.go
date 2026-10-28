@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// A real corpus breaker (poves.svg): body 28 wide (size step 2), leads
+// A real corpus breaker: body 28 wide (size step 2), leads
 // drawn out to terminals 60 apart, beyond the library's 40 at that step.
 const longLeadBreaker = `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
 <g id="148706743" data-voltage="#00A0F0" data-type="41" data-name="В-110 л.Лч-3" >

@@ -1341,7 +1341,7 @@ func parseSectionalizer(n *rawNode) (Element, []Point, string, error) {
 // equivalent case is — for these four shapes the transform's center is a
 // different, shape-specific reference point (e.g. Generator's own circle
 // center, 25 units below its terminal), confirmed against a real corpus
-// instance (vres.svg, id 148791225: `M 3630 575 ... transform="rotate(
+// instance (id 148791225: `M 3630 575 ... transform="rotate(
 // -270,3630,600)"` — center (3630,600) is 25 units from the path's own
 // first point (3630,575), not equal to it) — so the first point has to be
 // rotated *through* that transform to get the true, post-rotation anchor,
@@ -2749,7 +2749,7 @@ func parseFork(n *rawNode, id int) (Element, []Point, string, error) {
 // state indicator uses). Its radius (r) is likewise recorded rather than
 // assumed constant: real instances draw meaningfully different sizes for
 // different roles, e.g. r=11 standalone "Индикатор" panel lights vs. r=5
-// lamps clustered in triplets next to a breaker (see Examples.svg). Every
+// lamps clustered in triplets next to a breaker. Every
 // real xsde2svg export found so far draws this as a bare <circle
 // data-type="106">, but a fixed version instead wraps it (plus its own
 // optional ParamText/SubscriptName <text> label) in a shared <g id

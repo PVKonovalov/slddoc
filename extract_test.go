@@ -221,8 +221,7 @@ func TestExtract_DigitalDeviceBackgroundRect(t *testing.T) {
 	}
 }
 
-// testAutotransformerSVG is real xsde2svg output (xsde2svg/examples/test/svg/
-// Test_47_AutoTransformer2-1.svg, its own id="1" instance) — a 2-real-winding
+// testAutotransformerSVG is real xsde2svg output (its own id="1" instance) — a 2-real-winding
 // autotransformer whose own tap arc+stub is drawn before its first <circle>.
 const testAutotransformerSVG = `<?xml version="1.0"?>
 <svg width="600" height="600" style='stroke-width: 0px; background-color: #12161d;' xmlns="http://www.w3.org/2000/svg">
@@ -285,8 +284,7 @@ func TestExtract_PowerTransformerAutotransformerAndVoltages(t *testing.T) {
 	}
 }
 
-// testAutotransformer3WindingSVG is real xsde2svg output
-// (sld-svg/examples/sld/Test_47_AutoTransformer3Text.svg, its own id="1"
+// testAutotransformer3WindingSVG is real xsde2svg output (its own id="1"
 // instance) — a 3-real-winding autotransformer (element_47.go's own
 // WindingNo==4 case). Its third real winding's own lead
 // ("M 340 112 v 11") is drawn *before* its own circle

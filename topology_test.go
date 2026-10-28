@@ -90,7 +90,7 @@ func TestOnSegment(t *testing.T) {
 
 // TestTapPortsOntoWires_RealCorpus checks that a ground switch drawn as a
 // T-tap on a wire, its terminal 2 units from the wire's line mid-span
-// (PS_35kV_Molvotitsy id 2066 on wire 2332), is connected: the wire is split
+// (id 2066 on wire 2332), is connected: the wire is split
 // at the tap into two pieces that both end on the switch's port. It used to
 // come out connected to nothing, a red cross in the editor.
 func TestTapPortsOntoWires_RealCorpus(t *testing.T) {

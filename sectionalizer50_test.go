@@ -21,7 +21,7 @@ func TestParseWithdrawableSectionalizer(t *testing.T) {
 		wantPorts  []Point
 	}{
 		{
-			name: "closed, xMirror 1 (Switches.svg 10)",
+			name: "closed, xMirror 1",
 			svg: `<g id="10" data-type="50" >
 <path d="M 550 286 v -12 m" data-state="1" style="fill:none;stroke:#FF5555;stroke-width:1" data-voltage="#FF5555" />
 <path d="M 550 278 h 2 v 2 h -2 z " style="fill:#FF5555;stroke:#FF5555;stroke-width:1" />
