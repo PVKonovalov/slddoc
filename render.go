@@ -68,6 +68,43 @@ type StateColor struct {
 	Color string
 }
 
+// SeedStateColors gives d the legend's colors when d records none.
+func SeedStateColors(d *Diagram, legend []StateColor) {
+	if len(d.StateColors) > 0 {
+		return
+	}
+	for _, c := range legend {
+		d.StateColors = append(d.StateColors, DiagramStateColor{State: c.State, Color: c.Color})
+	}
+}
+
+// diagramStateLegend returns legend with d's own colors in place of the
+// legend's, followed by d's states the legend lacks.
+func diagramStateLegend(d *Diagram, legend []StateColor) []StateColor {
+	if len(d.StateColors) == 0 {
+		return legend
+	}
+	own := make(map[int]string, len(d.StateColors))
+	for _, c := range d.StateColors {
+		own[c.State] = c.Color
+	}
+	out := make([]StateColor, 0, len(legend)+len(d.StateColors))
+	for _, c := range legend {
+		if color, ok := own[c.State]; ok {
+			c.Color = color
+			delete(own, c.State)
+		}
+		out = append(out, c)
+	}
+	for _, c := range d.StateColors {
+		if color, ok := own[c.State]; ok {
+			out = append(out, StateColor{State: c.State, Color: color})
+			delete(own, c.State)
+		}
+	}
+	return out
+}
+
 // stateColorSet is StateColors reshaped for fast per-element lookup plus
 // the pre-built data-fill legend string, computed once per Render call
 // rather than once per element.
@@ -800,7 +837,7 @@ func Render(d *Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, defaul
 	for _, vc := range d.VoltageClasses {
 		voltageColor[vc.ID] = vc.Color
 	}
-	stateColors := newStateColorSet(stateColorLegend)
+	stateColors := newStateColorSet(diagramStateLegend(d, stateColorLegend))
 	fpiColors := newStateColorSet(fpiStateColorLegend)
 
 	background := diagramBackground(d)
@@ -949,7 +986,7 @@ func RenderFragments(d *Diagram, lib *SymbolLibrary, ids []int, mode RenderMode,
 	for _, vc := range d.VoltageClasses {
 		voltageColor[vc.ID] = vc.Color
 	}
-	stateColors := newStateColorSet(stateColorLegend)
+	stateColors := newStateColorSet(diagramStateLegend(d, stateColorLegend))
 	fpiColors := newStateColorSet(fpiStateColorLegend)
 
 	want := make(map[int]bool, len(ids))

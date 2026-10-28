@@ -68,6 +68,7 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
           defaultVoltage="1" showNodes="true"/>
   <layers>          <layer .../>          ... </layers>
   <voltageClasses>  <class .../>          ... </voltageClasses>
+  <stateColors>     <state .../>          ... </stateColors>
   <nodes>           <node .../>           ... </nodes>
   <elements>        <element ...>...      ... </elements>
   <connectors>      <connector ...>...    ... </connectors>
@@ -147,6 +148,18 @@ an element/connector; **color is recorded only here**.
 | `id` | int | yes | Class id |
 | `name` | string | yes | Display name, e.g. `10 kV`. Extract uses the color itself as the name when it has no voltage hint for it |
 | `color` | color | yes | Drawing color |
+
+### 4.2.1 `<stateColors>` / `<state>`
+
+The color a switching device is filled with in each state (its `{fill}` and the
+saved SVG's `data-fill`). Optional: a state not listed here is drawn from the
+renderer's own legend (the editor's `state_colors` setting), which the editor
+also copies in when it saves a diagram that has none.
+
+| Attribute | Type | Req. | Meaning |
+|---|---|---|---|
+| `state` | int | yes | Element `state` value: 0 open, 1 closed, 2 intermediate, 3 faulty |
+| `color` | color | yes | Fill color |
 
 ### 4.3 `<nodes>` / `<node>`
 
@@ -617,6 +630,12 @@ so an unrotated one at `y` has terminals at `y-10` and `y+10`.
   <voltageClasses>
     <class id="1" name="110 kV" color="#00b4ff"/>
   </voltageClasses>
+  <stateColors>
+    <state state="0" color="red"/>
+    <state state="1" color="lawngreen"/>
+    <state state="2" color="#c9a800"/>
+    <state state="3" color="magenta"/>
+  </stateColors>
   <nodes>
     <node id="2" x="200" y="100"/>
     <node id="3" x="200" y="120"/>

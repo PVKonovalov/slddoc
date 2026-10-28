@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1400,5 +1401,54 @@ func TestRender_GroupRoundTrip(t *testing.T) {
 	}
 	if groups[1] <= 4 || groups[1] > got.LastID {
 		t.Errorf("group id %d should be fresh (above every item id) and within LastID %d", groups[1], got.LastID)
+	}
+}
+
+func TestRender_DiagramStateColorsOverrideLegend(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"41": `<path d="M -7 -7 h 14 v 14 h -14 z"{fillAttr} style="fill:{fill};stroke:{color};stroke-width:1" />`,
+	})
+	state := 1
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements:    []Element{{ID: 1, Class: ClassBreaker, Shape: "41", X: 10, Y: 10, State: &state}},
+		StateColors: []DiagramStateColor{{State: 1, Color: "#00ff00"}, {State: 3, Color: "magenta"}},
+	}
+	legend := []StateColor{{State: 0, Color: "red"}, {State: 1, Color: "lawngreen"}, {State: 2, Color: "yellow"}}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil, legend...); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `data-fill="0:red,1:#00ff00,2:yellow,3:magenta"`) || !strings.Contains(out, `fill:#00ff00`) {
+		t.Errorf("the diagram's own state colors should replace the legend's: %s", out)
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1}, Static, "", nil, legend...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(frags[1], `fill:#00ff00`) {
+		t.Errorf("fragments should use the diagram's own state colors: %s", frags[1])
+	}
+
+	var xml bytes.Buffer
+	if err := d.Save(&xml); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(&xml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(back.StateColors, d.StateColors) {
+		t.Errorf("state colors should round-trip, got %+v", back.StateColors)
+	}
+
+	fresh := &Diagram{}
+	SeedStateColors(fresh, legend)
+	SeedStateColors(fresh, []StateColor{{State: 0, Color: "black"}})
+	if len(fresh.StateColors) != 3 || fresh.StateColors[0].Color != "red" {
+		t.Errorf("seeding should copy the legend once, got %+v", fresh.StateColors)
 	}
 }

@@ -43,13 +43,16 @@ type Diagram struct {
 	// configured defaults for anything unset.
 	Editor *EditorSettings `xml:"editor,omitempty" json:"editor,omitempty"`
 
-	Layers         []Layer         `xml:"layers>layer" json:"layers"`
-	VoltageClasses []VoltageClass  `xml:"voltageClasses>class" json:"voltageClasses"`
-	Nodes          []Node          `xml:"nodes>node" json:"nodes"`
-	Elements       []Element       `xml:"elements>element" json:"elements"`
-	Connectors     []Connector     `xml:"connectors>connector" json:"connectors"`
-	Labels         []Label         `xml:"labels>label" json:"labels"`
-	DigitalDevices []DigitalDevice `xml:"digitalDevices>digitalDevice" json:"digitalDevices"`
+	Layers         []Layer        `xml:"layers>layer" json:"layers"`
+	VoltageClasses []VoltageClass `xml:"voltageClasses>class" json:"voltageClasses"`
+	// StateColors is the diagram's own switching-state colors; a state it
+	// doesn't list is drawn from the caller's legend (see Render).
+	StateColors    []DiagramStateColor `xml:"stateColors>state" json:"stateColors,omitempty"`
+	Nodes          []Node              `xml:"nodes>node" json:"nodes"`
+	Elements       []Element           `xml:"elements>element" json:"elements"`
+	Connectors     []Connector         `xml:"connectors>connector" json:"connectors"`
+	Labels         []Label             `xml:"labels>label" json:"labels"`
+	DigitalDevices []DigitalDevice     `xml:"digitalDevices>digitalDevice" json:"digitalDevices"`
 
 	// History lists the diagram's saves, oldest first. The editor's server
 	// appends one entry per save; it never affects rendering.
@@ -115,6 +118,12 @@ type Layer struct {
 type VoltageClass struct {
 	ID    int    `xml:"id,attr" json:"id"`
 	Name  string `xml:"name,attr" json:"name"`
+	Color string `xml:"color,attr" json:"color"`
+}
+
+// DiagramStateColor is the color a switching device in State is filled with.
+type DiagramStateColor struct {
+	State int    `xml:"state,attr" json:"state"`
 	Color string `xml:"color,attr" json:"color"`
 }
 
@@ -1219,7 +1228,7 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Element's own tag newly empty, which emptyElement then collapses to
 // self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|nodes|elements|connectors|labels|digitalDevices|history|rows|columns|cells|sectors)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|history|rows|columns|cells|sectors)></[A-Za-z][\w:.-]*>`,
 )
 
 // Save writes d as indented XML.
