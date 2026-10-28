@@ -2910,7 +2910,8 @@ const labelTypeCode = "5"
 // data-name is the caption's own text (lines joined by spaces) — Extract
 // links it back to the element of that name. Interactive keeps the bare
 // <text>, typed with data-type="5" too, since the canvas drags a label by
-// setting x/y on the node carrying data-editor-kind="label".
+// setting x/y on the node carrying data-editor-kind="label". A turned label
+// carries transform="rotate(a,x,y)" about its own anchor.
 func writeLabel(w io.Writer, l Label, mode RenderMode) {
 	anchor := l.Anchor
 	if anchor == "" {
@@ -2936,7 +2937,7 @@ func writeLabel(w io.Writer, l Label, mode RenderMode) {
 	baseline := ""
 	switch l.VAlign {
 	case "top":
-		baseline = "dominant-baseline:hanging;"
+		baseline = "dominant-baseline:text-before-edge;"
 	case "middle":
 		baseline = "dominant-baseline:middle;"
 	}
@@ -2949,6 +2950,9 @@ func writeLabel(w io.Writer, l Label, mode RenderMode) {
 	} else {
 		fmt.Fprintf(w, "<g data-type=\"%s\" data-name=\"%s\" id=\"%d\">\n", labelTypeCode, esc(strings.Join(lines, " ")), l.ID)
 		textAttrs = ""
+	}
+	if l.Rotate != 0 {
+		textAttrs += fmt.Sprintf(" transform=\"rotate(%s,%s,%s)\"", fmtNum(l.Rotate), fmtNum(l.X), fmtNum(l.Y))
 	}
 	fmt.Fprintf(w, "<text%s x=\"%s\" y=\"%s\" style=\"%s\">%s", textAttrs, fmtNum(l.X), fmtNum(l.Y), esc(style), esc(lines[0]))
 	for _, ln := range lines[1:] {
@@ -2990,7 +2994,7 @@ func writeDigitalDevice(w io.Writer, dd DigitalDevice, mode RenderMode) {
 	baseline := ""
 	switch dd.VAlign {
 	case "top":
-		baseline = "dominant-baseline:hanging;"
+		baseline = "dominant-baseline:text-before-edge;"
 	case "middle":
 		baseline = "dominant-baseline:middle;"
 	}

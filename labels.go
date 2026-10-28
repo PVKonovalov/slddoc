@@ -1,6 +1,7 @@
 package slddoc
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -25,11 +26,12 @@ func parseOptionalID(n *rawNode) int {
 
 // parseVAlign reverses writeLabel/writeDigitalDevice's own
 // dominant-baseline mapping back into Label.VAlign/DigitalDevice.VAlign's
-// convention: "hanging" -> "top", "middle" -> "middle", anything else
-// (including absent, the real xsde2svg default) -> "" (bottom/baseline).
+// convention: "text-before-edge" (xsde2svg's, and this editor's since) or
+// "hanging" (this editor's before) -> "top", "middle" -> "middle", anything
+// else (including absent, the real xsde2svg default) -> "" (bottom/baseline).
 func parseVAlign(style string) string {
 	switch styleProp(style, "dominant-baseline") {
-	case "hanging":
+	case "text-before-edge", "hanging":
 		return "top"
 	case "middle":
 		return "middle"
@@ -81,9 +83,11 @@ func textToLabel(t *rawNode) Label {
 		}
 	}
 
+	at, turn := textRotation(t.attr("transform"), Point{X: x, Y: y})
 	return Label{
-		X:      x,
-		Y:      y,
+		X:      at.X,
+		Y:      at.Y,
+		Rotate: turn,
 		Size:   size,
 		Anchor: styleProp(style, "text-anchor"),
 		Bold:   strings.Contains(style, "font-weight: bold") || strings.Contains(style, "font-weight:bold"),
@@ -92,6 +96,34 @@ func textToLabel(t *rawNode) Label {
 		Font:   styleProp(style, "font-family"),
 		Text:   strings.Join(lines, "\n"),
 	}
+}
+
+// textRotation reads a <text>'s transform when it is a single rotate(a[,cx,cy]) (xsde2svg's, turning a caption
+// about its Modus origin): returns where that puts the text's own anchor at, and the angle, now about that anchor.
+// Any other transform leaves at as it is, unturned.
+func textRotation(transform string, at Point) (Point, float64) {
+	ops, err := parseTransformList(transform)
+	if err != nil || len(ops) != 1 || ops[0].name != "rotate" || (len(ops[0].args) != 1 && len(ops[0].args) != 3) {
+		return at, 0
+	}
+	a := ops[0].args
+	var centre Point
+	if len(a) == 3 {
+		centre = Point{X: a[1], Y: a[2]}
+	}
+	return rotate(at, centre, a[0]), labelRotation(a[0])
+}
+
+// labelRotation is angle a in degrees kept in (-180, 180].
+func labelRotation(a float64) float64 {
+	a = math.Mod(a, 360)
+	switch {
+	case a > 180:
+		a -= 360
+	case a <= -180:
+		a += 360
+	}
+	return a
 }
 
 // parseLabel reads a data-type="5" group's <text>/<tspan> content into a

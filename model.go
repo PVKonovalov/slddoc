@@ -1140,7 +1140,10 @@ type Label struct {
 	// writeLabel has always used, so an already-saved label with no font
 	// attribute at all keeps rendering exactly as before.
 	Font string `xml:"font,attr,omitempty" json:"font,omitempty"`
-	Text string `xml:",chardata" json:"text"`
+	// Rotate turns the label clockwise by this many degrees about X/Y, as SVG's rotate does; 0 is level. Kept in
+	// (-180, 180] (labelRotation).
+	Rotate float64 `xml:"rotate,attr,omitempty" json:"rotate,omitempty"`
+	Text   string  `xml:",chardata" json:"text"`
 }
 
 // DigitalDevice is a live SCADA-style analog readout — shape 134 in the

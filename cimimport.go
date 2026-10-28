@@ -2326,8 +2326,12 @@ func (b *cimPageBuilder) labels(dos []*cimObject) {
 		if len(pts) == 0 || do.get("text") == "" {
 			continue
 		}
-		b.d.Labels = append(b.d.Labels, Label{ID: b.take(), For: b.itemOf[do.get("IdentifiedObject")], Layer: b.layer(do),
-			X: pts[0].X, Y: pts[0].Y, Size: 10, Text: do.get("text")})
+		l := Label{ID: b.take(), For: b.itemOf[do.get("IdentifiedObject")], Layer: b.layer(do),
+			X: pts[0].X, Y: pts[0].Y, Size: 10, Text: do.get("text")}
+		if r, ok := do.num("rotation"); ok {
+			l.Rotate = labelRotation(r)
+		}
+		b.d.Labels = append(b.d.Labels, l)
 		b.report.Labels++
 	}
 }

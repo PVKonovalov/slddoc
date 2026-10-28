@@ -250,6 +250,7 @@ newline (`&#xA;` or a literal line break) starts a new line.
 | `bold` | bool | no | Bold text |
 | `color` | color | no | Text color (default `white`) |
 | `font` | string | no | Font family (default `Arial`) |
+| `rotate` | number | no | Clockwise turn in degrees about `x`,`y`, in (-180, 180]; absent = level. Rendered as `transform="rotate(a,x,y)"`, read back from xsde2svg's `rotate(a,cx,cy)` (Modus `angle`/`orient`), and exported to CIM as `TextDiagramObject` `rotation` |
 
 ```xml
 <label id="2674" for="4500" layer="0" x="1110" y="223" size="13" anchor="start">1 сш 10 кВ</label>

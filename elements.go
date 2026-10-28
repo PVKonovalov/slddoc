@@ -520,6 +520,13 @@ func parseTwoPortDevice(n *rawNode, class Class, shape string) (Element, []Point
 		}
 	}
 
+	local := pts
+	if !rotated {
+		local = make([]Point, len(pts))
+		for i, p := range pts {
+			local[i] = rotate(p, anchor, -float64(orient))
+		}
+	}
 	voltage := firstNonEmpty(n.attr("data-voltage"), n.firstAttrDescendant("data-voltage"))
 	return Element{
 		ID:     id,
@@ -530,12 +537,33 @@ func parseTwoPortDevice(n *rawNode, class Class, shape string) (Element, []Point
 		X:      anchor.X,
 		Y:      anchor.Y,
 		Orient: orient,
+		Mirror: drawnMirrored(shape, local, anchor),
 		State:  parseState(n),
 		Ports: []Port{
 			{Name: "1"},
 			{Name: "2"},
 		},
 	}, ports, voltage, nil
+}
+
+// mirrorSides is, for each two-port shape drawn lopsided, the side of its axis its unmirrored drawing leans to (-1
+// left, +1 right): the surge arrester's (29) diagonal starts left, the choke coil's (33) loops bulge right, the
+// reactor's (37) loop is left (as xsde2svg draws them without xMirror).
+var mirrorSides = map[string]float64{"29": -1, "33": 1, "37": -1}
+
+// drawnMirrored reports whether a lopsided two-port shape's drawing, its points local in the symbol's unrotated
+// frame about anchor, leans to the other side of its axis than its unmirrored drawing does.
+func drawnMirrored(shape string, local []Point, anchor Point) bool {
+	side, ok := mirrorSides[shape]
+	if !ok || len(local) == 0 {
+		return false
+	}
+	lean := 0.0
+	for _, p := range local {
+		lean += p.X - anchor.X
+	}
+	lean /= float64(len(local))
+	return math.Abs(lean) > 0.25 && math.Signbit(lean) != math.Signbit(side)
 }
 
 // parseKnifeSwitch handles shapes 44 (Knife switch) and 175

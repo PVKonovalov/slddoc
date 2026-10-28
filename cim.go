@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1493,8 +1494,11 @@ func (x *cimExporter) labels() {
 			lit("IdentifiedObject.mRID", x.mrid(key)).
 			ref("DiagramObject.Diagram", x.diagram).
 			ref("DiagramObject.IdentifiedObject", x.eqOf[l.For]).
-			lit("DiagramObject.drawingOrder", strconv.Itoa(x.layerZ[l.Layer])).
-			lit("TextDiagramObject.text", l.Text)
+			lit("DiagramObject.drawingOrder", strconv.Itoa(x.layerZ[l.Layer]))
+		if l.Rotate != 0 {
+			o.num("DiagramObject.rotation", math.Mod(l.Rotate+360, 360))
+		}
+		o.lit("TextDiagramObject.text", l.Text)
 		x.dl = append(x.dl, o)
 		x.layerDOs[l.Layer] = append(x.layerDOs[l.Layer], o.id)
 		x.points(key, o.id, []Point{{l.X, l.Y}}, nil)
