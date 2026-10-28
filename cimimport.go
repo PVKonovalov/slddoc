@@ -31,7 +31,7 @@ type CIMImportOptions struct {
 	Terminals  map[string][]Point
 	Classes    map[string]Class
 	Grid       float64
-	CIMClasses CIMClassTable // which CIM classes a shape stands for (nil: the built-in lists)
+	CIMClasses CIMClassTable // which CIM classes a shape stands for, and which shape a CIM class is drawn with
 	AutoLayout bool          // lay the equipment out automatically even when the documents hold a diagram layout
 	// WindingVoltages gives transformer ends (by mRID) a voltage (kV) of their own, and with it what is joined to
 	// them up to the next transformer (see CIMSameVoltageTransformers); applied before anything is drawn.
@@ -211,72 +211,41 @@ var cimInverseRoles = map[string]string{
 	"BaseVoltage.VoltageLevel":                    "BaseVoltage",
 }
 
-// cimEquipmentShapes maps a CIM equipment class to the element class and shape it is drawn with by default.
-var cimEquipmentShapes = map[string]struct {
-	class Class
-	shape string
-}{
-	"Breaker":                     {ClassBreaker, "41"},
-	"DisconnectingCircuitBreaker": {ClassBreaker, "41"},
-	"Disconnector":                {ClassDisconnector, "162"},
-	"LoadBreakSwitch":             {ClassLoadBreakSwitch, "42"},
-	"GroundDisconnector":          {ClassGroundSwitch, "54"},
-	"Fuse":                        {ClassFuse, "203"},
-	"Switch":                      {ClassSectionalizer, "164"},
-	"Ground":                      {ClassGround, "31"},
-	"SynchronousMachine":          {ClassGenerator, "173"},
-	"AsynchronousMachine":         {ClassSynchronousMotor, "39"},
-	"SeriesCompensator":           {ClassReactor, "37"},
-	"LinearShuntCompensator":      {ClassCapacitorBank, "172"},
-	"NonlinearShuntCompensator":   {ClassCapacitorBank, "172"},
-	"PetersenCoil":                {ClassReactorShunt, "397"},
-	"BusbarSection":               {ClassBusBarSection, "24"},
-	"PowerTransformer":            {ClassPowerTransformer, "47"},
-	"CurrentTransformer":          {ClassCurrentTransformer, "34"},
-	"PotentialTransformer":        {ClassVoltageTransformer, "55"},
-	"SurgeArrester":               {ClassSurgeArrester, "168"},
-	"FaultIndicator":              {ClassFaultPassageIndicator, "320003"},
-	"WaveTrap":                    {ClassBlockingFilter, "389"},
-	"Junction":                    {ClassJunctionPoint, "7"},
-	"EnergyConsumer":              {ClassLoad, "330001"},
-	"ConformLoad":                 {ClassLoad, "330001"},
-	"NonConformLoad":              {ClassLoad, "330001"},
-	"ExternalNetworkInjection":    {ClassNetworkInfeed, "330002"},
-	"EquivalentInjection":         {ClassNetworkInfeed, "330002"},
-	"EnergySource":                {ClassNetworkInfeed, "330002"},
-	"StaticVarCompensator":        {ClassStaticVarCompensator, "330003"},
-}
-
 var cimAuxiliaryClasses = map[string]bool{
 	"CurrentTransformer": true, "PotentialTransformer": true, "SurgeArrester": true, "FaultIndicator": true, "WaveTrap": true,
 }
 
-// shapeFor is the element class and shape CIM class cls is drawn with: a shape the table made default to it, else
-// its own symbol, else the first shape (by code) whose classes include it.
-func (im *cimImporter) shapeFor(cls string) (Class, string, bool) {
-	codes := make([]string, 0, len(im.opt.CIMClasses))
-	for code := range im.opt.CIMClasses {
-		if _, ok := im.opt.Classes[code]; ok && code != LinkToObjectCode {
-			codes = append(codes, code)
+// shapeFor is the element class and shape equipment o is drawn with (CIMClassTable's import rows); false when its
+// class has none.
+func (im *cimImporter) shapeFor(o *cimObject) (Class, string, bool) {
+	code, ok := im.opt.CIMClasses.shapeOf(o.class, cimVariant(o))
+	if !ok {
+		return "", "", false
+	}
+	c, ok := im.opt.Classes[code]
+	return c, code, ok
+}
+
+// cimVariant is which variant of its CIM class o is (see cimVariants), or empty.
+func cimVariant(o *cimObject) string {
+	switch o.class {
+	case "SynchronousMachine":
+		switch o.get("type") {
+		case "SynchronousMachineKind.condenser":
+			return "condenser"
+		case "SynchronousMachineKind.motor", "SynchronousMachineKind.motorOrCondenser":
+			return "motor"
+		}
+	case "AsynchronousMachine":
+		if strings.HasSuffix(o.get("asynchronousMachineType"), "generator") {
+			return "generator"
+		}
+	case "LinearShuntCompensator", "NonlinearShuntCompensator":
+		if v, ok := o.num("bPerSection"); ok && v < 0 {
+			return "reactor"
 		}
 	}
-	slices.Sort(codes)
-	for _, code := range codes {
-		// Only a default the table changed; shapes keeping their class's built-in default draw it as before.
-		l, c := im.opt.CIMClasses[code], im.opt.Classes[code]
-		if builtin := CIMClasses(c); len(l) > 0 && l[0] == cls && (len(builtin) == 0 || builtin[0] != cls) {
-			return c, code, true
-		}
-	}
-	if def, ok := cimEquipmentShapes[cls]; ok {
-		return def.class, def.shape, true
-	}
-	for _, code := range codes {
-		if slices.Contains(im.opt.CIMClasses[code], cls) {
-			return im.opt.Classes[code], code, true
-		}
-	}
-	return "", "", false
+	return ""
 }
 
 // classesOf is the CIM classes an element of shape code (class c) can stand for.
@@ -284,8 +253,8 @@ func (im *cimImporter) classesOf(code string, c Class) []string {
 	return im.opt.CIMClasses.elementClasses(Element{Shape: code, Class: c})
 }
 
-func (im *cimImporter) drawable(cls string) bool {
-	_, _, ok := im.shapeFor(cls)
+func (im *cimImporter) drawable(o *cimObject) bool {
+	_, _, ok := im.shapeFor(o)
 	return ok
 }
 
@@ -482,6 +451,7 @@ type cimPageBuilder struct {
 	faced      map[int]bool   // element id → turned to face the terminals its layout draws
 	nodeCN     map[int]string // Node id → the ConnectivityNode it stands for
 	baseOrient map[int]int    // element id → its orientation in the layout, before turning to face its terminals
+	marked     int            // equipment drawn as a placeholder
 }
 
 // cimTermWire is a Terminal a foreign layout draws as a polyline: wire idx of node cn, its device end first or last.
@@ -594,15 +564,19 @@ func (im *cimImporter) page(dg *cimObject) (CIMPage, bool) {
 			b.objectLink(obj, do)
 		case obj.class == "Terminal" || obj.class == "PowerTransformerEnd":
 		default:
-			if _, _, ok := im.shapeFor(obj.class); ok {
+			if im.drawable(obj) {
 				b.element(obj, do)
 			} else if _, isEq := im.terminals[obj.id]; isEq {
 				b.report.Skipped[obj.class]++
+				b.placeholder(obj, do)
 			}
 		}
 	}
 	if b.report.Elements == 0 && b.report.Connectors == 0 {
 		return CIMPage{}, false
+	}
+	if b.marked > 0 {
+		b.warnings = append(b.warnings, fmt.Sprintf("%d devices of CIM classes with no symbol (cim.import) are drawn as red boxes named by their class", b.marked))
 	}
 	if b.foreign {
 		b.dropOverdrawn()
@@ -679,7 +653,7 @@ func (b *cimPageBuilder) transform(dg *cimObject, dos []*cimObject) {
 			all = append(all, raw(p))
 		}
 		if len(pts) == 1 && do.class == "DiagramObject" {
-			if o := b.im.objs[do.get("IdentifiedObject")]; o != nil && b.im.drawable(o.class) {
+			if o := b.im.objs[do.get("IdentifiedObject")]; o != nil && b.im.drawable(o) {
 				centres = append(centres, raw(pts[0]))
 			}
 		}
@@ -863,24 +837,7 @@ func snapOrient(rotation float64) int {
 
 // element places one equipment item and records what its terminals must reach.
 func (b *cimPageBuilder) element(obj, do *cimObject) {
-	class, shape, _ := b.im.shapeFor(obj.class)
-	switch obj.class {
-	case "SynchronousMachine":
-		switch obj.get("type") {
-		case "SynchronousMachineKind.condenser":
-			class, shape = ClassSynchronousCompensator, "174"
-		case "SynchronousMachineKind.motor", "SynchronousMachineKind.motorOrCondenser":
-			class, shape = ClassSynchronousMotor, "39"
-		}
-	case "AsynchronousMachine":
-		if strings.HasSuffix(obj.get("asynchronousMachineType"), "generator") {
-			class, shape = ClassGenerator, "173"
-		}
-	case "LinearShuntCompensator", "NonlinearShuntCompensator":
-		if v, ok := obj.num("bPerSection"); ok && v < 0 {
-			class, shape = ClassReactorShunt, "397"
-		}
-	}
+	class, shape, _ := b.im.shapeFor(obj)
 	// A layout this editor exported names its shape; keep it when that shape can stand for this CIM class.
 	if st := b.im.objs[do.get("DiagramObjectStyle")]; st != nil {
 		if code, ok := strings.CutPrefix(st.get("name"), "shape-"); ok {
@@ -1107,6 +1064,37 @@ func (b *cimPageBuilder) fit(e *Element, targets []Point, ordered, steps bool) {
 	if best, err := search([]int{0}, false); err <= 1 {
 		*e = best
 	}
+}
+
+// placeholderStroke is the color of the box marking equipment with no symbol.
+const placeholderStroke = "red"
+
+// placeholder marks equipment obj, whose CIM class has no symbol to import as, where do places it: a red box with
+// its CIM class written in it, connected to nothing.
+func (b *cimPageBuilder) placeholder(obj, do *cimObject) {
+	pts := b.doPoints(do)
+	if len(pts) == 0 {
+		return
+	}
+	box := [4]float64{pts[0].X, pts[0].Y, pts[0].X, pts[0].Y}
+	for _, p := range pts {
+		box = [4]float64{math.Min(box[0], p.X), math.Min(box[1], p.Y), math.Max(box[2], p.X), math.Max(box[3], p.Y)}
+	}
+	at := roundPt(Point{X: (box[0] + box[2]) / 2, Y: (box[1] + box[3]) / 2})
+	g := b.im.opt.Grid
+	if g <= 0 {
+		g = 10
+	}
+	const size = 10
+	hw := math.Ceil((0.3*size*float64(len(obj.class))+g/2)/g) * g
+	layer := b.layer(do)
+	e := Element{ID: b.take(), Class: ClassRectangle, Shape: "3", Name: obj.get("name"), Layer: layer, X: at.X, Y: at.Y,
+		Stroke: placeholderStroke, Points: []Point{{X: at.X - hw, Y: at.Y - g}, {X: at.X + hw, Y: at.Y + g}}}
+	b.d.Elements = append(b.d.Elements, e)
+	b.d.Labels = append(b.d.Labels, Label{ID: b.take(), For: e.ID, Layer: layer, X: at.X, Y: at.Y, Size: size,
+		Anchor: "middle", VAlign: "middle", Color: placeholderStroke, Text: obj.class})
+	b.itemOf[obj.id] = e.ID
+	b.marked++
 }
 
 // passThrough recreates a junction, wire jump, pole or cable joint this editor exported as a point of its
@@ -1889,12 +1877,14 @@ func properCrossing(a, z, p, q Point) (Point, bool) {
 	return roundPt(Point{X: a.X + t*rx, Y: a.Y + t*ry}), true
 }
 
-// cimPart is a connected piece of one ConnectivityNode's drawing: its points and segments.
+// cimPart is a connected piece of one ConnectivityNode's drawing: its points and segments, rails being those of
+// its busbars.
 type cimPart struct {
-	pts  []Point
-	segs [][2]Point
-	bus  bool
-	need bool
+	pts   []Point
+	segs  [][2]Point
+	rails [][2]Point
+	bus   bool
+	need  bool
 }
 
 func (p *cimPart) touches(q Point) bool {
@@ -1961,7 +1951,7 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		}
 	}
 	for _, s := range b.busbars[cn] {
-		parts = append(parts, &cimPart{segs: [][2]Point{s}, bus: true, need: true})
+		parts = append(parts, &cimPart{segs: [][2]Point{s}, rails: [][2]Point{s}, bus: true, need: true})
 	}
 	layer := b.cnLayer[cn]
 	voltage := 0
@@ -1995,6 +1985,7 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 				if parts[i].meets(parts[j]) || parts[j].meets(parts[i]) {
 					parts[i].pts = append(parts[i].pts, parts[j].pts...)
 					parts[i].segs = append(parts[i].segs, parts[j].segs...)
+					parts[i].rails = append(parts[i].rails, parts[j].rails...)
 					parts[i].bus = parts[i].bus || parts[j].bus
 					parts[i].need = parts[i].need || parts[j].need
 					parts = slices.Delete(parts, j, j+1)
@@ -2035,7 +2026,7 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 			from, to Point
 			d        float64
 		}
-		var pairs []pair
+		var pairs, drops []pair
 		cands := slices.Clone(p.pts)
 		for _, s := range p.segs {
 			cands = append(cands, s[0], s[1])
@@ -2043,11 +2034,18 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		for _, q := range cands {
 			t, d := main.nearest(q)
 			pairs = append(pairs, pair{q, t, d})
+			for _, r := range main.rails {
+				if t, ok := dropOnto(q, r); ok && b.clearOfSymbols([]Point{q, t}) {
+					drops = append(drops, pair{q, t, dist(q, t)})
+				}
+			}
 		}
 		slices.SortStableFunc(pairs, func(a, c pair) int { return cmp.Compare(a.d, c.d) })
-		// The nearest way that runs over no symbol, bending either way; else the nearest.
+		slices.SortStableFunc(drops, func(a, c pair) int { return cmp.Compare(a.d, c.d) })
+		// A straight drop onto a busbar, as drawn by hand; else the nearest way that runs over no symbol, bending
+		// either way; else the nearest.
 		var route []Point
-		for _, pr := range pairs {
+		for _, pr := range append(drops, pairs...) {
 			ways := [][]Point{{pr.from, pr.to}}
 			if pr.from.X != pr.to.X && pr.from.Y != pr.to.Y {
 				ways = [][]Point{{pr.from, {X: pr.from.X, Y: pr.to.Y}, pr.to}, {pr.from, {X: pr.to.X, Y: pr.from.Y}, pr.to}}
@@ -2069,6 +2067,17 @@ func (b *cimPageBuilder) wireNode(cn string) int {
 		routed++
 	}
 	return routed
+}
+
+// dropOnto is the foot of the perpendicular from q onto rail r, when it falls within r (ends aside) and q is off it.
+func dropOnto(q Point, r [2]Point) (Point, bool) {
+	switch {
+	case r[0].Y == r[1].Y && q.Y != r[0].Y && q.X > math.Min(r[0].X, r[1].X) && q.X < math.Max(r[0].X, r[1].X):
+		return Point{X: q.X, Y: r[0].Y}, true
+	case r[0].X == r[1].X && q.X != r[0].X && q.Y > math.Min(r[0].Y, r[1].Y) && q.Y < math.Max(r[0].Y, r[1].Y):
+		return Point{X: r[0].X, Y: q.Y}, true
+	}
+	return Point{}, false
 }
 
 // clearOfSymbols reports whether wire pts runs over no device drawn so far, but where it ends on one's terminal from

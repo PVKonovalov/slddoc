@@ -55,7 +55,7 @@ const foreignDL = `<?xml version="1.0" encoding="utf-8"?>
 </rdf:RDF>`
 
 func TestImportCIMForeignLayout(t *testing.T) {
-	pages, err := ImportCIM([][]byte{[]byte(foreignEQ), []byte(foreignDL)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(foreignEQ), []byte(foreignDL)}, testImport(CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestImportCIMConnectionsFromModel(t *testing.T) {
 			dlObject("o1", "B1", 0, 0, 3, 0) + dlObject("o2", "B2", 3, 0, 6, 0) + dlObject("o3", "Q1", 5, 2) + dlObject("o4", "L", 5, 4) +
 			// a's wire from the busbar down across b's wire.
 			dlObject("o5", "a", 1, 0, 1, 3) + dlObject("o6", "b", 0, 2.5, 3, 2.5)
-		pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+		pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, testImport(CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}))
 		if err != nil {
 			t.Fatalf("%s: %v", kind, err)
 		}
@@ -216,7 +216,7 @@ func TestCIMJumpsAndJunctionsRoundTrip(t *testing.T) {
 	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}, "7": {{}}}
 	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection,
 		"7": ClassJunctionPoint}
-	opt := CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}
+	opt := testImport(CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
 	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, opt)
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestCIMJumpsAndJunctionsRoundTrip(t *testing.T) {
 	if !slices.Equal(jumps, []int{1}) || dots != 1 {
 		t.Fatalf("imported: wire jump size steps %v, junction points %d; want [1] and 1", jumps, dots)
 	}
-	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out := ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	back, err := ImportCIM([][]byte{out.EQ, out.DL}, opt)
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +267,7 @@ func TestCIMOneJumpPerCrossing(t *testing.T) {
 	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
 		dlObject("o1", "L1", 0, 5) + dlObject("o2", "L2", 10, 5) + dlObject("o3", "L3", 5, 0) + dlObject("o4", "L4", 5, 10) +
 		dlObject("o5", "a", 0, 5, 10, 5) + dlObject("o6", "b", 5, 0, 5, 10)
-	pages, err := ImportCIM([][]byte{cimDoc(eq.String()), cimDoc(dl)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+	pages, err := ImportCIM([][]byte{cimDoc(eq.String()), cimDoc(dl)}, testImport(CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestCIMNamesWithoutTexts(t *testing.T) {
 		terminal("tq3", "Q2", "b", "ConnectivityNode", 1) + terminal("tq4", "Q2", "a", "ConnectivityNode", 2)
 	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
 		dlObject("o1", "B1", 0, 0, 10, 0) + dlObject("o2", "Q1", 2, 4) + dlObject("o3", "Q2", 3, 4)
-	opt := CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}
+	opt := testImport(CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
 	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, opt)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestCIMKeepsMRIDs(t *testing.T) {
 		dlObject("o1", "_B1", 0, 0, 10, 0) + dlObject("o2", "_Q1", 2, 4) + dlObject("o3", "_L", 2, 8)
 	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}}
 	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad}
-	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, testImport(CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestCIMKeepsMRIDs(t *testing.T) {
 		t.Errorf("node mRIDs: %v", nodeMRIDs)
 	}
 
-	out := string(ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ)
+	out := string(ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)})).EQ)
 	for _, id := range []string{"breaker-1", "bus-1", "L", "tq1", "tq2", "tb", "tl", "node-a", "b"} {
 		if !strings.Contains(out, `rdf:ID="_`+id+`"`) || !strings.Contains(out, "<cim:IdentifiedObject.mRID>"+id+"<") {
 			t.Errorf("export lacks mRID %q", id)
@@ -394,7 +394,7 @@ func TestCIMKeepsMRIDs(t *testing.T) {
 	cp.Ports = []Port{{Name: "1", Node: q.Ports[0].Node, MRID: "tq1"}, {Name: "2", Node: q.Ports[1].Node, MRID: "tq2"}}
 	copied := *d
 	copied.Elements = append(slices.Clone(d.Elements), cp)
-	exp := ExportCIM(&copied, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	exp := ExportCIM(&copied, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	if !slices.ContainsFunc(exp.Warnings, func(w CIMWarning) bool { return w.Kind == "mrid" && w.ID == cp.ID }) {
 		t.Errorf("the copy should be warned about: %+v", exp.Warnings)
 	}
@@ -406,7 +406,7 @@ func TestCIMKeepsMRIDs(t *testing.T) {
 	joined := *d
 	joined.Connectors = append(slices.Clone(d.Connectors), Connector{ID: d.LastID + 2, Kind: KindBusWork,
 		From: q.Ports[0].Node, To: q.Ports[1].Node, Points: []Point{{}, {}}})
-	if out := string(ExportCIM(&joined, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ); strings.Contains(out, `rdf:ID="_node-a"`) {
+	if out := string(ExportCIM(&joined, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)})).EQ); strings.Contains(out, `rdf:ID="_node-a"`) {
 		t.Error("joined nodes keep no mRID")
 	}
 }
@@ -421,7 +421,7 @@ func TestCIMClassFromAnyOrder(t *testing.T) {
 <cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:BusbarSection>` +
 		terminal("tb", "B1", "a", "ConnectivityNode", 1))
 	for _, docs := range [][][]byte{{eq, ssh}, {ssh, eq}} {
-		pages, err := ImportCIM(docs, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+		pages, err := ImportCIM(docs, testImport(CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -439,7 +439,7 @@ func TestCIMImplausibleVoltage(t *testing.T) {
 <cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
 <cim:BusbarSection rdf:ID="B1"><cim:IdentifiedObject.name>B1</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#v"/></cim:BusbarSection>` +
 		terminal("tb", "B1", "a", "ConnectivityNode", 1)
-	pages, err := ImportCIM([][]byte{cimDoc(eq)}, CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10})
+	pages, err := ImportCIM([][]byte{cimDoc(eq)}, testImport(CIMImportOptions{Terminals: testCIMTerminals, Classes: testCIMClasses, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,5 +449,43 @@ func TestCIMImplausibleVoltage(t *testing.T) {
 	}
 	if !slices.ContainsFunc(p.Warnings, func(m string) bool { return strings.Contains(m, `"33 kV"`) && strings.Contains(m, "33000 kV") }) {
 		t.Errorf("no warning: %v", p.Warnings)
+	}
+}
+
+// TestImportCIMPlaceholder imports equipment of a CIM class with no import row: it is drawn where the layout places
+// it as a red box captioned with its class, connected to nothing, and counted as skipped.
+func TestImportCIMPlaceholder(t *testing.T) {
+	eq := `<cim:BaseVoltage rdf:ID="bv"><cim:BaseVoltage.nominalVoltage>10</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+<cim:VoltageLevel rdf:ID="v"><cim:VoltageLevel.BaseVoltage rdf:resource="#bv"/></cim:VoltageLevel>
+<cim:ConnectivityNode rdf:ID="a"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#v"/></cim:ConnectivityNode>
+<cim:BusbarSection rdf:ID="B"><cim:IdentifiedObject.name>B</cim:IdentifiedObject.name></cim:BusbarSection>` + terminal("tb", "B", "a", "ConnectivityNode", 1) + `
+<cim:PowerElectronicsConnection rdf:ID="P"><cim:IdentifiedObject.name>P1</cim:IdentifiedObject.name></cim:PowerElectronicsConnection>` + terminal("tp", "P", "a", "ConnectivityNode", 1)
+	dl := `<cim:Diagram rdf:ID="d"><cim:IdentifiedObject.name>D</cim:IdentifiedObject.name></cim:Diagram>` +
+		dlObject("o1", "B", 0, 0, 100, 0) + dlObject("o2", "P", 50, 40)
+	pages, err := ImportCIM([][]byte{cimDoc(eq), cimDoc(dl)}, testImport(CIMImportOptions{Terminals: testCIMTerminals, Grid: 10}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg := pages[0]
+	var box *Element
+	for i, e := range pg.Diagram.Elements {
+		if e.Name == "P1" {
+			box = &pg.Diagram.Elements[i]
+		}
+	}
+	if box == nil || box.Class != ClassRectangle || box.Stroke != "red" || len(box.Ports) != 0 || len(box.Points) != 2 {
+		t.Fatalf("P1 should be a red box with no ports: %+v", pg.Diagram.Elements)
+	}
+	if box.Points[0].X >= box.X || box.Points[1].X <= box.X || box.Points[0].Y >= box.Y || box.Points[1].Y <= box.Y {
+		t.Errorf("box %v should surround its centre (%g, %g)", box.Points, box.X, box.Y)
+	}
+	captioned := slices.ContainsFunc(pg.Diagram.Labels, func(l Label) bool {
+		return l.For == box.ID && l.Text == "PowerElectronicsConnection" && l.Color == "red" && l.X == box.X && l.Y == box.Y
+	})
+	if !captioned {
+		t.Errorf("no red caption with the CIM class in the box: %+v", pg.Diagram.Labels)
+	}
+	if pg.Report.Skipped["PowerElectronicsConnection"] != 1 || len(pg.Warnings) == 0 {
+		t.Errorf("skipped %v, warnings %v", pg.Report.Skipped, pg.Warnings)
 	}
 }

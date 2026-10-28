@@ -572,17 +572,9 @@ extendable per site); this is the default set.
 
 The "Ports" column is the usual count (measured over the existing corpus); the format itself does not enforce it.
 
-**CIM classes.** An element exports to CIM as its class's default CIM class
-(slddoc `CIMClasses`); these classes allow another one, chosen with `cim`:
-
-| Class | Default | Alternatives |
-|---|---|---|
-| Breaker | Breaker | DisconnectingCircuitBreaker |
-| Starter | Switch | LoadBreakSwitch |
-| Generator, SynchronousMotor | SynchronousMachine | AsynchronousMachine |
-| ReactorShunt | LinearShuntCompensator | PetersenCoil |
-| Load | EnergyConsumer | ConformLoad, NonConformLoad |
-| NetworkInfeed | ExternalNetworkInjection | EquivalentInjection, EnergySource |
+**CIM classes.** Which CIM class an element exports as, and which symbol a CIM class imports as, is not
+in the file: the application gives slddoc a `CIMClassTable` (sld-editor's `cim` configuration). Its list for the
+element's shape gives the default CIM class and the others `cim` may choose; a shape with no list is not exported.
 
 ### 7.2 Connector kinds
 

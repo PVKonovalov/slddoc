@@ -18,8 +18,8 @@ func TestCIMWindingVoltages(t *testing.T) {
 
 	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}},
 		"330001": {{X: 0, Y: 0}}, "330002": {{X: 0, Y: 0}}}
-	pages, err := ImportCIM([][]byte{[]byte(eq)}, CIMImportOptions{Terminals: terms, Grid: 10,
-		WindingVoltages: map[string]float64{"Te2": 11}})
+	pages, err := ImportCIM([][]byte{[]byte(eq)}, testImport(CIMImportOptions{Terminals: terms, Grid: 10,
+		WindingVoltages: map[string]float64{"Te2": 11}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +51,8 @@ func TestCIMWindingVoltages(t *testing.T) {
 <cim:Terminal rdf:ID="_t-QR-1"><cim:Terminal.ConductingEquipment rdf:resource="#_QR"/><cim:Terminal.ConnectivityNode rdf:resource="#_bus"/><cim:ACDCTerminal.sequenceNumber>1</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
 <cim:Terminal rdf:ID="_t-QR-2"><cim:Terminal.ConductingEquipment rdf:resource="#_QR"/><cim:Terminal.ConnectivityNode rdf:resource="#_in"/><cim:ACDCTerminal.sequenceNumber>2</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
 </rdf:RDF>`, 1)
-	pages, err = ImportCIM([][]byte{[]byte(ring)}, CIMImportOptions{Terminals: terms, Grid: 10,
-		WindingVoltages: map[string]float64{"Te2": 11}})
+	pages, err = ImportCIM([][]byte{[]byte(ring)}, testImport(CIMImportOptions{Terminals: terms, Grid: 10,
+		WindingVoltages: map[string]float64{"Te2": 11}}))
 	if err != nil {
 		t.Fatal(err)
 	}

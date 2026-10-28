@@ -910,7 +910,7 @@ type Element struct {
 
 	// Electrical holds the equipment's nameplate parameters (see Electrical).
 	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
-	// CIM is the CIM class this element stands for when its Class allows more than one (see CIMClasses);
+	// CIM is the CIM class this element stands for when its shape allows more than one (see CIMClassTable);
 	// empty means the default.
 	CIM string `xml:"cim,attr,omitempty" json:"cim,omitempty"`
 	// MRID is the IdentifiedObject.mRID of the CIM equipment it was imported from, kept so a CIM export gives it
@@ -1095,7 +1095,7 @@ type Connector struct {
 
 	// Electrical holds an OverheadLine's or CableLine's parameters, or a LinkToObject's load (see Electrical).
 	Electrical *Electrical `xml:"electrical,omitempty" json:"electrical,omitempty"`
-	// CIM is the CIM class a LinkToObject exports as (see ConnectorCIMClasses); empty means the default.
+	// CIM is the CIM class a LinkToObject exports as (see CIMClassTable); empty means the default.
 	CIM string `xml:"cim,attr,omitempty" json:"cim,omitempty"`
 	// MRID is the CIM equipment (an AC line segment, a consumer or source) it came from, and FromMRID/ToMRID its
 	// Terminals at From and To (see Element.MRID).

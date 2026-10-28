@@ -82,7 +82,7 @@ func layoutEQ() string {
 // terminalNodes maps "name/sequence" of every exported terminal to its ConnectivityNode.
 func terminalNodes(t *testing.T, d *Diagram) map[string]string {
 	t.Helper()
-	eq := parseRDF(t, ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ)
+	eq := parseRDF(t, ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)})).EQ)
 	names := map[string]string{}
 	for _, o := range eq {
 		names["#"+o.id] = strings.Join(o.props["IdentifiedObject.name"], "")
@@ -99,7 +99,7 @@ func terminalNodes(t *testing.T, d *Diagram) map[string]string {
 
 func TestAutoLayout(t *testing.T) {
 	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}}
-	pages, err := ImportCIM([][]byte{[]byte(layoutEQ())}, CIMImportOptions{Terminals: terms, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(layoutEQ())}, testImport(CIMImportOptions{Terminals: terms, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func doubleBusEQ() string {
 func TestAutoLayoutParallelBusbars(t *testing.T) {
 	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(doubleBusEQ())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(doubleBusEQ())}, testImport(CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestAutoLayoutArranged(t *testing.T) {
 func arranged(t *testing.T, eq string) {
 	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(eq)}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(eq)}, testImport(CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestAutoLayoutGeneratorsUnderTransformers(t *testing.T) {
 
 	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(b.String())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(b.String())}, testImport(CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +544,7 @@ func TestAutoLayoutThreeWindings(t *testing.T) {
 
 	terms := map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "330001": {{X: 0, Y: 0}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "24": ClassBusBarSection, "330001": ClassLoad, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(b.String())}, CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(b.String())}, testImport(CIMImportOptions{Terminals: terms, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}

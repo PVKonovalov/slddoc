@@ -109,7 +109,7 @@ func parseRDF(t *testing.T, doc []byte) []cimObj {
 
 func TestExportCIM(t *testing.T) {
 	when := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
-	out := ExportCIM(cimDiagram(), CIMOptions{Name: "test/Sub", Created: when})
+	out := ExportCIM(cimDiagram(), testExport(CIMOptions{Name: "test/Sub", Created: when}))
 	eq, dl := parseRDF(t, out.EQ), parseRDF(t, out.DL)
 
 	defined := map[string]cimObj{}
@@ -237,7 +237,7 @@ func TestExportCIM(t *testing.T) {
 		}
 	}
 
-	again := ExportCIM(cimDiagram(), CIMOptions{Name: "test/Sub", Created: when.Add(time.Hour)})
+	again := ExportCIM(cimDiagram(), testExport(CIMOptions{Name: "test/Sub", Created: when.Add(time.Hour)}))
 	if string(bytes.SplitN(again.EQ, []byte("</md:FullModel>"), 2)[1]) != string(bytes.SplitN(out.EQ, []byte("</md:FullModel>"), 2)[1]) {
 		t.Error("re-exporting the same diagram should give the same EQ objects")
 	}
@@ -272,7 +272,7 @@ func TestExportCIMClassChoice(t *testing.T) {
 			{ID: 14, Class: ClassNetworkInfeed, Shape: "330002", Voltage: 1, Ports: []Port{{Name: "1", Node: 5}}},
 		},
 	}
-	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out := ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	classes := map[string]bool{}
 	for _, o := range parseRDF(t, out.EQ) {
 		classes[o.class] = true
@@ -297,12 +297,6 @@ func TestExportCIMClassChoice(t *testing.T) {
 	if !slices.Equal(svc, []string{"capacitiveRating", "inductiveRating", "slope"}) {
 		t.Errorf("SVC warnings = %v", svc)
 	}
-	if got := CIMClasses(ClassLoad); !slices.Equal(got, []string{"EnergyConsumer", "ConformLoad", "NonConformLoad"}) {
-		t.Errorf("CIMClasses(Load) = %v", got)
-	}
-	if CIMClasses(ClassRectangle) != nil || CIMClasses(ClassJunctionPoint) != nil {
-		t.Error("non-equipment classes have no CIM classes")
-	}
 }
 
 func TestExportCIMObjectLink(t *testing.T) {
@@ -322,7 +316,7 @@ func TestExportCIMObjectLink(t *testing.T) {
 			{ID: 22, Kind: KindLinkToObject, Name: "Busy", Voltage: 1, From: 7, To: 6, Points: []Point{{100, 140}, {200, 100}}},
 		},
 	}
-	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out := ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	eq := parseRDF(t, out.EQ)
 	byName := map[string]cimObj{}
 	terminals := map[string]int{}
@@ -356,8 +350,8 @@ func TestExportCIMObjectLink(t *testing.T) {
 		t.Errorf("openEnd warnings = %d, want 1: %+v", open, out.Warnings)
 	}
 
-	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, CIMImportOptions{Terminals: map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}},
-		Classes: map[string]Class{"41": ClassBreaker}})
+	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, testImport(CIMImportOptions{Terminals: map[string][]Point{"41": {{X: 0, Y: -20}, {X: 0, Y: 20}}},
+		Classes: map[string]Class{"41": ClassBreaker}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,9 +366,6 @@ func TestExportCIMObjectLink(t *testing.T) {
 	}
 	if c := links["Feed B"]; c.CIM != src {
 		t.Errorf("Feed B back = %+v", c)
-	}
-	if got := ConnectorCIMClasses(KindLinkToObject); !slices.Equal(got, []string{"EnergyConsumer", "EnergySource"}) || ConnectorCIMClasses(KindBusWork) != nil {
-		t.Errorf("ConnectorCIMClasses = %v", got)
 	}
 }
 
@@ -391,7 +382,7 @@ func TestExportCIMVoltageFromNeighbours(t *testing.T) {
 			{ID: 13, Class: ClassLoad, Shape: "330001", Name: "L", Ports: []Port{{Name: "1", Node: 3}}},
 		},
 	}
-	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out := ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	eq := parseRDF(t, out.EQ)
 	var vls, subs int
 	for _, o := range eq {
@@ -432,28 +423,41 @@ func TestCIMClassTable(t *testing.T) {
 		{"41": {"Breaker", "Breaker"}},  // twice
 		{LinkToObjectCode: {"Breaker"}}, // a link is an injection
 	} {
-		if _, err := NewCIMClassTable(shapes, bad); err == nil {
+		if _, _, err := NewCIMClassTable(shapes, bad, nil); err == nil {
 			t.Errorf("NewCIMClassTable(%v) should fail", bad)
 		}
 	}
-	table, err := NewCIMClassTable(shapes, map[string][]string{
+	for _, bad := range []map[string]string{
+		{"Breaker": "999"},                   // no such shape
+		{"EnergySource": LinkToObjectCode},   // a link is no symbol
+		{"Breaker.withdrawable": "43"},       // no such variant
+		{".condenser": "162"},                // no class
+		{"SynchronousMachine.reactor": "41"}, // another class's variant
+	} {
+		if _, _, err := NewCIMClassTable(shapes, nil, bad); err == nil {
+			t.Errorf("NewCIMClassTable(import %v) should fail", bad)
+		}
+	}
+	table, missing, err := NewCIMClassTable(shapes, map[string][]string{
 		"43":             {"DisconnectingCircuitBreaker", "Breaker"},
 		"162":            {"Jumper", "Disconnector"},
 		LinkToObjectCode: {"EnergySource", "EnergyConsumer"},
-	})
+	}, map[string]string{"Jumper": "162", "DisconnectingCircuitBreaker": "43"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(table.Of("41"), CIMClasses(ClassBreaker)) || table.Of("43")[0] != "DisconnectingCircuitBreaker" {
-		t.Errorf("41 keeps its class's list and 43 gets its own: %v, %v", table.Of("41"), table.Of("43"))
+	if !slices.Equal(missing, []string{"41"}) || table.Of("41") != nil || table.Of("43")[0] != "DisconnectingCircuitBreaker" {
+		t.Errorf("41 has no row and 43 its own: missing %v, %v, %v", missing, table.Of("41"), table.Of("43"))
 	}
 
-	// A shape's configured default is what its elements export as, and the CIM class comes back as that shape.
+	// A shape's configured default is what its elements export as, and the CIM class comes back as that shape; a
+	// shape with no row is not exported.
 	d := &Diagram{
-		Nodes: []Node{{ID: 1}, {ID: 2}, {ID: 3, Y: 10}, {ID: 4}, {ID: 5}},
+		Nodes: []Node{{ID: 1}, {ID: 2}, {ID: 3, Y: 10}, {ID: 4}, {ID: 5}, {ID: 6}},
 		Elements: []Element{
 			{ID: 10, Class: ClassDisconnector, Shape: "162", Name: "D1", Ports: []Port{{Name: "1", Node: 1}, {Name: "2", Node: 2}}},
 			{ID: 11, Class: ClassBreaker, Shape: "43", Name: "Q43", Ports: []Port{{Name: "1", Node: 4}, {Name: "2", Node: 5}}},
+			{ID: 12, Class: ClassBreaker, Shape: "41", Name: "Q41", Ports: []Port{{Name: "1", Node: 5}, {Name: "2", Node: 6}}},
 		},
 		Connectors: []Connector{{ID: 20, Kind: KindLinkToObject, Name: "W", From: 2, To: 3, Points: []Point{{0, 0}, {0, 10}}}},
 	}
@@ -462,8 +466,11 @@ func TestCIMClassTable(t *testing.T) {
 	for _, o := range parseRDF(t, out.EQ) {
 		classes[o.class] = true
 	}
-	if !classes["Jumper"] || classes["Disconnector"] || !classes["EnergySource"] || !classes["DisconnectingCircuitBreaker"] {
+	if !classes["Jumper"] || classes["Disconnector"] || !classes["EnergySource"] || !classes["DisconnectingCircuitBreaker"] || classes["Breaker"] {
 		t.Errorf("exported classes = %v", classes)
+	}
+	if !slices.ContainsFunc(out.Warnings, func(w CIMWarning) bool { return w.Kind == "notExported" && w.ID == 12 }) {
+		t.Errorf("Q41 should be reported as not exported: %+v", out.Warnings)
 	}
 	terms := map[string][]Point{"162": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "41": {{X: 0, Y: -20}, {X: 0, Y: 20}}, "43": {{X: 0, Y: -20}, {X: 0, Y: 20}}}
 	pages, err := ImportCIM([][]byte{out.EQ, out.DL}, CIMImportOptions{Terminals: terms, Classes: shapes, CIMClasses: table})
@@ -496,7 +503,7 @@ func TestExportCIMSubstations(t *testing.T) {
 			{ID: 21, Kind: KindOverheadLine, Name: "B-end", Voltage: 1, From: 4, To: 5, Points: []Point{{20, 0}, {30, 0}}},
 		},
 	}
-	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out := ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	subs := 0
 	for _, o := range parseRDF(t, out.EQ) {
 		if o.class == "Substation" {
@@ -514,7 +521,7 @@ func TestExportCIMSubstations(t *testing.T) {
 // is not a UUID is written and noted.
 func TestExportCIMConformity(t *testing.T) {
 	d := cimDiagram()
-	eq := string(ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)}).EQ)
+	eq := string(ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)})).EQ)
 	if strings.Contains(eq, "ShortCircuit-EU") {
 		t.Error("no short-circuit data, no ShortCircuit profile")
 	}
@@ -527,7 +534,7 @@ func TestExportCIMConformity(t *testing.T) {
 			t.Errorf("a %s without Equipment.aggregate", m[1])
 		}
 	}
-	out := ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out := ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	dl := string(out.DL)
 	if n, named := strings.Count(dl, "<cim:DiagramObject rdf:ID")+strings.Count(dl, "<cim:TextDiagramObject rdf:ID"),
 		strings.Count(dl, "<cim:IdentifiedObject.name>")-strings.Count(dl, "<cim:DiagramObjectStyle rdf:ID")-
@@ -545,7 +552,7 @@ func TestExportCIMConformity(t *testing.T) {
 		}
 	}
 	d.Elements[1].MRID = "breaker-q1"
-	out = ExportCIM(d, CIMOptions{Name: "t", Created: time.Unix(0, 0)})
+	out = ExportCIM(d, testExport(CIMOptions{Name: "t", Created: time.Unix(0, 0)}))
 	if !strings.Contains(string(out.EQ), "<md:Model.profile>http://iec.ch/TC57/ns/CIM/ShortCircuit-EU/3.0</md:Model.profile>") {
 		t.Error("a line's r0 is short-circuit data: the header should list the ShortCircuit profile")
 	}

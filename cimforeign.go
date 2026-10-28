@@ -115,13 +115,20 @@ func (b *cimPageBuilder) face(e *Element, targets []Point) bool {
 }
 
 // faceConnections turns each device whose terminals the layout doesn't draw by 180° when that brings its terminals
-// nearer what else is on their nodes, so no wire runs through it; twice, as a turned neighbour moves the targets.
+// nearer what else is on their nodes, so no wire runs through it (a one-terminal device by faceAway); twice, as a
+// turned neighbour moves the targets.
 func (b *cimPageBuilder) faceConnections() {
 	for range 2 {
 		for i := range b.d.Elements {
 			e := &b.d.Elements[i]
 			pc := b.portCN[e.ID]
-			if b.faced[e.ID] || e.Class == ClassBusBarSection || len(pc) < 2 || b.portAt[e.ID] != nil {
+			if b.faced[e.ID] || e.Class == ClassBusBarSection || len(pc) == 0 || pc[0] == "" || b.portAt[e.ID] != nil {
+				continue
+			}
+			if len(pc) == 1 {
+				if b.faceAway(e, pc[0]) {
+					b.reattach(e)
+				}
 				continue
 			}
 			cost := func(probe *Element) float64 {
@@ -142,6 +149,46 @@ func (b *cimPageBuilder) faceConnections() {
 			b.reattach(e)
 		}
 	}
+}
+
+// faceAway turns one-terminal device e, whose symbol points at the nearest thing on its node cn so its wire would
+// run over it, to the quarter, half or three-quarter turn pointing most away from it. Returns whether e turned.
+func (b *cimPageBuilder) faceAway(e *Element, cn string) bool {
+	local := b.im.opt.Terminals[e.Shape]
+	if len(local) != 1 {
+		return false
+	}
+	// toward is the cosine between the symbol's way from its terminal (to its anchor, or down its lead when the
+	// terminal is the anchor) and the way to cn's nearest point.
+	toward := func(probe *Element) float64 {
+		t := roundPt(symbolTerminals(probe, b.im.opt.Terminals)[0])
+		body := Point{X: probe.X, Y: probe.Y}
+		if local[0] == (Point{}) {
+			body = placeLocal(probe, Point{Y: 1})
+		}
+		q, ok := b.nearestOnNode(cn, t, probe.ID)
+		bl, ql := dist(t, body), dist(t, q)
+		if !ok || bl == 0 || ql == 0 {
+			return 0
+		}
+		return ((body.X-t.X)*(q.X-t.X) + (body.Y-t.Y)*(q.Y-t.Y)) / (bl * ql)
+	}
+	best, bestCos := *e, toward(e)
+	if bestCos <= 1e-6 {
+		return false
+	}
+	for _, turn := range []int{180, 90, 270} {
+		turned := *e
+		turned.Orient = snapOrient(float64(e.Orient + turn))
+		if c := toward(&turned); c < bestCos-1e-6 {
+			best, bestCos = turned, c
+		}
+	}
+	if best.Orient == e.Orient {
+		return false
+	}
+	*e = best
+	return true
 }
 
 // reattach moves what element e's ports must reach to where its terminals now are.
@@ -182,27 +229,39 @@ func (b *cimPageBuilder) dropOverdrawn() {
 	}
 }
 
-// distToNode is how far p is from the nearest thing on node cn other than element self's ports: a port or line end,
-// a drawn wire or a busbar (0 when there is none).
+// distToNode is how far p is from the nearest thing on node cn other than element self's ports (0 when there is
+// none).
 func (b *cimPageBuilder) distToNode(cn string, p Point, self int) float64 {
-	best := math.Inf(1)
+	q, ok := b.nearestOnNode(cn, p, self)
+	if !ok {
+		return 0
+	}
+	return dist(p, q)
+}
+
+// nearestOnNode is the point nearest p of what is on node cn other than element self's ports: a port or line end, a
+// drawn wire or a busbar; false when there is none.
+func (b *cimPageBuilder) nearestOnNode(cn string, p Point, self int) (Point, bool) {
+	best, bd := Point{}, math.Inf(1)
+	try := func(q Point) {
+		if d := dist(p, q); d < bd {
+			best, bd = q, d
+		}
+	}
 	for _, a := range b.attach[cn] {
 		if a.owner != self {
-			best = math.Min(best, dist(p, a.at))
+			try(a.at)
 		}
 	}
 	for _, w := range b.wires[cn] {
 		for k := 1; k < len(w); k++ {
-			best = math.Min(best, segDist(p, w[k-1], w[k]))
+			try(nearestOnSegment(p, w[k-1], w[k]))
 		}
 	}
 	for _, s := range b.busbars[cn] {
-		best = math.Min(best, segDist(p, s[0], s[1]))
+		try(nearestOnSegment(p, s[0], s[1]))
 	}
-	if math.IsInf(best, 1) {
-		return 0
-	}
-	return best
+	return best, !math.IsInf(bd, 1)
 }
 
 // snapTerminalWires moves the device end of each drawn terminal polyline onto the terminal of the device's symbol,

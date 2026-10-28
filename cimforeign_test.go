@@ -2,6 +2,7 @@ package slddoc
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -69,7 +70,7 @@ var nodeStyleDL = func() string {
 func TestImportCIMNodeStyleLayout(t *testing.T) {
 	terminals := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(nodeStyleDL)}, CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(nodeStyleDL)}, testImport(CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestImportCIMNodeStyleOverdrawnTerminal(t *testing.T) {
 	dl := strings.Replace(nodeStyleDL, "</rdf:RDF>", extra, 1)
 	terminals := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(dl)}, CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(dl)}, testImport(CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestImportCIMNodeStyleShortChainedDrawing(t *testing.T) {
 </rdf:RDF>`, 1)
 	terminals := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "14": {{X: -10}, {X: 10}}}
 	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection, "14": ClassNonIntersection}
-	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(dl)}, CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(nodeStyleEQ), []byte(dl)}, testImport(CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,5 +212,99 @@ func TestImportCIMNodeStyleShortChainedDrawing(t *testing.T) {
 	}
 	if !strings.HasPrefix(routed, "1 connections") {
 		t.Errorf("only QB's connection should be routed: %v", pages[0].Messages)
+	}
+}
+
+// TestImportCIMPointLayoutFacesAndDrops imports a layout that draws each device as a single point and no wires: an
+// infeed ES above disconnector QS down to busbar BUS, and breakers QB and QA below it, QA feeding load LD. The infeed,
+// drawn unturned so its body hangs down its own wire, turns to face away from it; the load keeps its turn. QA lies as
+// far from the busbar as from QB's terminal routed before it, and drops straight onto the busbar.
+func TestImportCIMPointLayoutFacesAndDrops(t *testing.T) {
+	var eq strings.Builder
+	eq.WriteString(`<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">
+  <cim:BaseVoltage rdf:ID="_bv"><cim:BaseVoltage.nominalVoltage>11</cim:BaseVoltage.nominalVoltage></cim:BaseVoltage>
+  <cim:Substation rdf:ID="_sa"><cim:IdentifiedObject.name>A</cim:IdentifiedObject.name></cim:Substation>
+  <cim:VoltageLevel rdf:ID="_va"><cim:VoltageLevel.BaseVoltage rdf:resource="#_bv"/><cim:VoltageLevel.Substation rdf:resource="#_sa"/></cim:VoltageLevel>
+`)
+	for _, cn := range []string{"_cns", "_cnb", "_cnx", "_cnf"} {
+		fmt.Fprintf(&eq, `  <cim:ConnectivityNode rdf:ID="%s"><cim:ConnectivityNode.ConnectivityNodeContainer rdf:resource="#_va"/></cim:ConnectivityNode>
+`, cn)
+	}
+	for _, o := range []struct{ id, class, name string }{
+		{"_es", "EnergySource", "ES"}, {"_qs", "Disconnector", "QS"}, {"_bus", "BusbarSection", "BUS"},
+		{"_qb", "Breaker", "QB"}, {"_qa", "Breaker", "QA"}, {"_ld", "EnergyConsumer", "LD"},
+	} {
+		fmt.Fprintf(&eq, `  <cim:%s rdf:ID="%s"><cim:IdentifiedObject.name>%s</cim:IdentifiedObject.name><cim:Equipment.EquipmentContainer rdf:resource="#_va"/></cim:%s>
+`, o.class, o.id, o.name, o.class)
+	}
+	for _, tm := range []struct{ id, eq, cn, seq string }{
+		{"_te", "_es", "_cns", "1"}, {"_ts1", "_qs", "_cns", "1"}, {"_ts2", "_qs", "_cnb", "2"}, {"_tb", "_bus", "_cnb", "1"},
+		{"_tb1", "_qb", "_cnb", "1"}, {"_tb2", "_qb", "_cnx", "2"}, {"_ta1", "_qa", "_cnb", "1"}, {"_ta2", "_qa", "_cnf", "2"},
+		{"_tl", "_ld", "_cnf", "1"},
+	} {
+		fmt.Fprintf(&eq, `  <cim:Terminal rdf:ID="%s"><cim:Terminal.ConductingEquipment rdf:resource="#%s"/><cim:Terminal.ConnectivityNode rdf:resource="#%s"/><cim:ACDCTerminal.sequenceNumber>%s</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+`, tm.id, tm.eq, tm.cn, tm.seq)
+	}
+	eq.WriteString("</rdf:RDF>")
+	var dl strings.Builder
+	dl.WriteString(`<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">
+  <cim:Diagram rdf:ID="_d"><cim:IdentifiedObject.name>A</cim:IdentifiedObject.name></cim:Diagram>
+`)
+	for _, o := range []struct {
+		id, ref string
+		pts     [][2]float64
+	}{
+		{"_des", "_es", [][2]float64{{50, 0}}},
+		{"_dqs", "_qs", [][2]float64{{50, 40}}},
+		{"_dbus", "_bus", [][2]float64{{0, 100}, {200, 100}}},
+		{"_dqb", "_qb", [][2]float64{{100, 150}}},
+		{"_dqa", "_qa", [][2]float64{{60, 150}}},
+		{"_dld", "_ld", [][2]float64{{60, 200}}},
+	} {
+		fmt.Fprintf(&dl, `  <cim:DiagramObject rdf:ID="%s"><cim:DiagramObject.Diagram rdf:resource="#_d"/><cim:DiagramObject.IdentifiedObject rdf:resource="#%s"/><cim:DiagramObject.rotation>0</cim:DiagramObject.rotation></cim:DiagramObject>
+`, o.id, o.ref)
+		for i, p := range o.pts {
+			fmt.Fprintf(&dl, `  <cim:DiagramObjectPoint rdf:ID="%s_%d"><cim:DiagramObjectPoint.DiagramObject rdf:resource="#%s"/><cim:DiagramObjectPoint.sequenceNumber>%d</cim:DiagramObjectPoint.sequenceNumber><cim:DiagramObjectPoint.xPosition>%g</cim:DiagramObjectPoint.xPosition><cim:DiagramObjectPoint.yPosition>%g</cim:DiagramObjectPoint.yPosition></cim:DiagramObjectPoint>
+`, o.id, i, o.id, i+1, p[0], p[1])
+		}
+	}
+	dl.WriteString("</rdf:RDF>")
+	terminals := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}},
+		"330001": {{}}, "330002": {{}}}
+	classes := map[string]Class{"41": ClassBreaker, "162": ClassDisconnector, "24": ClassBusBarSection,
+		"330001": ClassLoad, "330002": ClassNetworkInfeed, "7": ClassJunctionPoint}
+	pages, err := ImportCIM([][]byte{[]byte(eq.String()), []byte(dl.String())}, testImport(CIMImportOptions{Terminals: terminals, Classes: classes, Grid: 10}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pages[0].Diagram
+	byName := map[string]Element{}
+	for _, e := range d.Elements {
+		byName[e.Name] = e
+	}
+	if es, ld := byName["ES"], byName["LD"]; es.Orient != 180 || ld.Orient != 0 {
+		t.Errorf("orientations: ES %d, LD %d; want 180, 0", es.Orient, ld.Orient)
+	}
+	nodeAt := map[int]Point{}
+	for _, n := range d.Nodes {
+		nodeAt[n.ID] = Point{X: n.X, Y: n.Y}
+	}
+	busY := byName["BUS"].Points[0].Y
+	for _, name := range []string{"QA", "QB"} {
+		e := byName[name]
+		from := e.Ports[0].Node
+		dropped := false
+		for _, c := range d.Connectors {
+			if c.From != from && c.To != from {
+				continue
+			}
+			a, z := nodeAt[c.From], nodeAt[c.To]
+			dropped = dropped || len(c.Points) == 2 && a.X == z.X && math.Min(a.Y, z.Y) == busY
+		}
+		if !dropped {
+			t.Errorf("%s's terminal 1 at %v should drop straight onto the busbar: %+v", name, nodeAt[from], d.Connectors)
+		}
 	}
 }

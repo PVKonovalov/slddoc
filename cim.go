@@ -29,7 +29,7 @@ const (
 )
 
 // CIMOptions names the exported model: Name is the diagram's name (it seeds every mRID, so re-exporting the
-// same diagram keeps its ids), Created the export time; Classes is the CIM class table (nil: the built-in lists).
+// same diagram keeps its ids), Created the export time; Classes is the CIM class table (a shape not in it is not exported).
 type CIMOptions struct {
 	Name    string
 	Created time.Time
@@ -43,7 +43,8 @@ type CIMOptions struct {
 //   - "voltage": the voltage class's name holds no voltage, so its BaseVoltage is 0;
 //   - "noTerminal": an auxiliary device (CT, VT, arrester, fault indicator, wave trap) found no equipment
 //     terminal on its node to attach to;
-//   - "notExported": the element has connections but no CIM counterpart;
+//   - "notExported": the element (or link to object) has connections but no CIM counterpart, or its shape no row
+//     in the CIM class table;
 //   - "openEnd": a link to object has something at its arrow end, which is left unconnected;
 //   - "shorted": a switch or line has both ends on one node and is left out;
 //   - "windings": a transformer has 4 windings, which some tools (PowSyBl among them) can't read;
@@ -83,181 +84,161 @@ const (
 )
 
 type cimClassInfo struct {
-	role  cimRole
-	class string
+	role   cimRole
+	family []string // the CIM classes the export can write it as; nil for a pass-through
 }
+
+// The CIM classes the export writes alike: a symbol can stand for any class of its element class's family.
+var (
+	famSwitch    = []string{"Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse", "Jumper"}
+	famMachine   = []string{"SynchronousMachine", "AsynchronousMachine"}
+	famInjection = []string{"EnergyConsumer", "ConformLoad", "NonConformLoad", "ExternalNetworkInjection", "EquivalentInjection", "EnergySource"}
+	famShunt     = []string{"LinearShuntCompensator", "PetersenCoil"}
+	famAux       = []string{"CurrentTransformer", "PotentialTransformer", "SurgeArrester", "FaultIndicator", "WaveTrap"}
+	famSeries    = []string{"SeriesCompensator"}
+)
 
 var cimClasses = map[Class]cimClassInfo{
-	ClassBreaker:                {roleEquipment, "Breaker"},
-	ClassPowerCircuitBreaker:    {roleEquipment, "Breaker"},
-	ClassDisconnector:           {roleEquipment, "Disconnector"},
-	ClassLoadBreakSwitch:        {roleEquipment, "LoadBreakSwitch"},
-	ClassGroundSwitch:           {roleEquipment, "GroundDisconnector"},
-	ClassShortCircuiter:         {roleEquipment, "GroundDisconnector"},
-	ClassShortCircuiterNoGround: {roleEquipment, "Switch"},
-	ClassSectionalizer:          {roleEquipment, "Switch"},
-	ClassChassis:                {roleEquipment, "Switch"},
-	ClassHalfChassis:            {roleEquipment, "Switch"},
-	ClassStarter:                {roleEquipment, "Switch"},
-	ClassFuse:                   {roleEquipment, "Fuse"},
-	ClassDisconnectorFuse:       {roleEquipment, "Fuse"},
-	ClassKnifeSwitch:            {roleKnife, "Disconnector"},
-	ClassKnifeSwitch3:           {roleKnife, "Disconnector"},
-	ClassGround:                 {roleEquipment, "Ground"},
-	ClassGenerator:              {roleEquipment, "SynchronousMachine"},
-	ClassSynchronousCompensator: {roleEquipment, "SynchronousMachine"},
-	ClassSynchronousMotor:       {roleEquipment, "SynchronousMachine"},
-	ClassReactor:                {roleEquipment, "SeriesCompensator"},
-	ClassChokeCoil:              {roleEquipment, "SeriesCompensator"},
-	ClassResistor:               {roleEquipment, "SeriesCompensator"},
-	ClassCapacitor:              {roleShunt, "LinearShuntCompensator"},
-	ClassCapacitorBank:          {roleShunt, "LinearShuntCompensator"},
-	ClassReactorShunt:           {roleShunt, "LinearShuntCompensator"},
-	ClassBusBarSection:          {roleBusbar, "BusbarSection"},
-	ClassPowerTransformer:       {roleTransformer, "PowerTransformer"},
-	ClassBooster:                {roleBooster, "PowerTransformer"},
-	ClassCurrentTransformer:     {roleAuxiliary, "CurrentTransformer"},
-	ClassFaultPassageIndicator:  {roleAuxiliary, "FaultIndicator"},
-	ClassBlockingFilter:         {roleAuxiliary, "WaveTrap"},
-	ClassVoltageTransformer:     {roleAuxOnPort1, "PotentialTransformer"},
-	ClassSurgeArrester:          {roleAuxOnPort1, "SurgeArrester"},
-	ClassLoad:                   {roleEquipment, "EnergyConsumer"},
-	ClassNetworkInfeed:          {roleEquipment, "ExternalNetworkInjection"},
-	ClassStaticVarCompensator:   {roleEquipment, "StaticVarCompensator"},
-	ClassJunctionPoint:          {rolePassThrough, ""},
-	ClassConnectorPoint:         {rolePassThrough, ""},
-	ClassConnectorArrow:         {rolePassThrough, ""},
-	ClassFork:                   {rolePassThrough, ""},
-	ClassNonIntersection:        {rolePassThrough, ""},
-	ClassCableConnector:         {rolePassThrough, ""},
-	ClassCableJoint:             {rolePassThrough, ""},
-	ClassPowerPole:              {rolePassThrough, ""},
-	ClassAnchorPole:             {rolePassThrough, ""},
+	ClassBreaker:                {roleEquipment, famSwitch},
+	ClassPowerCircuitBreaker:    {roleEquipment, famSwitch},
+	ClassDisconnector:           {roleEquipment, famSwitch},
+	ClassLoadBreakSwitch:        {roleEquipment, famSwitch},
+	ClassGroundSwitch:           {roleEquipment, famSwitch},
+	ClassShortCircuiter:         {roleEquipment, famSwitch},
+	ClassShortCircuiterNoGround: {roleEquipment, famSwitch},
+	ClassSectionalizer:          {roleEquipment, famSwitch},
+	ClassChassis:                {roleEquipment, famSwitch},
+	ClassHalfChassis:            {roleEquipment, famSwitch},
+	ClassStarter:                {roleEquipment, famSwitch},
+	ClassFuse:                   {roleEquipment, famSwitch},
+	ClassDisconnectorFuse:       {roleEquipment, famSwitch},
+	ClassKnifeSwitch:            {roleKnife, famSwitch},
+	ClassKnifeSwitch3:           {roleKnife, famSwitch},
+	ClassGround:                 {roleEquipment, []string{"Ground"}},
+	ClassGenerator:              {roleEquipment, famMachine},
+	ClassSynchronousCompensator: {roleEquipment, famMachine},
+	ClassSynchronousMotor:       {roleEquipment, famMachine},
+	ClassReactor:                {roleEquipment, famSeries},
+	ClassChokeCoil:              {roleEquipment, famSeries},
+	ClassResistor:               {roleEquipment, famSeries},
+	ClassCapacitor:              {roleShunt, famShunt},
+	ClassCapacitorBank:          {roleShunt, famShunt},
+	ClassReactorShunt:           {roleShunt, famShunt},
+	ClassBusBarSection:          {roleBusbar, []string{"BusbarSection"}},
+	ClassPowerTransformer:       {roleTransformer, []string{"PowerTransformer"}},
+	ClassBooster:                {roleBooster, []string{"PowerTransformer"}},
+	ClassCurrentTransformer:     {roleAuxiliary, famAux},
+	ClassFaultPassageIndicator:  {roleAuxiliary, famAux},
+	ClassBlockingFilter:         {roleAuxiliary, famAux},
+	ClassVoltageTransformer:     {roleAuxOnPort1, famAux},
+	ClassSurgeArrester:          {roleAuxOnPort1, famAux},
+	ClassLoad:                   {roleEquipment, famInjection},
+	ClassNetworkInfeed:          {roleEquipment, famInjection},
+	ClassStaticVarCompensator:   {roleEquipment, []string{"StaticVarCompensator"}},
+	ClassJunctionPoint:          {rolePassThrough, nil},
+	ClassConnectorPoint:         {rolePassThrough, nil},
+	ClassConnectorArrow:         {rolePassThrough, nil},
+	ClassFork:                   {rolePassThrough, nil},
+	ClassNonIntersection:        {rolePassThrough, nil},
+	ClassCableConnector:         {rolePassThrough, nil},
+	ClassCableJoint:             {rolePassThrough, nil},
+	ClassPowerPole:              {rolePassThrough, nil},
+	ClassAnchorPole:             {rolePassThrough, nil},
 }
 
-// cimAlternatives lists, per element class, the CIM classes it may stand for besides its default.
-var cimAlternatives = map[Class][]string{
-	ClassBreaker:          {"DisconnectingCircuitBreaker"},
-	ClassStarter:          {"LoadBreakSwitch"},
-	ClassGenerator:        {"AsynchronousMachine"},
-	ClassSynchronousMotor: {"AsynchronousMachine"},
-	ClassReactorShunt:     {"PetersenCoil"},
-	ClassLoad:             {"ConformLoad", "NonConformLoad"},
-	ClassNetworkInfeed:    {"EquivalentInjection", "EnergySource"},
-}
-
-// CIMClassTable maps a symbol shape code, or LinkToObjectCode for links to object, to the CIM classes an element
-// of that shape can be exported as, its default first. A nil table, or a shape missing from it, falls back to the
-// built-in lists of its element class (CIMClasses).
-type CIMClassTable map[string][]string
-
-// LinkToObjectCode is the shape code of a link to object (xsde2svg 28), its CIMClassTable key.
+// LinkToObjectCode is the shape code of a link to object (xsde2svg 28), its key in a CIMClassTable's export list.
 const LinkToObjectCode = "28"
 
-var builtinLinkCIM = []string{"EnergyConsumer", "EnergySource"}
-
-// cimFamilies groups the CIM classes the export writes alike; an element can stand for any class of its default's
-// family (a class in no family stands for itself only).
-var cimFamilies = [][]string{
-	{"Breaker", "DisconnectingCircuitBreaker", "Disconnector", "LoadBreakSwitch", "GroundDisconnector", "Switch", "Fuse", "Jumper"},
-	{"SynchronousMachine", "AsynchronousMachine"},
-	{"EnergyConsumer", "ConformLoad", "NonConformLoad", "ExternalNetworkInjection", "EquivalentInjection", "EnergySource"},
-	{"LinearShuntCompensator", "PetersenCoil"},
-	{"CurrentTransformer", "PotentialTransformer", "SurgeArrester", "FaultIndicator", "WaveTrap"},
+// cimVariants are the variant names an import key "Class.variant" may use, by CIM class (see cimVariant).
+var cimVariants = map[string][]string{
+	"SynchronousMachine":        {"condenser", "motor"},
+	"AsynchronousMachine":       {"generator"},
+	"LinearShuntCompensator":    {"reactor"},
+	"NonlinearShuntCompensator": {"reactor"},
 }
 
-func cimFamily(class string) []string {
-	for _, f := range cimFamilies {
-		if slices.Contains(f, class) {
-			return f
-		}
-	}
-	return []string{class}
+// CIMClassTable is the whole CIM class mapping, both ways. export maps a symbol shape code (LinkToObjectCode for
+// links to object) to the CIM classes an element of that shape can be exported as, its default first; a shape not
+// in it is not exported as equipment. draw maps a CIM class, or "Class.variant", to the shape it is imported as; a
+// class not in it is drawn as a placeholder.
+type CIMClassTable struct {
+	export map[string][]string
+	draw   map[string]string
 }
 
-// NewCIMClassTable builds the table of the shapes given (shape code → element class, the element library): each
-// shape exported as equipment gets its class's built-in list, and overrides (shape code → CIM classes, default
-// first) replace those of the shapes they name. Every override is checked: the code must be a shape exported as
-// CIM equipment (or LinkToObjectCode), and every CIM class one the export writes alike for it, listed once.
-func NewCIMClassTable(shapes map[string]Class, overrides map[string][]string) (CIMClassTable, error) {
-	t := CIMClassTable{LinkToObjectCode: slices.Clone(builtinLinkCIM)}
-	for code, c := range shapes {
-		if l := CIMClasses(c); l != nil {
-			t[code] = l
-		}
-	}
-	codes := make([]string, 0, len(overrides))
-	for code := range overrides {
-		codes = append(codes, code)
-	}
-	slices.Sort(codes)
-	for _, code := range codes {
-		classes := overrides[code]
-		def, ok := t[code]
-		if !ok {
-			if c, known := shapes[code]; known {
-				return nil, fmt.Errorf("cim.classes: shape %q (%s) is not exported as CIM equipment", code, c)
+// NewCIMClassTable checks and builds the table. shapes maps each shape code of the element library to its element
+// class; export and draw are as in CIMClassTable. Every export class must be one the export writes alike for the
+// shape's element class, listed once; every draw key a CIM class or one of its variants, its shape in the library.
+// Returns the shapes exported as equipment that export leaves out (sorted), which are not exported.
+func NewCIMClassTable(shapes map[string]Class, export map[string][]string, draw map[string]string) (CIMClassTable, []string, error) {
+	t := CIMClassTable{export: map[string][]string{}, draw: map[string]string{}}
+	for _, code := range slices.Sorted(maps.Keys(export)) {
+		classes := export[code]
+		family := famInjection
+		if code != LinkToObjectCode {
+			c, known := shapes[code]
+			if !known {
+				return CIMClassTable{}, nil, fmt.Errorf("cim.classes: no shape %q in the element library", code)
 			}
-			return nil, fmt.Errorf("cim.classes: no shape %q in the element library", code)
+			if family = cimClasses[c].family; family == nil {
+				return CIMClassTable{}, nil, fmt.Errorf("cim.classes: shape %q (%s) is not exported as CIM equipment", code, c)
+			}
 		}
 		if len(classes) == 0 {
-			return nil, fmt.Errorf("cim.classes: shape %q lists no CIM class", code)
+			return CIMClassTable{}, nil, fmt.Errorf("cim.classes: shape %q lists no CIM class", code)
 		}
-		family := cimFamily(def[0])
 		for i, cls := range classes {
 			if !slices.Contains(family, cls) {
-				return nil, fmt.Errorf("cim.classes: shape %q can't be exported as %q; choose from %s", code, cls, strings.Join(family, ", "))
+				return CIMClassTable{}, nil, fmt.Errorf("cim.classes: shape %q can't be exported as %q; choose from %s", code, cls, strings.Join(family, ", "))
 			}
 			if slices.Contains(classes[:i], cls) {
-				return nil, fmt.Errorf("cim.classes: shape %q lists %q twice", code, cls)
+				return CIMClassTable{}, nil, fmt.Errorf("cim.classes: shape %q lists %q twice", code, cls)
 			}
 		}
-		t[code] = slices.Clone(classes)
+		t.export[code] = slices.Clone(classes)
 	}
-	return t, nil
+	for _, key := range slices.Sorted(maps.Keys(draw)) {
+		code := draw[key]
+		cls, variant, ok := strings.Cut(key, ".")
+		if cls == "" || ok && !slices.Contains(cimVariants[cls], variant) {
+			return CIMClassTable{}, nil, fmt.Errorf("cim.import: %q is no CIM class or variant of one", key)
+		}
+		if _, known := shapes[code]; !known || code == LinkToObjectCode {
+			return CIMClassTable{}, nil, fmt.Errorf("cim.import: %q: no shape %q in the element library", key, code)
+		}
+		t.draw[key] = code
+	}
+	var missing []string
+	for code, c := range shapes {
+		if _, listed := t.export[code]; !listed && cimClasses[c].family != nil {
+			missing = append(missing, code)
+		}
+	}
+	if _, listed := t.export[LinkToObjectCode]; !listed {
+		missing = append(missing, LinkToObjectCode)
+	}
+	slices.Sort(missing)
+	return t, missing, nil
 }
 
 // Of returns the CIM classes an element of shape code can be exported as, its default first; nil when it isn't
-// exported as equipment (or the table has no such shape).
+// exported as equipment.
 func (t CIMClassTable) Of(code string) []string {
-	return slices.Clone(t[code])
+	return slices.Clone(t.export[code])
 }
 
-// elementClasses is the list e's shape has in t, else the built-in one of its class.
+// elementClasses is the list e's shape has.
 func (t CIMClassTable) elementClasses(e Element) []string {
-	if l, ok := t[e.Shape]; ok {
-		return l
-	}
-	return CIMClasses(e.Class)
+	return t.export[e.Shape]
 }
 
 // linkClasses is the list of links to object.
 func (t CIMClassTable) linkClasses() []string {
-	if l, ok := t[LinkToObjectCode]; ok {
-		return l
-	}
-	return builtinLinkCIM
+	return t.export[LinkToObjectCode]
 }
 
-// CIMClasses returns the built-in CIM classes of element class c, its default first; nil when c is not exported as
-// equipment.
-func CIMClasses(c Class) []string {
-	info, ok := cimClasses[c]
-	if !ok || info.class == "" {
-		return nil
-	}
-	return append([]string{info.class}, cimAlternatives[c]...)
-}
-
-// ConnectorCIMClasses returns the built-in CIM classes of a connector kind exported as equipment (links to object).
-func ConnectorCIMClasses(k ConnectorKind) []string {
-	if k == KindLinkToObject {
-		return slices.Clone(builtinLinkCIM)
-	}
-	return nil
-}
-
-// classOf is e's CIM class: its own choice when its shape's list allows it, else that list's default.
+// classOf is e's CIM class: its own choice when its shape's list allows it, else that list's default; empty when
+// its shape is not exported.
 func (t CIMClassTable) classOf(e Element) string {
 	l := t.elementClasses(e)
 	if e.CIM != "" && slices.Contains(l, e.CIM) {
@@ -266,7 +247,18 @@ func (t CIMClassTable) classOf(e Element) string {
 	if len(l) > 0 {
 		return l[0]
 	}
-	return cimClasses[e.Class].class
+	return ""
+}
+
+// shapeOf is the shape CIM class cls is imported as: its variant's row when it has one, else its own.
+func (t CIMClassTable) shapeOf(cls, variant string) (string, bool) {
+	if variant != "" {
+		if code, ok := t.draw[cls+"."+variant]; ok {
+			return code, true
+		}
+	}
+	code, ok := t.draw[cls]
+	return code, ok
 }
 
 // Pictures of whole installations: skipped without a warning even when they have ports.
@@ -1062,6 +1054,12 @@ func (x *cimExporter) element(e Element) {
 		}
 		return
 	}
+	if info.family != nil && len(x.table.elementClasses(e)) == 0 {
+		if len(e.Ports) > 0 {
+			x.warnf("notExported", "element", e.ID)
+		}
+		return
+	}
 	key := fmt.Sprintf("el:%d", e.ID)
 	name := elementName(e)
 	ports := sortedPorts(e)
@@ -1396,6 +1394,10 @@ func (x *cimExporter) connector(c Connector) {
 // "LinkToObject".
 func (x *cimExporter) objectLink(c Connector) {
 	classes := x.table.linkClasses()
+	if len(classes) == 0 {
+		x.warnf("notExported", "connector", c.ID)
+		return
+	}
 	class := classes[0]
 	if slices.Contains(classes, c.CIM) {
 		class = c.CIM

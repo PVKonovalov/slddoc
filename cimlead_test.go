@@ -71,7 +71,7 @@ func transformerUnderBaysEQ() string {
 func TestAutoLayoutTransformerLeads(t *testing.T) {
 	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}},
 		"330001": {{X: 0, Y: 0}}, "330002": {{X: 0, Y: 0}}}
-	pages, err := ImportCIM([][]byte{[]byte(transformerUnderBaysEQ())}, CIMImportOptions{Terminals: terms, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(transformerUnderBaysEQ())}, testImport(CIMImportOptions{Terminals: terms, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestAutoLayoutSpacing(t *testing.T) {
 		kv    float64
 		pitch float64
 	}{{11, 90}, {33, 120}} {
-		opt := CIMImportOptions{Terminals: terms, Grid: 10}
+		opt := testImport(CIMImportOptions{Terminals: terms, Grid: 10})
 		if c.kv != 33 {
 			opt.WindingVoltages = map[string]float64{"Te2": c.kv}
 		}
@@ -265,7 +265,7 @@ func TestAutoLayoutEarthingTaps(t *testing.T) {
 
 	terms := map[string][]Point{"41": {{X: 0, Y: -10}, {X: 0, Y: 10}}, "162": {{X: 0, Y: -10}, {X: 0, Y: 10}},
 		"54": {{X: 0, Y: 10}}, "330001": {{X: 0, Y: 0}}}
-	pages, err := ImportCIM([][]byte{[]byte(b.String())}, CIMImportOptions{Terminals: terms, Grid: 10})
+	pages, err := ImportCIM([][]byte{[]byte(b.String())}, testImport(CIMImportOptions{Terminals: terms, Grid: 10}))
 	if err != nil {
 		t.Fatal(err)
 	}

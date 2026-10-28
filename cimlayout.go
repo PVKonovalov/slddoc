@@ -80,7 +80,7 @@ func (im *cimImporter) autoLayout() []*cimObject {
 			if _, isEq := im.terminals[o.id]; !isEq {
 				continue
 			}
-			if !im.drawable(o.class) && o.class != "ACLineSegment" {
+			if !im.drawable(o) && o.class != "ACLineSegment" {
 				continue
 			}
 			equipment = append(equipment, o)
@@ -493,7 +493,7 @@ func (l *cimLayout) tapLength(chain []*cimObject) float64 {
 	g := l.grid
 	n := 0.0
 	for _, eq := range chain {
-		_, shape, _ := l.im.shapeFor(eq.class)
+		_, shape, _ := l.im.shapeFor(eq)
 		ts := l.im.opt.Terminals[shape]
 		span := 2 * g
 		if len(ts) > 1 {
@@ -1514,7 +1514,7 @@ func (l *cimLayout) tap(chain []*cimObject, cn string, at Point, dir float64) {
 // deviceSide places eq sideways: turned so its terminal on node facingCN faces back (against dir) and lies at
 // (near, y), its body running on along dir. Returns its terminals as placed and the facing one's index (-1 for none).
 func (l *cimLayout) deviceSide(eq *cimObject, facingCN string, near, y, dir float64) ([]Point, int) {
-	defClass, defShape, _ := l.im.shapeFor(eq.class)
+	defClass, defShape, _ := l.im.shapeFor(eq)
 	ts := l.im.opt.Terminals[defShape]
 	facing := max(slices.Index(l.im.equipmentCNs(eq), facingCN), 0)
 	if facing >= len(ts) {
@@ -2026,7 +2026,7 @@ func (l *cimLayout) wire(cn string, pts []Point) {
 // busbars are above), and moved so that terminal sits at near; one without symbol terminals is centred at centre.
 // Returns its terminals as placed and the facing one's index (-1 for none).
 func (l *cimLayout) device(eq *cimObject, facingCN string, x, near, centre, dir float64) ([]Point, int) {
-	defClass, defShape, _ := l.im.shapeFor(eq.class)
+	defClass, defShape, _ := l.im.shapeFor(eq)
 	ts := l.im.opt.Terminals[defShape]
 	facing := 0
 	if !cimAuxiliaryClasses[eq.class] {
