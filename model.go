@@ -495,6 +495,12 @@ const (
 	// imported instance round-tripping (the symbol looks the same at every
 	// right angle).
 	ClassLampOnPole Class = "LampOnPole"
+	// ClassLED (shape 320007, LED) is a light-emitting diode
+	// marker, not part of the electrical network: a circle around a diode
+	// with two light arrows (internal/modus/element_320.go's custom
+	// element), drawn in its voltage class color. No Ports/State. Orient,
+	// Mirror and Scale apply.
+	ClassLED Class = "LED"
 	// ClassConnectorPoint (shape 10, "Коннектор"/Connector) is a connection
 	// point drawn as a 10x10 square on its anchor (internal/modus/
 	// element_10.go): one terminal at its center, which every wire ending

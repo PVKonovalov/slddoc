@@ -318,6 +318,7 @@ var shapeName = map[string]string{
 	"9":      "Arc",
 	"320001": "Powerflow direction",
 	"320002": "Lamp on pole",
+	"320007": "LED",
 	"10":     "Connector",
 	"83":     "Connector arrow",
 	"312":    "Table",

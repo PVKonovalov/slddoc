@@ -2074,3 +2074,101 @@ func TestHalfChassisTwoPorts_RealCorpus(t *testing.T) {
 		}
 	}
 }
+
+// ledTemplate is base.xml's LED (320007) symbol.
+const ledTemplate = `<circle cx="0" cy="0" r="8" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="-10,0 -3,0" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="4,-6 8,-10" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="6,-10 8,-10 8,-8" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="7,-3 11,-7" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="9,-7 11,-7 11,-5" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="-3,-3 -3,3" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="2,-3 2,3" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="-3,3 2,0" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="-3,-3 2,0" style="fill:none;stroke:{color};stroke-width:1" />
+<polyline points="2,0 10,0" style="fill:none;stroke:{color};stroke-width:1" />`
+
+// TestExtract_LED reads xsde2svg LEDs (shape 320007), their stroke read as a voltage color: a rotated corpus one, an unrotated one, one drawn mirrored
+// and one at a larger source scale, then renders scaled and mirrored LEDs and reads them back.
+func TestExtract_LED(t *testing.T) {
+	const svg = `<?xml version="1.0"?>
+<svg width="2000" height="2000" xmlns="http://www.w3.org/2000/svg">
+<g id="1" transform="rotate(-90,105,1276)" data-type="320007" >
+<circle cx="105" cy="1276" r="8" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="94,1276 102,1276" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="111,1270 113,1267" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="112,1271 115,1268" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="102,1273 102,1279" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="107,1273 107,1279" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="102,1279 107,1276" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="102,1273 107,1276" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="107,1276 116,1276" style="fill:none;stroke:black;stroke-width:1.00" />
+</g>
+<g id="2" data-type="320007" >
+<circle cx="558" cy="1901" r="8" style="fill:none;stroke:orange;stroke-width:1.00" />
+<polyline points="564,1895 566,1892" style="fill:none;stroke:orange;stroke-width:1.00" />
+<polyline points="555,1898 555,1904" style="fill:none;stroke:orange;stroke-width:1.00" />
+</g>
+<g id="3" data-type="320007" >
+<circle cx="200" cy="200" r="8" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="194,194 192,191" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="203,197 203,203" style="fill:none;stroke:black;stroke-width:1.00" />
+</g>
+<g id="4" data-type="320007" >
+<circle cx="300" cy="300" r="12" style="fill:none;stroke:black;stroke-width:1.00" />
+<polyline points="309,291 312,287" style="fill:none;stroke:black;stroke-width:1.00" />
+</g>
+</svg>`
+	d, report, err := Extract([]byte(svg), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(report.Skipped) != 0 || len(d.Elements) != 4 || len(d.VoltageClasses) != 2 {
+		t.Fatalf("failed=%v skipped=%v elements=%d voltage classes=%v", report.Failed, report.Skipped, len(d.Elements), d.VoltageClasses)
+	}
+	color := map[int]string{}
+	for _, vc := range d.VoltageClasses {
+		color[vc.ID] = vc.Color
+	}
+	want := map[int]Element{
+		1: {X: 105, Y: 1276, Name: "black", Orient: -90},
+		2: {X: 558, Y: 1901, Name: "orange"},
+		3: {X: 200, Y: 200, Name: "black", Mirror: true},
+		4: {X: 300, Y: 300, Name: "black", Scale: 1},
+	}
+	for _, e := range d.Elements {
+		w := want[e.ID]
+		if e.Class != ClassLED || e.Shape != "320007" || e.X != w.X || e.Y != w.Y || color[e.Voltage] != w.Name || e.Stroke != "" ||
+			e.Orient != w.Orient || e.Mirror != w.Mirror || e.Scale != w.Scale || len(e.Ports) != 0 {
+			t.Errorf("LED %d = %+v, want %+v", e.ID, e, w)
+		}
+	}
+
+	lib := NewSymbolLibrary(map[string]string{"320007": ledTemplate})
+	src := &Diagram{Width: 400, Height: 400, VoltageClasses: []VoltageClass{{ID: 1, Name: "10 kV", Color: "#962896"}}, Elements: []Element{
+		{ID: 1, Class: ClassLED, Shape: "320007", X: 100, Y: 100, Orient: 90, Mirror: true, Scale: 2, Voltage: 1},
+		{ID: 2, Class: ClassLED, Shape: "320007", X: 200, Y: 100, Mirror: true, Voltage: 1},
+		{ID: 3, Class: ClassLED, Shape: "320007", X: 300, Y: 100, Scale: -1, Voltage: 1},
+		{ID: 4, Class: ClassLED, Shape: "320007", X: 100, Y: 300, Voltage: 1},
+	}}
+	var buf bytes.Buffer
+	if err := Render(src, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `<!-- LED:320007 -->`) || !strings.Contains(buf.String(), `stroke:#962896`) {
+		t.Errorf("render missing the LED comment or its voltage color:\n%s", buf.String())
+	}
+	back, report, err := Extract(buf.Bytes(), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Failed) != 0 || len(back.Elements) != len(src.Elements) {
+		t.Fatalf("round trip: failed=%v elements=%d", report.Failed, len(back.Elements))
+	}
+	for i, e := range back.Elements {
+		w := src.Elements[i]
+		if e.ID != w.ID || e.Voltage == 0 || e.X != w.X || e.Y != w.Y || e.Orient != w.Orient || e.Mirror != w.Mirror || e.Scale != w.Scale {
+			t.Errorf("round trip %d = %+v, want %+v", w.ID, e, w)
+		}
+	}
+}

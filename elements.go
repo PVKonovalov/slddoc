@@ -2950,6 +2950,85 @@ func parseLampOnPole(n *rawNode) (Element, error) {
 	return el, nil
 }
 
+// ledRadius is an LED's (320007) circle radius at size step 0: the corpus
+// r=8, the source's Scale(s, 25) at its step ledSourceStep.
+const ledRadius, ledSourceStep = 8, -3
+
+// parseLED handles shape 320007 (LED, see ClassLED): a <g
+// data-type="320007"> holding a circle on the anchor and the diode's
+// polylines. Its voltage color is data-voltage (this editor's own output)
+// or the circle's stroke (real markup has no data-voltage). Orient comes
+// from rotate(). This editor's own output carries
+// Mirror and Scale as scale(-1,1) and scale(f) in the transform; real
+// markup has neither, so Scale is read from the circle's radius and Mirror
+// from which side of the axis the diode and its light arrows lean.
+func parseLED(n *rawNode) (Element, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return Element{}, "", err
+	}
+	circle := firstCircleChild(n)
+	if circle == nil {
+		return Element{}, "", fmt.Errorf("slddoc: LED %s: no <circle> geometry", n.attr("id"))
+	}
+	cx, errX := strconv.ParseFloat(circle.attr("cx"), 64)
+	cy, errY := strconv.ParseFloat(circle.attr("cy"), 64)
+	r, errR := strconv.ParseFloat(circle.attr("r"), 64)
+	if errX != nil || errY != nil || errR != nil {
+		return Element{}, "", fmt.Errorf("slddoc: LED %s: invalid cx/cy/r", n.attr("id"))
+	}
+	el := Element{
+		ID:    id,
+		Class: ClassLED,
+		Shape: "320007",
+		Name:  n.attr("data-name"),
+		Layer: resolveLayer(n.attr("data-layer")),
+		X:     cx,
+		Y:     cy,
+	}
+	voltage := firstNonEmpty(n.attr("data-voltage"), styleProp(circle.attr("style"), "stroke"))
+	if angle, _, ok := parseRotate(n.attr("transform")); ok {
+		el.Orient = normalizeOrient(angle)
+	}
+	own := false
+	if ops, err := parseTransformList(n.attr("transform")); err == nil {
+		for _, op := range ops {
+			switch {
+			case op.name == "scale" && len(op.args) == 2 && op.args[0] == -1 && op.args[1] == 1:
+				el.Mirror, own = true, true
+			case op.name == "scale" && len(op.args) == 1 && op.args[0] > 0:
+				el.Scale = int(math.Round(2 * math.Log2(op.args[0])))
+				own = true
+			}
+		}
+	}
+	if own {
+		return el, voltage, nil
+	}
+	for s := minSizeStep; s <= maxSizeStep; s++ {
+		if scaledLength(25, s+ledSourceStep) == r {
+			el.Scale = s
+			break
+		}
+	}
+	lean := 0.0
+	for _, pl := range n.descendants("polyline") {
+		for pair := range strings.FieldsSeq(pl.attr("points")) {
+			xs, ys, ok := strings.Cut(pair, ",")
+			if !ok {
+				continue
+			}
+			x, errX := strconv.ParseFloat(xs, 64)
+			y, errY := strconv.ParseFloat(ys, 64)
+			if errX == nil && errY == nil && math.Abs(y-cy) > 0.5 {
+				lean += x - cx
+			}
+		}
+	}
+	el.Mirror = lean < 0
+	return el, voltage, nil
+}
+
 // parseFaultPassageIndicator handles shape 320003 (ИКЗ/fault passage
 // indicator): like Lamp, a standalone status-indicator circle, not a real
 // electrical device — it carries no ports. Unlike Lamp it has no data-fill

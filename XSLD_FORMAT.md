@@ -561,6 +561,7 @@ extendable per site); this is the default set.
 | PackageSubstation / EnclosedSubstation | 385 / 386 | 1 | `propertyText`; 385 also `nType`, `fill` |
 | Lamp | 106 | 0 | `state`, `fillOff`, `fillOn`, `radius`; no voltage |
 | LampOnPole | 320002 | 0 | `stroke` (its color, default gray), `orient`; no voltage |
+| LED | 320007 | 0 | `voltage`, `orient`, `mirror`, `scale` |
 | ConnectorPoint | 10 | 1 | a connection point (a 10x10 square), its port at the center; `stroke` (its color, default magenta); no voltage |
 | ConnectorArrow | 83 | 1 | port at its tail (the anchor); `orient` (any angle, 0 = right), `length` (default 30), `stroke` (line, default coral), `headStroke`/`fill` (arrowhead, default dimgray/white); no voltage |
 | FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText` |

@@ -37,6 +37,7 @@ var elementDataTypes = map[string]bool{
 	"385": true, "386": true, "32": true, "146": true, "113": true, "302": true, "310": true, "319": true, "11": true, "335": true, "292": true, "1": true, "16": true, "9": true, "26": true,
 	"320001": true,
 	"320002": true,
+	"320007": true,
 	"10":     true,
 	"83":     true,
 	"312":    true, "313": true,
@@ -622,6 +623,15 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*Diagra
 				continue
 			}
 			addElement(el, ports, "")
+
+		case "320007":
+			el, voltage, err := parseLED(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, nil, voltage)
 
 		case "320002":
 			el, err := parseLampOnPole(n)
