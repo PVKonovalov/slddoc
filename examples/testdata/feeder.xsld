@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<diagram width="200" height="160" source="feeder" lastId="12">
+  <voltageClasses>
+    <class id="1" name="10kV" color="#962896"/>
+  </voltageClasses>
+  <nodes>
+    <node id="6" x="100" y="40"/>
+    <node id="9" x="100" y="140"/>
+    <node id="11" x="100" y="70"/>
+    <node id="12" x="100" y="90"/>
+  </nodes>
+  <elements>
+    <element id="2" class="BusBarSection" shape="24" name="Bus 1" voltage="1" layer="0" x="0" y="0">
+      <port name="1" node="6"/>
+      <geometry>
+        <point x="20" y="40"/>
+        <point x="180" y="40"/>
+      </geometry>
+    </element>
+    <element id="3" class="Breaker" shape="41" name="CB 1" voltage="1" layer="0" x="100" y="80">
+      <port name="1" node="11"/>
+      <port name="2" node="12"/>
+    </element>
+  </elements>
+  <connectors>
+    <connector id="4" kind="BusWork" voltage="1" layer="0" from="6" to="11">
+      <point x="100" y="40"/>
+      <point x="100" y="70"/>
+    </connector>
+    <connector id="5" kind="BusWork" voltage="1" layer="0" from="12" to="9">
+      <point x="100" y="90"/>
+      <point x="100" y="140"/>
+    </connector>
+  </connectors>
+  <labels>
+    <label id="10" for="3" layer="0" x="110" y="84" size="12">CB 1</label>
+  </labels>
+</diagram>

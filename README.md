@@ -38,12 +38,31 @@ go get github.com/PVKonovalov/slddoc
 
 ## Layout
 
-A single flat package at the module root — `Diagram`/`Element`/`Connector`/
-`Node`/`Label`/... in `model.go`, XML/XSLD `Load`/`Save` alongside them,
-`Extract` and its shape-specific parsers in `extract.go`/`elements.go`/
-`topology.go`/`layers.go`/`voltage.go`/`labels.go`, SVG `Render` in
-`render.go`, and the `SymbolLibrary` it draws from in `symbols.go`. Every
-file has its own `_test.go` sibling.
+Consumers import only the root package `slddoc`; `slddoc.go` re-exports the
+API from the internal packages that implement it:
+
+| Package | Contents |
+|---|---|
+| `internal/model` | `Diagram`/`Element`/`Connector`/`Node`/`Label`/..., XSLD `Load`/`Save`, ids, style, geometry, voltage, size steps, electrical parameters |
+| `internal/svgtree` | the raw SVG tree `Extract` reads |
+| `internal/render` | SVG `Render`/`RenderFragments`, `SymbolLibrary`, absolute coordinates, leads, layer metadata |
+| `internal/extract` | `Extract` and its shape-specific parsers, topology, layers, labels, taps |
+| `internal/repair` | `Repair`, `EnsureIDs`, `InferSizeSteps` |
+| `internal/cim` | CIM export/import, foreign layouts, automatic layout and lead routing |
+
+Each package depends only on the ones above it. Every file has its own
+`_test.go` sibling.
+
+## Examples
+
+- `example_test.go` — runnable godoc examples: build, `Repair`, `Save`/`Load`,
+  `Render`, `Extract`, `ExportCIM`/`ImportCIM`.
+- `examples/xsld2svg` — render an `.xsld` to SVG:
+  `go run ./examples/xsld2svg -in examples/testdata/feeder.xsld -symbols examples/testdata/symbols.xml -out feeder.svg`
+- `examples/svg2xsld` — extract an `.xsld` from an SVG:
+  `go run ./examples/svg2xsld -in feeder.svg -out feeder.xsld`
+
+Both are trimmed versions of sld-svg's `svg-sld render`/`extract`.
 
 ## Development
 

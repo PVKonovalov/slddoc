@@ -1,0 +1,8 @@
+<symbols>
+  <symbol shape="41">
+    <template><![CDATA[
+<path d="M -7 -7 h 14 v 14 h -14 z" style="fill:{fill};stroke:{color};stroke-width:1" />
+<path d="M 0 -10 v 3 M 0 7 v 3" style="fill:none;stroke:{color};stroke-width:1" />
+]]></template>
+  </symbol>
+</symbols>

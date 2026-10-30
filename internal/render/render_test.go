@@ -1,0 +1,1362 @@
+package render
+
+import (
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"math"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/PVKonovalov/slddoc/internal/model"
+)
+
+const testSymbols = `<symbols>
+  <symbol shape="41">
+    <template><![CDATA[
+<path d="M -7 -7 h 14 v 14 h -14 z" style="fill:{fill};stroke:{color};stroke-width:1" />
+]]></template>
+  </symbol>
+</symbols>`
+
+func TestLoadSymbolLibrary(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := lib.templates["41"]; !ok {
+		t.Fatalf("templates = %+v, want shape 41", lib.templates)
+	}
+}
+
+func TestNewSymbolLibrary(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"41": "<path/>"})
+	if _, ok := lib.templates["41"]; !ok {
+		t.Fatalf("templates = %+v, want shape 41", lib.templates)
+	}
+}
+
+func TestRender_ProducesWellFormedSVG(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := 1
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "10kV", Color: "#962896"}},
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassBusBarSection, Voltage: 1, Points: []model.Point{{X: 0, Y: 0}, {X: 100, Y: 0}}},
+			{ID: 2, Class: model.ClassBreaker, Shape: "41", Name: "CB-1", Voltage: 1, X: 50, Y: 50, State: &state},
+		},
+		Connectors: []model.Connector{
+			{ID: 3, Points: []model.Point{{X: 50, Y: 0}, {X: 50, Y: 43}}},
+		},
+		Labels: []model.Label{{X: 10, Y: 10, Size: 13, Text: "line one\nline two"}},
+	}
+
+	stateColors := []StateColor{
+		{State: 0, Label: "Open", Color: "red"},
+		{State: 1, Label: "Close", Color: "lawngreen"},
+		{State: 2, Label: "Intermediate", Color: "yellow"},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil, stateColors...); err != nil {
+		t.Fatal(err)
+	}
+
+	var probe struct {
+		XMLName xml.Name `xml:"svg"`
+	}
+	if err := xml.Unmarshal(buf.Bytes(), &probe); err != nil {
+		t.Fatalf("rendered output is not well-formed XML: %v\n%s", err, buf.String())
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `stroke:#962896`) {
+		t.Errorf("voltage color not applied: %s", out)
+	}
+	if !strings.Contains(out, `fill:lawngreen`) {
+		t.Errorf("state 1 should render lawngreen fill: %s", out)
+	}
+	if !strings.Contains(out, `<path d="M 43 43 h 14 v 14 h -14 z"`) || strings.Contains(out, "translate(") {
+		t.Errorf("element not drawn in absolute coordinates at its anchor: %s", out)
+	}
+	if !strings.Contains(out, "<tspan") {
+		t.Errorf("multi-line label should emit a tspan: %s", out)
+	}
+}
+
+func TestRender_DigitalDeviceMatchesXsde2svgFormat(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		DigitalDevices: []model.DigitalDevice{
+			{
+				ID:     1,
+				X:      1876,
+				Y:      759,
+				Size:   16,
+				Anchor: "end",
+				Bold:   true,
+				Color:  "darkturquoise",
+				VAlign: "middle",
+				Name:   "R T-1 10",
+				Value:  "0.00",
+				Unit:   "MW",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`data-type="134"`,
+		`x="1876"`,
+		`y="759"`,
+		`id="1"`,
+		`data-name="R T-1 10"`,
+		`data-unit="MW"`,
+		`data-editor-kind="digitaldevice"`,
+		`fill:darkturquoise`,
+		`text-anchor:end`,
+		`dominant-baseline:middle`,
+		`font-weight: bold`,
+		`>0.00 <tspan`,
+		`</tspan></text>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered digital device missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "<g") {
+		t.Errorf("a digital device should be a bare <text>, not wrapped in a <g>: %s", out)
+	}
+}
+
+func TestRender_DigitalDeviceOmitsUnitWhenEmpty(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		DigitalDevices: []model.DigitalDevice{{ID: 1, X: 5, Y: 5, Size: 10, Value: "0.00"}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "data-unit") || strings.Contains(out, "<tspan") {
+		t.Errorf("an empty unit should omit both data-unit and the unit tspan entirely: %s", out)
+	}
+}
+
+func TestRender_UsesEditorBackground(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{Width: 10, Height: 10, Editor: &model.EditorSettings{Background: "#ffffff"}}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "background-color: #ffffff") {
+		t.Errorf("editor background not applied: %s", buf.String())
+	}
+}
+
+func TestApplyStateLine(t *testing.T) {
+	tmpl := `<path d="{state:PARALLEL|PERPENDICULAR|DIAGONAL}" />`
+	one, zero, two, none := 1, 0, 2, (*int)(nil)
+
+	cases := []struct {
+		name  string
+		state *int
+		want  string
+	}{
+		{"closed", &one, "PARALLEL"},
+		{"open", &zero, "PERPENDICULAR"},
+		{"undefined", &two, "DIAGONAL"},
+		{"unrecorded defaults to parallel", none, "PARALLEL"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := applyStateLine(tmpl, c.state)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("applyStateLine(%v) = %q, want it to contain %q", c.state, got, c.want)
+			}
+		})
+	}
+}
+
+func TestRender_AnnotatesTypeGroups(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 1, Y: 1},
+			{ID: 2, Class: model.ClassBreaker, Shape: "41", X: 2, Y: 2},
+			{ID: 3, Class: model.ClassLamp, Shape: "106", X: 3, Y: 3, Radius: 8},
+		},
+		Connectors: []model.Connector{
+			{ID: 4, Kind: model.KindOverheadLine, Points: []model.Point{{X: 0, Y: 0}, {X: 1, Y: 1}}},
+			{ID: 5, Kind: model.KindOverheadLine, Points: []model.Point{{X: 1, Y: 1}, {X: 2, Y: 2}}},
+			{ID: 6, Kind: model.KindCableLine, Points: []model.Point{{X: 2, Y: 2}, {X: 3, Y: 3}}},
+		},
+	}
+	lib.templates["106"] = `<circle r="{radius}" style="fill:{color}" />`
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if n := strings.Count(out, "<!-- Breaker:41 -->"); n != 1 {
+		t.Errorf("want exactly one Breaker:41 header for the two consecutive breakers, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "<!-- Lamp:106 -->") {
+		t.Errorf("missing Lamp:106 header: %s", out)
+	}
+	if n := strings.Count(out, "<!-- Overhead line:22 -->"); n != 1 {
+		t.Errorf("want exactly one Overhead line:22 header for the two consecutive connectors, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "<!-- Cable line:23 -->") {
+		t.Errorf("missing Cable line:23 header: %s", out)
+	}
+	if !strings.Contains(out, `r="8"`) {
+		t.Errorf("lamp radius placeholder not substituted: %s", out)
+	}
+}
+
+func TestRender_CableLineIsDashedByDefaultOverheadLineIsNot(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Connectors: []model.Connector{
+			{ID: 1, Kind: model.KindOverheadLine, Points: []model.Point{{X: 0, Y: 0}, {X: 1, Y: 1}}},
+			{ID: 2, Kind: model.KindCableLine, Points: []model.Point{{X: 2, Y: 2}, {X: 3, Y: 3}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "stroke-dasharray: 6,5;") {
+		t.Errorf("cable line should default to a 6,5 dasharray: %s", out)
+	}
+	overhead := out[:strings.Index(out, `id="2"`)]
+	if strings.Contains(overhead, "dasharray") {
+		t.Errorf("overhead line should render solid by default: %s", overhead)
+	}
+}
+
+func TestResolveCableLineDash(t *testing.T) {
+	cases := []struct {
+		style model.ConnectorLineStyle
+		want  string
+	}{
+		{"", "stroke-dasharray: 6,5;"},
+		{model.LineStyleDashed, "stroke-dasharray: 6,5;"},
+		{model.LineStyleDashDot, "stroke-dasharray: 70 20 25 20;"},
+		{model.LineStyleDotted, "stroke-dasharray: 3,2;"},
+		{model.LineStyleSolid, ""},
+		{"garbage", "stroke-dasharray: 6,5;"},
+	}
+	for _, c := range cases {
+		t.Run(string(c.style), func(t *testing.T) {
+			if got := resolveCableLineDash(c.style); got != c.want {
+				t.Errorf("resolveCableLineDash(%q) = %q, want %q", c.style, got, c.want)
+			}
+		})
+	}
+}
+
+func TestRender_ElevatedClassesDrawnAfterConnectors(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib.templates["7"] = `<circle r="3" style="stroke:{color}" />`
+	lib.templates["106"] = `<circle r="{radius}" style="fill:{color}" />`
+	lib.templates["320003"] = `<circle r="{radius}" style="fill:{color}" />`
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		// Every elevated element is listed first in document order, but each
+		// must still render after the connectors loop, so it paints on top
+		// of any wire it sits on instead of a later-painted wire cutting
+		// through it.
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassJunctionPoint, Shape: "7", X: 0, Y: 0},
+			{ID: 2, Class: model.ClassLamp, Shape: "106", X: 1, Y: 1, Radius: 8},
+			{ID: 3, Class: model.ClassFaultPassageIndicator, Shape: "320003", X: 2, Y: 2, Radius: 15},
+			{ID: 4, Class: model.ClassBreaker, Shape: "41", X: 3, Y: 3},
+		},
+		Connectors: []model.Connector{
+			{ID: 5, Kind: model.KindOverheadLine, Points: []model.Point{{X: 0, Y: 0}, {X: 2, Y: 2}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	wireIdx := strings.Index(out, `points="0,0 2,2"`)
+	breakerIdx := strings.Index(out, `id="4"`)
+	if wireIdx == -1 || breakerIdx == -1 {
+		t.Fatalf("missing expected elements in output: %s", out)
+	}
+	if breakerIdx > wireIdx {
+		t.Errorf("ordinary breaker rendered after the wire (index %d > %d), want before, in document order: %s", breakerIdx, wireIdx, out)
+	}
+	for _, id := range []int{1, 2, 3} {
+		idx := strings.Index(out, fmt.Sprintf(`id="%d"`, id))
+		if idx == -1 {
+			t.Fatalf("missing element %d in output: %s", id, out)
+		}
+		if idx < wireIdx {
+			t.Errorf("elevated element %d rendered before its wire (index %d < %d), want after so it paints on top: %s", id, idx, wireIdx, out)
+		}
+	}
+}
+
+func TestRender_ReportsMissingShape(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(`<symbols></symbols>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &model.Diagram{
+		Elements: []model.Element{{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 1, Y: 1}},
+	}
+	var buf bytes.Buffer
+	err = Render(d, lib, &buf, Static, "", nil)
+	if err == nil {
+		t.Fatal("expected an error for a missing shape")
+	}
+	if !strings.Contains(err.Error(), "41") {
+		t.Errorf("error should name the missing shape: %v", err)
+	}
+	// The rest of the document must still be written.
+	if !strings.Contains(buf.String(), "</svg>") {
+		t.Errorf("output should still be a complete document: %s", buf.String())
+	}
+}
+
+func TestRender_BusbarsAndConnectorsAreSelectable(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassBusBarSection, Points: []model.Point{{X: 0, Y: 0}, {X: 100, Y: 0}}},
+		},
+		Connectors: []model.Connector{
+			{ID: 2, Points: []model.Point{{X: 0, Y: 10}, {X: 100, Y: 10}}},
+		},
+		Labels: []model.Label{{ID: 3, X: 5, Y: 5, Size: 10, Text: "Note"}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `id="1" data-editor-kind="element"`) {
+		t.Errorf("busbar should carry its bare id and an element data-editor-kind marker: %s", out)
+	}
+	if !strings.Contains(out, `id="2" data-editor-kind="connector"`) {
+		t.Errorf("connector should carry its bare id and a connector data-editor-kind marker: %s", out)
+	}
+	if !strings.Contains(out, `<text id="3" data-type="5" data-editor-kind="label" x="5" y="5" style="`) {
+		t.Errorf("label should carry its bare id and a label data-editor-kind marker: %s", out)
+	}
+}
+
+func TestRender_BusbarMatchesXsde2svgConventions(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 2200, Height: 600,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "110kV", Color: "#00A0F0"}},
+		Elements: []model.Element{{
+			ID: 957, Class: model.ClassBusBarSection, Shape: "24", Name: "1SEC 110kV", Voltage: 1,
+			Points: []model.Point{{X: 1670, Y: 520}, {X: 2150, Y: 520}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `stroke:#00A0F0;stroke-width:4`) {
+		t.Errorf("busbar should draw at 4px in its voltage class's color, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `data-name="1SEC 110kV"`) {
+		t.Errorf("busbar should carry its name as data-name, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `data-voltage="#00A0F0"`) {
+		t.Errorf("busbar should carry its resolved color as data-voltage, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `data-type="24"`) {
+		t.Errorf("busbar should carry its shape as data-type, like a real xsde2svg busbar: %s", out)
+	}
+	if !strings.Contains(out, `id="957"`) {
+		t.Errorf("busbar should carry its own bare integer id, like a real xsde2svg busbar: %s", out)
+	}
+	if strings.Contains(out, "data-editor-kind") {
+		t.Errorf("Static mode should not carry this editor's own data-editor-kind marker: %s", out)
+	}
+}
+
+func TestRender_BusWorkConnectorCarriesDataType21(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 2000, Height: 1200,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "10kV", Color: "#962896"}},
+		Connectors: []model.Connector{{
+			ID: 3988, Kind: model.KindBusWork, Voltage: 1,
+			Points: []model.Point{{X: 1310, Y: 560}, {X: 1310, Y: 670}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `data-type="21"`) {
+		t.Errorf("a BusWork connector (what diagramOps.connectElements creates) should carry data-type=\"21\", like a real xsde2svg connection: %s", out)
+	}
+	if !strings.Contains(out, `id="3988"`) {
+		t.Errorf("connector should carry its own bare integer id: %s", out)
+	}
+}
+
+// TestRender_ObjectLinkMatchesXsde2svgFormat checks Static output against a
+// real xsde2svg instance, now wrapped in one <g id data-type="28"
+// data-voltage> (see writeObjectLink) that carries the polyline's former
+// attributes. The real instance, as older xsde2svg wrote it flat: <polyline points="1980,300 1980,252"
+// style="fill:none;stroke:#00A0F0;;stroke-width:2" data-type="28"
+// id="2120" data-voltage="#00A0F0" /> plus its separate arrowhead <path
+// d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2"
+// transform="rotate(180,1980,252)" /> — absolute coordinates, rotated
+// around the connector's final point. Interactive keeps the local
+// translate(x,y) rotate(angle) placement the canvas drags by, checked here
+// by mapping the local arrowhead back to the same real screen position.
+func TestRender_ObjectLinkMatchesXsde2svgFormat(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 2000, Height: 1200,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "110kV", Color: "#00A0F0"}},
+		Connectors: []model.Connector{{
+			ID: 2120, Kind: model.KindLinkToObject, Voltage: 1,
+			Points: []model.Point{{X: 1980, Y: 300}, {X: 1980, Y: 252}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`<g id="2120" data-type="28" data-voltage="#00A0F0">
+<polyline points="1980,300 1980,252" style="fill:none;stroke:#00A0F0;stroke-width:2" />
+<path d="M 1987 252 l -7 12 l -7 -12 z" style="fill:none;stroke:#00A0F0;stroke-width:2" transform="rotate(180,1980,252)" />
+</g>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Static object link missing %q:\n%s", want, out)
+		}
+	}
+
+	buf.Reset()
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out = buf.String()
+	m := regexp.MustCompile(`<path d="([^"]+)" style="[^"]*" transform="translate\(([\d.-]+),([\d.-]+)\) rotate\(([\d.-]+)\)" />`).
+		FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no Interactive arrowhead <path translate(...) rotate(...)> found: %s", out)
+	}
+	if m[1] != "M 7 0 l -7 12 l -7 -12 z" {
+		t.Fatalf("arrowhead path d = %q, want the local geometry", m[1])
+	}
+	tx, ty, angle := mustParseFloat(t, m[2]), mustParseFloat(t, m[3]), mustParseFloat(t, m[4])
+	rad := angle * math.Pi / 180
+	cos, sin := math.Cos(rad), math.Sin(rad)
+	onScreen := func(lx, ly float64) (float64, float64) {
+		return tx + lx*cos - ly*sin, ty + lx*sin + ly*cos
+	}
+	baseX, baseY := onScreen(7, 0)
+	apexX, apexY := onScreen(0, 12)
+	const eps = 0.01
+	if math.Abs(baseX-1973) > eps || math.Abs(baseY-252) > eps {
+		t.Errorf("arrowhead base corner on-screen = (%.4f,%.4f), want (1973,252)", baseX, baseY)
+	}
+	if math.Abs(apexX-1980) > eps || math.Abs(apexY-240) > eps {
+		t.Errorf("arrowhead apex on-screen = (%.4f,%.4f), want (1980,240)", apexX, apexY)
+	}
+}
+
+func mustParseFloat(t *testing.T, s string) float64 {
+	t.Helper()
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		t.Fatalf("parsing %q as float: %v", s, err)
+	}
+	return v
+}
+
+func TestRender_StaticModeOmitsInteractiveMarkup(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"41": `<path d="M 0 0" style="stroke:{color}"/>`})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 10, Y: 10}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "data-editor-kind") {
+		t.Errorf("Static mode should not carry this editor's own data-editor-kind marker: %s", out)
+	}
+	if strings.Contains(out, `fill="transparent"`) {
+		t.Errorf("Static mode should not draw the interactive-only invisible hit-target circle: %s", out)
+	}
+	if !strings.Contains(out, `id="1"`) {
+		t.Errorf("Static mode should still carry the element's own bare id, like a real xsde2svg document: %s", out)
+	}
+}
+
+func TestRender_SwitchingDeviceCarriesDataFillAndDataState(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"41": `<path d="M -7 -7 h 14 v 14 h -14 z"{fillAttr} style="fill:{fill};stroke:{color};stroke-width:1" />
+<path d="{state:M 0 -5 v 10|M -5 0 h 10|M -3.5 -3.5 l 7 7}"{stateAttr} style="stroke:{color};stroke-width:1" />`,
+	})
+	state := 1
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 10, Y: 10, State: &state}},
+	}
+	stateColors := []StateColor{
+		{State: 0, Label: "Open", Color: "red"},
+		{State: 1, Label: "Close", Color: "lawngreen"},
+		{State: 2, Label: "Intermediate", Color: "yellow"},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil, stateColors...); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `data-fill="0:red,1:lawngreen,2:yellow"`) {
+		t.Errorf("switching device's fill path should carry a real xsde2svg data-fill legend built from the configured state colors: %s", out)
+	}
+	if !strings.Contains(out, `data-state="1"`) {
+		t.Errorf("switching device's state-indicator path should carry the element's own raw State as data-state: %s", out)
+	}
+	if !strings.Contains(out, `fill:lawngreen`) {
+		t.Errorf("state 1 should resolve to the configured lawngreen fill: %s", out)
+	}
+}
+
+func TestRender_MissingStateOmitsDataState(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"41": `<path d="{state:M 0 -5 v 10|M -5 0 h 10|M -3.5 -3.5 l 7 7}"{stateAttr} style="stroke:{color};stroke-width:1" />`,
+	})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 10, Y: 10}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil, StateColor{State: 0, Label: "Open", Color: "red"}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "data-state") {
+		t.Errorf("an element with no recorded State should carry no data-state attribute at all: %s", out)
+	}
+}
+
+// TestRender_PowerTransformer2Winding checks a 2-winding transformer's own
+// circle positions/legs/glyphs against hand-computed values, independently
+// derived from the real element_47.go default-path constants (baseRadius
+// 22, xShift 18, glyph shift 22/3=7, delta shift 22/2=11/half 5) rather
+// than any single real corpus instance — the real corpus's own type-47
+// instances turned out to mostly use non-default Size presets (see
+// writePowerTransformer's own doc comment), so a literal byte-for-byte
+// comparison against one specific real file would just be pinning that
+// file's own Size choice, not this package's own default geometry.
+func TestRender_PowerTransformer2Winding(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "110kV", Color: "#962896"}, {ID: 2, Name: "35kV", Color: "#965000"}},
+		Elements: []model.Element{{
+			ID: 7, Class: model.ClassPowerTransformer, Shape: "47", Name: "T-1", X: 100, Y: 100,
+			Windings: []model.TransformerWinding{
+				{Voltage: 1, Scheme: model.SchemeDelta},
+				{Voltage: 2, Scheme: model.SchemeWyeN, Grounding: model.GroundingSolid},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`<!-- Power transformer:47 -->`,
+		`<g id="7" data-name="T-1" data-voltage="gray" data-type="47" data-editor-kind="element" transform="translate(100,100) rotate(0)">`,
+		// Winding 0 (delta, #962896): circle at local (+20,0), leg to
+		// (+50,0) (circle edge 20+22=42, plus an 8-unit lead — chosen so
+		// the tip lands on the 10-unit grid; see transformerLeadLength's
+		// own doc comment), and the delta triangle M(cx,cy-5) l(5,11)
+		// l(-11,0) z.
+		`<circle cx="20" cy="0" r="22" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
+		`<path d="M 42 0 L 50 0" style="fill:none;stroke:#962896;stroke-width:2" data-voltage="#962896" />`,
+		`<path d="M 20 -5 l 5 11 l -11 0 z" style="fill:none;stroke:#962896;stroke-width:1" />`,
+		// Winding 1 (wye-with-neutral + solid grounding, #965000): circle
+		// at local (-20,0), leg to (-50,0), the 4-spoke wyeN glyph, and a
+		// grounding mark just past the neutral spoke's own tip.
+		`<circle cx="-20" cy="0" r="22" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
+		`<path d="M -42 0 L -50 0" style="fill:none;stroke:#965000;stroke-width:2" data-voltage="#965000" />`,
+		`<path d="M -20 0 l -7 -7 M -20 0 l 7 -7 M -20 0 l 0 7 M -20 0 l 7 0" style="fill:none;stroke:#965000;stroke-width:1" />`,
+		`<path d="M -10 0 v 4 M -15 4 h 10 M -13 7 h 6 M -11 10 h 2" style="fill:none;stroke:#965000;stroke-width:1" />`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("2-winding power transformer missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "a 18 18") {
+		t.Errorf("a non-autotransformer should draw no tap decoration: %s", out)
+	}
+	if strings.Contains(out, "stroke-width:1\" />\n<path d=\"M -25") {
+		t.Errorf("a transformer with no TapChanger winding should draw no regulation arrow: %s", out)
+	}
+}
+
+// TestRender_PowerTransformer2WindingAutotransformerTap checks the tap's
+// own real terminal (transformerTapOffset, local (0,-70) — grid-aligned
+// and independent of Windings[0]'s own circle position) and the arc
+// connecting it to Windings[0]'s own circle, for the case where that
+// circle sits off-center (dX=20, the 2-winding default) rather than
+// directly below the tap the way a 3/4-winding transformer's own
+// top-positioned winding 0 does — the case that surfaced a real
+// connectivity bug (see RELEASE.md): a real user reported the tap arc
+// needing to "end with a connector," since the original version of this
+// decoration was purely cosmetic, with no real terminal a wire could
+// bind to at all.
+func TestRender_PowerTransformer2WindingAutotransformerTap(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "110kV", Color: "teal"}, {ID: 2, Name: "35kV", Color: "purple"}},
+		Elements: []model.Element{{
+			ID: 13, Class: model.ClassPowerTransformer, Shape: "47", X: 100, Y: 100, Autotransformer: true,
+			Windings: []model.TransformerWinding{{Voltage: 1, Scheme: model.SchemeWye}, {Voltage: 2, Scheme: model.SchemeWye}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		// Winding 0's own circle at local (+20,0) (the 2-winding default).
+		`<circle cx="20" cy="0" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// The tap's own real terminal: stub from (0,-70) down to (0,-50),
+		// still directly above the *anchor* (x=0), not winding 0's own
+		// circle (x=20) — this is what keeps it grid-aligned regardless
+		// of which winding position the tap ends up decorating. Drawn at
+		// stroke-width 2, matching every regular winding lead — this is a
+		// real electrical lead, not a thinner decorative line.
+		`<path d="M 0 -70 L 0 -50" style="fill:none;stroke:teal;stroke-width:2" />`,
+		// The connecting arc sweeps from (0,-50), radius 40, to a point on
+		// winding 0's own circle rim 50° up from its own top, offset
+		// toward whichever side the circle sits on (right, here, since
+		// winding 0 sits at +20) — a broad, smooth sweep past the
+		// circle's own top rather than a tight loop landing dead center.
+		`<path d="M 0 -50 A 40 40 0 0 1 37 -14" style="fill:none;stroke:teal;stroke-width:2" />`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("2-winding autotransformer tap missing %q: %s", want, out)
+		}
+	}
+}
+
+// TestRender_PowerTransformer3WindingAutotransformer checks an
+// autotransformer's own tap decoration (drawn on Windings[0]'s own real
+// circle rather than real xsde2svg's own separate phantom-winding
+// convention — see writeAutotransformerTap's own doc comment) and the
+// regulation arrow, drawn once for whichever winding has TapChanger set.
+func TestRender_PowerTransformer3WindingAutotransformer(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Name: "110kV", Color: "teal"}, {ID: 2, Name: "35kV", Color: "purple"}, {ID: 3, Name: "10kV", Color: "olive"}},
+		Elements: []model.Element{{
+			ID: 9, Class: model.ClassPowerTransformer, Shape: "47", X: 100, Y: 100, Autotransformer: true,
+			Windings: []model.TransformerWinding{
+				{Voltage: 1, Scheme: model.SchemeWye, TapChanger: true},
+				{Voltage: 2, Scheme: model.SchemeWye},
+				{Voltage: 3, Scheme: model.SchemeWyeN},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		// Winding 0 (top, default terminal for a 3-winding transformer):
+		// circle at local (0,-30), the tap stub+arc, and the regulation
+		// arrow (centered on the element's own anchor, teal — winding 0's
+		// own color, since it's the one with TapChanger set).
+		`<circle cx="0" cy="-30" r="22" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// Winding 0's own real lead (top, transformerLeadLength 8 —
+		// topShift(30)+radius(22)+8=60 lands on the 10-unit grid), drawn
+		// in addition to (not instead of) its own tap decoration below.
+		`<path d="M 0 -52 L 0 -60" style="fill:none;stroke:teal;stroke-width:2" data-voltage="teal" />`,
+		// The autotransformer's own extra "line" terminal
+		// (transformerTapOffset): a real, connectable point at local
+		// (0,-70) — always directly above the anchor regardless of
+		// winding count, so it lands on the grid the same way a
+		// top-positioned winding's own lead does — with a short stub
+		// down to (0,-50) and a broad radius-40 arc sweeping to a point
+		// on winding 0's own circle rim 50° up from its own top (17,-44)
+		// — offset from dead-center-top even though winding 0 itself has
+		// no horizontal offset of its own (dX=0 for a 3-winding's own top
+		// winding), since the landing angle is independent of that.
+		`<path d="M 0 -70 L 0 -50" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M 0 -50 A 40 40 0 0 1 17 -44" style="fill:none;stroke:teal;stroke-width:2" />`,
+		`<path d="M -25 25 L 25 -25" style="fill:none;stroke:teal;stroke-width:1" />`,
+		`<path d="M 28 -23 l -5 -5 l 7 -2 z" style="fill:teal;stroke:teal;stroke-width:1" />`,
+		// Windings 1/2 (right/left, matching the non-auto 3-winding
+		// default) carry no tap decoration of their own, and their own
+		// legLen (8 — transformerGridShift(20)+radius(22)+8=50, also
+		// grid-aligned) differs from winding 0's own.
+		`<circle cx="20" cy="0" r="22" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
+		`<path d="M 42 0 L 50 0" style="fill:none;stroke:purple;stroke-width:2" data-voltage="purple" />`,
+		`<circle cx="-20" cy="0" r="22" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
+		`<path d="M -42 0 L -50 0" style="fill:none;stroke:olive;stroke-width:2" data-voltage="olive" />`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("autotransformer missing %q: %s", want, out)
+		}
+	}
+}
+
+// TestRender_PowerTransformer4Winding checks the 4-winding default circle
+// layout (top/bottom/left/right), independently verified against a real
+// (fractional-scale) 4-winding corpus instance whose proportions matched
+// these same constants once the scale factor was divided back out.
+func TestRender_PowerTransformer4Winding(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Color: "teal"}, {ID: 2, Color: "purple"}, {ID: 3, Color: "olive"}, {ID: 4, Color: "purple"}},
+		Elements: []model.Element{{
+			ID: 11, Class: model.ClassPowerTransformer, Shape: "47", X: 100, Y: 100,
+			Windings: []model.TransformerWinding{{Voltage: 1}, {Voltage: 2}, {Voltage: 3}, {Voltage: 4}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		`<circle cx="0" cy="-20" r="22"`, // top
+		`<circle cx="0" cy="20" r="22"`,  // bottom
+		`<circle cx="-30" cy="0" r="22"`, // left
+		`<circle cx="30" cy="0" r="22"`,  // right
+		// Every circle offset is a multiple of 10 (xsde2svg's 18 and 29
+		// widened to 20 and 30) and every lead is 8 long, so each tip
+		// lands on the 10-unit grid.
+		`L 0 -50`, // top:    -20-22-8 = -50
+		`L 0 50`,  // bottom:  20+22+8 =  50
+		`L -60 0`, // left:   -30-22-8 = -60
+		`L 60 0`,  // right:   30+22+8 =  60
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("4-winding power transformer missing %q: %s", want, out)
+		}
+	}
+}
+
+// TestRender_PowerTransformerGlyphStaysUprightWhenRotated checks that a
+// winding's own connection-scheme glyph is wrapped in a counter-rotating
+// <g transform="rotate(-Orient,cx,cy)"> — the same {counterRotate}
+// pattern a FaultPassageIndicator's own "FPI" label already uses to stay
+// upright regardless of its own element's rotation — so the glyph itself
+// never visually rotates with the rest of the transformer, only the
+// winding's own circle position does.
+//
+// The math is verified independently rather than just trusting the
+// transform string is correct by construction (the same rigor established
+// for writeObjectLink's own arrow, after an earlier version of *that*
+// function was caught rendering thousands of units off despite a passing
+// but circular test): for winding 0 of a 2-winding transformer at anchor
+// (100,100), Orient 90, local circle center (20,0), a wye glyph's own
+// first spoke tip is at local offset (-7,-7) from that center, i.e. the
+// raw local point (13,-7). Composing the inner rotate(-90,20,0) then the
+// outer translate(100,100) rotate(90) by hand: (13,-7) rotates to (13,7)
+// around the pivot (20,0), then the outer transform sends that to
+// (93,113) — exactly the winding's own global circle center (100,120)
+// plus the *original*, unrotated offset (-7,-7), confirming the glyph's
+// own on-screen shape truly doesn't rotate with the transformer.
+func TestRender_PowerTransformerGlyphStaysUprightWhenRotated(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 400, Height: 400,
+		VoltageClasses: []model.VoltageClass{{ID: 1, Color: "teal"}},
+		Elements: []model.Element{{
+			ID: 20, Class: model.ClassPowerTransformer, Shape: "47", X: 100, Y: 100, Orient: 90,
+			Windings: []model.TransformerWinding{{Voltage: 1, Scheme: model.SchemeWye}, {Voltage: 1, Scheme: model.SchemeWye}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `<g transform="rotate(-90,20,0)">`) {
+		t.Fatalf("winding 0's own glyph should be wrapped in a counter-rotating <g>: %s", out)
+	}
+	if !strings.Contains(out, "<path d=\"M 20 0 l -7 -7 M 20 0 l 7 -7 M 20 0 l 0 7\" style=\"fill:none;stroke:teal;stroke-width:1\" />\n</g>") {
+		t.Errorf("the glyph itself should still be drawn in its own ordinary local coordinates, closed by the counter-rotating </g>: %s", out)
+	}
+
+	// Independently recompute the first spoke tip's own real on-screen
+	// position from the two composed transforms, rather than trusting
+	// the transform strings are correct by construction.
+	innerAngle := -90 * math.Pi / 180
+	localTip := model.Point{X: 13, Y: -7} // winding 0's own spoke tip, local (20-7, 0-7)
+	pivot := model.Point{X: 20, Y: 0}
+	rel := model.Point{X: localTip.X - pivot.X, Y: localTip.Y - pivot.Y}
+	rotatedRel := model.Point{
+		X: rel.X*math.Cos(innerAngle) - rel.Y*math.Sin(innerAngle),
+		Y: rel.X*math.Sin(innerAngle) + rel.Y*math.Cos(innerAngle),
+	}
+	afterInner := model.Point{X: rotatedRel.X + pivot.X, Y: rotatedRel.Y + pivot.Y}
+
+	outerAngle := 90 * math.Pi / 180
+	afterOuterRotate := model.Point{
+		X: afterInner.X*math.Cos(outerAngle) - afterInner.Y*math.Sin(outerAngle),
+		Y: afterInner.X*math.Sin(outerAngle) + afterInner.Y*math.Cos(outerAngle),
+	}
+	onScreen := model.Point{X: afterOuterRotate.X + 100, Y: afterOuterRotate.Y + 100}
+
+	const eps = 0.01
+	if math.Abs(onScreen.X-93) > eps || math.Abs(onScreen.Y-113) > eps {
+		t.Errorf("spoke tip on-screen = (%.4f,%.4f), want (93,113)", onScreen.X, onScreen.Y)
+	}
+}
+
+func TestRenderFragments_OnlyRendersRequestedIds(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		VoltageClasses: []model.VoltageClass{{ID: 9, Name: "10kV", Color: "#326400"}},
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassBreaker, Shape: "41", Voltage: 9, X: 1, Y: 1},
+			{ID: 2, Class: model.ClassBreaker, Shape: "41", Voltage: 9, X: 2, Y: 2},
+		},
+		Connectors: []model.Connector{
+			{ID: 3, Voltage: 9, Points: []model.Point{{X: 0, Y: 0}, {X: 10, Y: 0}}},
+		},
+		Labels:         []model.Label{{ID: 4, X: 5, Y: 5, Size: 10, Text: "Note"}},
+		DigitalDevices: []model.DigitalDevice{{ID: 5, X: 6, Y: 6, Size: 10, Name: "R", Value: "1", Unit: "MW"}},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1, 3, 4, 5}, Interactive, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frags) != 4 {
+		t.Fatalf("frags = %+v, want exactly the 4 requested ids", frags)
+	}
+	for _, id := range []int{1, 3, 4, 5} {
+		if _, ok := frags[id]; !ok {
+			t.Errorf("missing fragment for requested id %d: %+v", id, frags)
+		}
+	}
+	if _, ok := frags[2]; ok {
+		t.Errorf("element 2 wasn't requested, should not be rendered: %+v", frags)
+	}
+	if !strings.Contains(frags[1], `id="1"`) {
+		t.Errorf("element fragment should carry its own id: %q", frags[1])
+	}
+	if !strings.Contains(frags[1], "stroke:#326400") {
+		t.Errorf("element fragment should still resolve its own voltage color from the diagram's VoltageClasses, even though id 9 wasn't itself requested: %q", frags[1])
+	}
+	if !strings.Contains(frags[3], `id="3" data-editor-kind="connector"`) {
+		t.Errorf("connector fragment should carry its own id and data-editor-kind: %q", frags[3])
+	}
+	if !strings.Contains(frags[4], `data-editor-kind="label"`) {
+		t.Errorf("label fragment should carry its own data-editor-kind: %q", frags[4])
+	}
+	if !strings.Contains(frags[5], "R") {
+		t.Errorf("digital device fragment should carry its own name: %q", frags[5])
+	}
+}
+
+func TestRenderFragments_SkipsIdsNoLongerInTheDiagram(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 10, Height: 10,
+		Elements: []model.Element{{ID: 1, Class: model.ClassBusBarSection, Points: []model.Point{{X: 0, Y: 0}, {X: 1, Y: 0}}}},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1, 999}, Interactive, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frags) != 1 {
+		t.Errorf("frags = %+v, want only id 1 — 999 names nothing in d and should be silently skipped, not an error", frags)
+	}
+	if _, ok := frags[1]; !ok {
+		t.Errorf("expected a fragment for id 1: %+v", frags)
+	}
+}
+
+func TestRenderFragments_ReportsMissingShapeWithoutDroppingOtherFragments(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(`<symbols></symbols>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &model.Diagram{
+		Width: 10, Height: 10,
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 1, Y: 1},
+			{ID: 2, Class: model.ClassBusBarSection, Points: []model.Point{{X: 0, Y: 0}, {X: 1, Y: 0}}},
+		},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1, 2}, Static, "", nil)
+	if err == nil {
+		t.Fatal("expected an error for the missing shape (41)")
+	}
+	if !strings.Contains(err.Error(), "41") {
+		t.Errorf("error should name the missing shape: %v", err)
+	}
+	if _, ok := frags[2]; !ok {
+		t.Errorf("id 2 (busbar, no template needed) should still have been rendered despite id 1's own missing shape: %+v", frags)
+	}
+}
+
+func TestRenderFragments_NoTypeCommentsOrZOrdering(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"7": `<circle cx="0" cy="0" r="{radius}" style="fill:{junctionFill};stroke:{color}"{fillAttr} />`})
+	d := &model.Diagram{
+		Width: 10, Height: 10,
+		Elements: []model.Element{{ID: 1, Class: model.ClassJunctionPoint, Shape: "7", X: 1, Y: 1, Radius: 3}},
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1}, Interactive, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JunctionPoint is one of elementZOrder's own elevated classes — Render
+	// draws it in a separate, later pass, but a fragment is just its own
+	// markup with no z-order concept at all.
+	if strings.Contains(frags[1], "<!--") {
+		t.Errorf("a fragment should carry no type-comment header, unlike a full Render: %q", frags[1])
+	}
+}
+
+func TestRender_Table(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{{
+			ID: 1, Class: model.ClassTable, Shape: "312", Name: "Note",
+			Points:       []model.Point{{X: 10, Y: 10}, {X: 60, Y: 40}},
+			Fill:         "gray",
+			Stroke:       "#952896",
+			StrokeWidth:  2,
+			LineStyle:    model.LineStyleDashed,
+			PropertyText: "Hello",
+			TextColor:    "yellow",
+			Orient:       90,
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `<g id="1" data-type="312" data-name="Note" data-voltage="#952896" data-editor-kind="element">`) {
+		t.Errorf("table should carry its own id/data-type/data-name in a wrapping <g>: %s", out)
+	}
+	if !strings.Contains(out, `<rect x="10" y="10" width="50" height="30" style="fill:gray;stroke:#952896;stroke-dasharray: 6,5;stroke-width:2" />`) {
+		t.Errorf("table's own rect missing expected geometry/style: %s", out)
+	}
+	if !strings.Contains(out, `transform="rotate(90,35,25)"`) {
+		t.Errorf("table's own label should rotate around the box's own center when Orient is set: %s", out)
+	}
+	if !strings.Contains(out, `>Hello</text>`) || !strings.Contains(out, "fill:yellow") {
+		t.Errorf("table's own label text/color missing: %s", out)
+	}
+}
+
+func TestRender_TableTooFewPointsDrawsNothing(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 10, Height: 10,
+		Elements: []model.Element{{ID: 1, Class: model.ClassTable, Shape: "312", Points: []model.Point{{X: 0, Y: 0}}}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "<rect") {
+		t.Errorf("a table with fewer than 2 points should draw nothing: %s", buf.String())
+	}
+}
+
+func TestRender_Table2(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 200, Height: 200,
+		Elements: []model.Element{{
+			ID: 1, Class: model.ClassTable2, Shape: "313",
+			X: 100, Y: 200,
+			RowHeights:   []float64{20, 20},
+			ColumnWidths: []float64{60, 50},
+			Stroke:       "#952896",
+			StrokeWidth:  1,
+			Fill:         "gray",
+			Cells: []model.TableCell{
+				{Row: 0, Col: 0, Text: "A"},
+				{Row: 0, Col: 1, Text: "B", Fill: "red", TextColor: "white"},
+				{Row: 1, Col: 0},
+				{Row: 1, Col: 1, Text: "D"},
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, `<g id="1" data-type="313" data-name="" data-voltage="#952896" data-editor-kind="element">`) {
+		t.Errorf("table2 should carry its own id/data-type in a wrapping <g>: %s", out)
+	}
+	// Cell (0,0): top-left at the table's own X,Y anchor.
+	if !strings.Contains(out, `<path d="M 100 200 h 60 v 20 h -60 v -20 " style="fill:gray;stroke:#952896;stroke-width:1" />`) {
+		t.Errorf("cell (0,0) missing expected geometry/style (own default fill): %s", out)
+	}
+	// Cell (0,1): starts at column boundary 100+60=160.
+	if !strings.Contains(out, `<path d="M 160 200 h 50 v 20 h -50 v -20 " style="fill:red;stroke:#952896;stroke-width:1" />`) {
+		t.Errorf("cell (0,1) missing expected geometry/own fill override: %s", out)
+	}
+	if !strings.Contains(out, `fill:white`) {
+		t.Errorf("cell (0,1)'s own text color override missing: %s", out)
+	}
+	// Cell (1,0): starts at row boundary 200+20=220, no text.
+	if !strings.Contains(out, `<path d="M 100 220 h 60 v 20 h -60 v -20 " style="fill:gray;stroke:#952896;stroke-width:1" />`) {
+		t.Errorf("cell (1,0) (blank) still missing its own geometry: %s", out)
+	}
+	if strings.Count(out, "<path") != 4 {
+		t.Errorf("expected exactly 4 cell paths, got: %s", out)
+	}
+	if strings.Count(out, "<text") != 3 {
+		t.Errorf("expected exactly 3 cell labels (A, B, D — cell (1,0) is blank): %s", out)
+	}
+}
+
+func TestRender_Table2NoGeometryDrawsNothing(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	d := &model.Diagram{
+		Width: 10, Height: 10,
+		Elements: []model.Element{{ID: 1, Class: model.ClassTable2, Shape: "313", X: 0, Y: 0}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "<path") {
+		t.Errorf("a table2 with no RowHeights/ColumnWidths should draw nothing: %s", buf.String())
+	}
+}
+
+func TestRender_Polygon(t *testing.T) {
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{{
+			ID: 7, Class: model.ClassPolygon, Shape: "16", Fill: "#663300", Stroke: "white", StrokeWidth: 1,
+			LineStyle: model.LineStyleDotted, Points: []model.Point{{X: 10, Y: 10}, {X: 20, Y: 30}, {X: 0, Y: 30}},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, NewSymbolLibrary(nil), &buf, Static, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	want := `<polygon points="10,10 20,30 0,30" style="fill:#663300;stroke:white;stroke-dasharray: 10,20;stroke-width:1" id="7" data-type="16" data-voltage="white" />`
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("render output missing %s:\n%s", want, buf.String())
+	}
+}
+
+func TestRender_ForkArmLength(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{"26": `<path d="M 0 0 l {radius} -{radius} m -{radius} {radius} l -{radius} -{radius}" />`})
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassFork, Shape: "26", X: 10, Y: 10},
+			{ID: 2, Class: model.ClassFork, Shape: "26", X: 50, Y: 50, Radius: 7},
+		},
+	}
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`d="M 0 0 l 10 -10 m -10 10 l -10 -10"`, `d="M 0 0 l 7 -7 m -7 7 l -7 -7"`} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("render output missing %s:\n%s", want, buf.String())
+		}
+	}
+}
+
+func TestRender_ConnectorWithoutVoltageIsGray(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{})
+	pts := []model.Point{{X: 0, Y: 0}, {X: 0, Y: 20}}
+	for _, kind := range []model.ConnectorKind{model.KindBusWork, model.KindOverheadLine, model.KindCableLine, model.KindLinkToObject} {
+		t.Run(string(kind), func(t *testing.T) {
+			d := &model.Diagram{Width: 50, Height: 50, Connectors: []model.Connector{{ID: 1, Kind: kind, Points: pts}}}
+			var buf bytes.Buffer
+			if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			out := buf.String()
+			if !strings.Contains(out, "stroke:gray") {
+				t.Errorf("want stroke:gray, got %s", out)
+			}
+			if strings.Contains(out, "stroke:black") {
+				t.Errorf("unexpected black stroke: %s", out)
+			}
+		})
+	}
+}
+
+func TestRender_TapChangerFragment(t *testing.T) {
+	// Interactive keeps the local-frame geometry this checks; Static is the
+	// same geometry in absolute coordinates (see absolute_test.go).
+	lib := NewSymbolLibrary(map[string]string{
+		"6": `<path d="M 0 0 h 1" />{tapChanger:<path d="M 1 1 z" style="fill:{color};stroke:{color}" />}<path d="M 2 2" />`,
+	})
+	for _, tap := range []bool{false, true} {
+		d := &model.Diagram{
+			Width: 100, Height: 100,
+			VoltageClasses: []model.VoltageClass{{ID: 2, Name: "10 kV", Color: "red"}},
+			Elements:       []model.Element{{ID: 1, Class: model.ClassBooster, Shape: "6", X: 10, Y: 10, Voltage: 2, TapChanger: tap}},
+		}
+		var buf bytes.Buffer
+		if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		out := buf.String()
+		if strings.ContainsAny(out, "{}") {
+			t.Errorf("tapChanger=%v: placeholder left unexpanded: %s", tap, out)
+		}
+		if !strings.Contains(out, `<path d="M 2 2" />`) {
+			t.Errorf("tapChanger=%v: markup after the fragment lost: %s", tap, out)
+		}
+		if got := strings.Contains(out, `<path d="M 1 1 z" style="fill:red;stroke:red" />`); got != tap {
+			t.Errorf("tapChanger=%v: arrow drawn = %v: %s", tap, got, out)
+		}
+	}
+}
+
+// TestRender_BackgroundPlaceholder checks that a template's {background}
+// becomes the diagram's own background (or the default one when unset), in
+// both Render and RenderFragments.
+func TestRender_BackgroundPlaceholder(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"44": `<circle r="2" style="fill:{background};stroke:{color}" />`,
+	})
+	el := model.Element{ID: 1, Class: model.ClassKnifeSwitch, Shape: "44"}
+	for _, c := range []struct {
+		name   string
+		editor *model.EditorSettings
+		want   string
+	}{
+		{"set", &model.EditorSettings{Background: "#abcdef"}, "fill:#abcdef;"},
+		{"default", nil, "fill:" + defaultBackground + ";"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := &model.Diagram{Editor: c.editor, Elements: []model.Element{el}}
+			var buf bytes.Buffer
+			if err := Render(d, lib, &buf, Static, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(buf.String(), c.want) {
+				t.Errorf("Render: want %q in\n%s", c.want, buf.String())
+			}
+			frags, err := RenderFragments(d, lib, []int{1}, Interactive, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(frags[1], c.want) {
+				t.Errorf("RenderFragments: want %q in %s", c.want, frags[1])
+			}
+		})
+	}
+}
+
+// TestRender_PowerTransformerSideLeadsOnGrid checks every 2- and 4-winding
+// winding, and a 3-winding side winding, ends on the 10-unit grid whichever
+// way it is led.
+func TestRender_PowerTransformerSideLeadsOnGrid(t *testing.T) {
+	for _, c := range []struct{ count, i int }{{2, 0}, {2, 1}, {3, 0}, {3, 1}, {3, 2}, {4, 0}, {4, 1}, {4, 2}, {4, 3}} {
+		cx, cy := TransformerWindingOffset(c.count, c.i)
+		for _, dir := range []model.TerminalDirection{model.TerminalTop, model.TerminalBottom, model.TerminalLeft, model.TerminalRight} {
+			x, y := TransformerLegEndpoint(cx, cy, dir, TransformerLeadLength)
+			if math.Mod(x, 10) != 0 || math.Mod(y, 10) != 0 {
+				t.Errorf("%d-winding winding %d %s tip (%v,%v) off the grid", c.count, c.i, dir, x, y)
+			}
+		}
+	}
+}
+
+func TestRender_DiagramStateColorsOverrideLegend(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{
+		"41": `<path d="M -7 -7 h 14 v 14 h -14 z"{fillAttr} style="fill:{fill};stroke:{color};stroke-width:1" />`,
+	})
+	state := 1
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements:    []model.Element{{ID: 1, Class: model.ClassBreaker, Shape: "41", X: 10, Y: 10, State: &state}},
+		StateColors: []model.DiagramStateColor{{State: 1, Color: "#00ff00"}, {State: 3, Color: "magenta"}},
+	}
+	legend := []StateColor{{State: 0, Color: "red"}, {State: 1, Color: "lawngreen"}, {State: 2, Color: "yellow"}}
+
+	var buf bytes.Buffer
+	if err := Render(d, lib, &buf, Static, "", nil, legend...); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `data-fill="0:red,1:#00ff00,2:yellow,3:magenta"`) || !strings.Contains(out, `fill:#00ff00`) {
+		t.Errorf("the diagram's own state colors should replace the legend's: %s", out)
+	}
+
+	frags, err := RenderFragments(d, lib, []int{1}, Static, "", nil, legend...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(frags[1], `fill:#00ff00`) {
+		t.Errorf("fragments should use the diagram's own state colors: %s", frags[1])
+	}
+
+	var xml bytes.Buffer
+	if err := d.Save(&xml); err != nil {
+		t.Fatal(err)
+	}
+	back, err := model.Load(&xml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(back.StateColors, d.StateColors) {
+		t.Errorf("state colors should round-trip, got %+v", back.StateColors)
+	}
+
+	fresh := &model.Diagram{}
+	SeedStateColors(fresh, legend)
+	SeedStateColors(fresh, []StateColor{{State: 0, Color: "black"}})
+	if len(fresh.StateColors) != 3 || fresh.StateColors[0].Color != "red" {
+		t.Errorf("seeding should copy the legend once, got %+v", fresh.StateColors)
+	}
+}
+
+// TestRender_IndicatorLiveStateLegends: a FaultPassageIndicator's template gets the FPI legend
+// as data-fill/data-stroke-style, and a PowerflowIndicator carries its glyph per state as
+// data-text — what rdss-dms recolors and redraws live.
+func TestRender_IndicatorLiveStateLegends(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib.templates["320003"] = `<circle r="{radius}" style="stroke:{fpiColor}"{fpiStrokeAttr} /><text style="fill:{fpiColor}"{fpiFillAttr}>FPI</text>`
+	state := 1
+	d := &model.Diagram{
+		Width: 100, Height: 100,
+		Elements: []model.Element{
+			{ID: 1, Class: model.ClassFaultPassageIndicator, Shape: "320003", X: 10, Y: 10, Radius: 8, State: &state},
+			{ID: 2, Class: model.ClassPowerflowIndicator, Shape: "320001", X: 50, Y: 50, State: &state},
+		},
+	}
+	var buf bytes.Buffer
+	fpi := []StateColor{{State: 0, Color: "lime"}, {State: 1, Color: "red"}}
+	if err := Render(d, lib, &buf, Static, "", fpi); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`style="stroke:red" data-stroke-style="0:lime/,1:red/"`,
+		`style="fill:red" data-fill="0:lime,1:red"`,
+		`data-text="0:→,1:←"`,
+		`>←</text>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %s:\n%s", want, out)
+		}
+	}
+}

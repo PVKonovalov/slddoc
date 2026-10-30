@@ -20,4 +20,7 @@
 // VoltageClass/Layer, and every field referencing one) is a plain int,
 // never a string; 0 doubles as "unset" for an optional reference since a
 // real id from a source SVG is never 0.
+//
+// The implementation lives in internal packages (model, svgtree, render,
+// extract, repair, cim); this package re-exports their API.
 package slddoc

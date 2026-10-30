@@ -16,9 +16,10 @@ History lives in RELEASE.md.
 
 ## What this is
 
-`github.com/PVKonovalov/slddoc`: a shared Go library (single flat package, no application) modeling a single-line
-diagram — elements, coordinates, electrical topology — as an `.xsld` XML document, with SVG rendering, extraction from
-xsde2svg SVGs, topology repair, and CIM (CGMES 3.0 EQ + DL) export/import with automatic layout.
+`github.com/PVKonovalov/slddoc`: a shared Go library (no application; one public package, `slddoc`, over
+internal packages) modeling a single-line diagram — elements, coordinates, electrical topology — as an `.xsld` XML
+document, with SVG rendering, extraction from xsde2svg SVGs, topology repair, and CIM (CGMES 3.0 EQ + DL)
+export/import with automatic layout.
 
 ## Sibling repositories
 
@@ -45,14 +46,22 @@ go fix ./...
 
 - `XSLD_FORMAT.md` — the format reference (ids, sections, topology, class attributes, code tables, legacy rewrites).
   Update it with any model/format change. `README.md`, `doc.go` — overview.
-- `model.go` — types, XML `Load`/`Save`; `ids.go`; `style.go`; `geom.go`, `points.go`.
-- `render.go` — `Render`, `RenderFragments`, `RenderMode`; `absolute.go` (Static absolute coordinates);
-  `symbols.go` (`SymbolLibrary`); `leads.go`, `sizestep.go`, `tap.go`.
-- `extract.go` (+ `elements.go`, `topology.go`, `layers.go`, `voltage.go`, `labels.go`, `rawtree.go`) — SVG → Diagram.
-- `repair.go` — `Repair`, `EnsureIDs`, `InferSizeSteps`; `electrical.go`.
-- `cim.go` (export, `NewCIMClassTable`), `cimimport.go`, `cimforeign.go` (another tool's DL), `cimlayout.go` +
-  `cimlayoutopt.go` + `cimroute.go` (automatic layout and lead routing).
-- Every file has a `_test.go` sibling; corpus-like cases are named after the device (`substation_test.go`, ...).
+- `slddoc.go` — the public API: aliases and wrappers re-exporting the internal packages. Add a new exported name
+  there too. Imports only go one way: model, svgtree ← render ← extract, repair ← cim.
+- `internal/model/` — `model.go` (types, XML `Load`/`Save`), `ids.go`, `style.go`, `geom.go`, `points.go`,
+  `voltage.go`, `sizestep.go`, `electrical.go`.
+- `internal/svgtree/` — `rawtree.go`, the raw SVG tree.
+- `internal/render/` — `render.go` (`Render`, `RenderFragments`, `RenderMode`), `absolute.go` (Static absolute
+  coordinates), `symbols.go` (`SymbolLibrary`), `leads.go`, `layers.go` (layer metadata).
+- `internal/extract/` — `extract.go` (+ `elements.go`, `topology.go`, `layers.go`, `labels.go`, `leads.go`, `tap.go`)
+  — SVG → Diagram.
+- `internal/repair/` — `repair.go`: `Repair`, `EnsureIDs`, `InferSizeSteps`.
+- `internal/cim/` — `cim.go` (export, `NewCIMClassTable`), `cimimport.go`, `cimforeign.go` (another tool's DL),
+  `cimheader.go`, `cimwindings.go`, `cimlayout.go` + `cimlayoutopt.go` + `cimroute.go` (automatic layout and lead
+  routing).
+- Every file has a `_test.go` sibling; corpus-like cases are named after the device (`substation_test.go`, ...). A
+  test that needs a higher package (e.g. a render test that extracts) lives in that package.
+- `example_test.go` — godoc examples; `examples/` — runnable `xsld2svg`/`svg2xsld` with synthetic `testdata/`.
 
 ## Rules not derivable from code
 
