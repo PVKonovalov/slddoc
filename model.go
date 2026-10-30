@@ -96,6 +96,10 @@ type EditorSettings struct {
 	// ActiveLayer references the Layer.ID newly placed items go on (0, the
 	// default, is BaseLayer). Like DefaultVoltage it is only round-tripped.
 	ActiveLayer int `xml:"activeLayer,attr,omitempty" json:"activeLayer,omitempty"`
+	// JumpSameVoltage puts a wire jump also where two buswork wires of the
+	// same voltage class cross unconnected; nil means the editor's default.
+	// Only round-tripped.
+	JumpSameVoltage *bool `xml:"jumpSameVoltage,attr,omitempty" json:"jumpSameVoltage,omitempty"`
 }
 
 // Layer is one entry of a diagram's visibility layers. A viewer toggles

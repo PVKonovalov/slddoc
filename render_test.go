@@ -1452,3 +1452,38 @@ func TestRender_DiagramStateColorsOverrideLegend(t *testing.T) {
 		t.Errorf("seeding should copy the legend once, got %+v", fresh.StateColors)
 	}
 }
+
+// TestRender_IndicatorLiveStateLegends: a FaultPassageIndicator's template gets the FPI legend
+// as data-fill/data-stroke-style, and a PowerflowIndicator carries its glyph per state as
+// data-text — what rdss-dms recolors and redraws live.
+func TestRender_IndicatorLiveStateLegends(t *testing.T) {
+	lib, err := LoadSymbolLibrary(strings.NewReader(testSymbols))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib.templates["320003"] = `<circle r="{radius}" style="stroke:{fpiColor}"{fpiStrokeAttr} /><text style="fill:{fpiColor}"{fpiFillAttr}>FPI</text>`
+	state := 1
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Elements: []Element{
+			{ID: 1, Class: ClassFaultPassageIndicator, Shape: "320003", X: 10, Y: 10, Radius: 8, State: &state},
+			{ID: 2, Class: ClassPowerflowIndicator, Shape: "320001", X: 50, Y: 50, State: &state},
+		},
+	}
+	var buf bytes.Buffer
+	fpi := []StateColor{{State: 0, Color: "lime"}, {State: 1, Color: "red"}}
+	if err := Render(d, lib, &buf, Static, "", fpi); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`style="stroke:red" data-stroke-style="0:lime/,1:red/"`,
+		`style="fill:red" data-fill="0:lime,1:red"`,
+		`data-text="0:→,1:←"`,
+		`>←</text>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %s:\n%s", want, out)
+		}
+	}
+}

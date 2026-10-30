@@ -109,19 +109,25 @@ func diagramStateLegend(d *Diagram, legend []StateColor) []StateColor {
 // the pre-built data-fill legend string, computed once per Render call
 // rather than once per element.
 type stateColorSet struct {
-	colors   map[int]string
-	fillAttr string
+	colors          map[int]string
+	fillAttr        string
+	strokeStyleAttr string
 }
 
+// newStateColorSet builds the lookup and the legends rdss-dms recolors by state:
+// data-fill="0:c0,1:c1" (fill) and data-stroke-style="0:c0/,1:c1/" (stroke color, dash kept).
 func newStateColorSet(colors []StateColor) stateColorSet {
 	set := stateColorSet{colors: make(map[int]string, len(colors))}
-	parts := make([]string, len(colors))
+	fills := make([]string, len(colors))
+	strokes := make([]string, len(colors))
 	for i, c := range colors {
 		set.colors[c.State] = c.Color
-		parts[i] = fmt.Sprintf("%d:%s", c.State, c.Color)
+		fills[i] = fmt.Sprintf("%d:%s", c.State, c.Color)
+		strokes[i] = fmt.Sprintf("%d:%s/", c.State, c.Color)
 	}
-	if len(parts) > 0 {
-		set.fillAttr = fmt.Sprintf(` data-fill="%s"`, strings.Join(parts, ","))
+	if len(colors) > 0 {
+		set.fillAttr = fmt.Sprintf(` data-fill="%s"`, esc(strings.Join(fills, ",")))
+		set.strokeStyleAttr = fmt.Sprintf(` data-stroke-style="%s"`, esc(strings.Join(strokes, ",")))
 	}
 	return set
 }
@@ -731,6 +737,8 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		"{positionAttr}", positionAttr(e.Position),
 		"{positionOffset}", positionOffset(e.Position),
 		"{fpiColor}", fpiColors.fpiColor(e.State),
+		"{fpiFillAttr}", fpiColors.fillAttr,
+		"{fpiStrokeAttr}", fpiColors.strokeStyleAttr,
 		"{counterRotate}", fmtNum(float64(-e.Orient)),
 		"{junctionRadius}", fmtNum(junctionRadius),
 		"{junctionFill}", esc(junctionFill),
@@ -2042,6 +2050,10 @@ func writePole(w io.Writer, e Element, mode RenderMode) {
 // powerflowGlyph picks a PowerflowIndicator's (shape 320001) own arrow
 // character from State, matching the real source's own `FState != "0"`
 // check exactly: nil/0 draws "→", anything else draws "←".
+// powerflowTextLegend is a PowerflowIndicator's data-text: the glyph per live state, so
+// rdss-dms can turn the arrow (powerflowGlyph's own mapping).
+const powerflowTextLegend = "0:→,1:←"
+
 func powerflowGlyph(state *int) string {
 	if state != nil && *state != 0 {
 		return "←"
@@ -2075,8 +2087,8 @@ func writePowerflowIndicator(w io.Writer, e Element, mode RenderMode) {
 	if e.ID != 0 {
 		idAttr = fmt.Sprintf(" id=\"%d\"", e.ID)
 	}
-	fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"font-size:26;fill:%s;font-weight: bold\" transform=\"rotate(%d,%s,%s)\"%s data-type=\"320001\" data-angle=\"%d\" data-voltage=\"%s\"%s>%s</text>\n",
-		fmtNum(e.X), fmtNum(e.Y+3), esc(color), e.Orient, fmtNum(e.X), fmtNum(e.Y), idAttr, e.Orient, esc(color), editorAttr, powerflowGlyph(e.State))
+	fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"font-size:26;fill:%s;font-weight: bold\" transform=\"rotate(%d,%s,%s)\"%s data-type=\"320001\" data-angle=\"%d\" data-voltage=\"%s\" data-text=\"%s\"%s>%s</text>\n",
+		fmtNum(e.X), fmtNum(e.Y+3), esc(color), e.Orient, fmtNum(e.X), fmtNum(e.Y), idAttr, e.Orient, esc(color), powerflowTextLegend, editorAttr, powerflowGlyph(e.State))
 }
 
 // writePackageSubstation draws a PackageSubstation (shape 385) — a

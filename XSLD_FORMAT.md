@@ -106,6 +106,7 @@ SVG root's `background-color` style, when that style is present.
 | `defaultVoltage` | id → `class` | Voltage class newly placed objects start with (0 = none) |
 | `activeLayer` | id → `layer` | Layer newly placed objects go on (0 = the base layer) |
 | `showNodes` | bool | Draw a debug marker at every `<node>` |
+| `jumpSameVoltage` | bool | Also put a wire jump where two buswork wires of the same voltage class cross; absent = the editor's default |
 
 ## 4. Sections
 
@@ -564,11 +565,11 @@ extendable per site); this is the default set.
 | LED | 320007 | 0 | `voltage`, `orient`, `mirror`, `scale` |
 | ConnectorPoint | 10 | 1 | a connection point (a 10x10 square), its port at the center; `stroke` (its color, default magenta); no voltage |
 | ConnectorArrow | 83 | 1 | port at its tail (the anchor); `orient` (any angle, 0 = right), `length` (default 30), `stroke` (line, default coral), `headStroke`/`fill` (arrowhead, default dimgray/white); no voltage |
-| FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText` |
+| FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText`; SVG: the FPI legend as `data-stroke-style` (ring) and `data-fill` (text) via `{fpiStrokeAttr}`/`{fpiFillAttr}`, recolored live by rdss-dms |
 | Load | 330001 | 1 | Editor's own symbol (consumer) |
 | NetworkInfeed | 330002 | 1 | Editor's own symbol (outside network) |
 | StaticVarCompensator | 330003 | 1 | Editor's own symbol |
-| PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor` |
+| PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor`; SVG `data-text="0:→,1:←"`, the glyph per state for rdss-dms |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |
 | Polygon | 16 | — | decorative; `<geometry>` |
 | Container | 310 | — | decorative; `<geometry>`, caption `propertyText` + `text*` |

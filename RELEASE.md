@@ -2,6 +2,8 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-10-30: `EditorSettings.JumpSameVoltage` (`<editor jumpSameVoltage="true">`, `XSLD_FORMAT.md` §3.2): sld-editor's Settings option to put a wire jump also where two buswork wires of the same voltage class cross. A `*bool`: absent means the editor's configured default, so an explicit `false` is kept. Only round-tripped. - **Test:** `TestEditorSettings_JumpSameVoltageRoundTrip`.
+
 2026-10-28: Fix example diagram names
 
 2026-10-27: Added `CLAUDE.md` (an index plus the rules the code can't show, with a sibling-repository table:
@@ -32,3 +34,5 @@ sld-editor, sld-svg, xsde2svg, rdss-dms, CIM interop tools) and this `RELEASE.md
 2026-10-28: `parseTwoPortDevice` sets `Mirror` for lopsided shapes (`drawnMirrored`, `mirrorSides`: 29, 33, 37) from the side of the axis their drawing leans to, in the symbol's unrotated frame. `parseVAlign` reads `text-before-edge` (xsde2svg's) as `top`, and `writeLabel`/`writeDigitalDevice` write `top` as `text-before-edge` (was `hanging`, still read). Test: `TestExtract_MirroredArresterAndHangingName`.
 
 2026-10-28: Per-diagram switching-state colors. `Diagram.StateColors` (`<stateColors><state state="0" color="red"/>…`, `DiagramStateColor`) replaces the caller's legend color for each state it lists, in `Render` and `RenderFragments` (`diagramStateLegend`); states it lacks still come from the legend. `SeedStateColors(d, legend)` copies the legend into a diagram that has none. Test: `TestRender_DiagramStateColorsOverrideLegend`.
+
+2026-10-30: Live-state legends for two indicators, for rdss-dms. A FaultPassageIndicator template can use `{fpiStrokeAttr}` (` data-stroke-style="0:c0/,1:c1/,…"`, its ring's stroke per state) and `{fpiFillAttr}` (` data-fill="…"`, its text) built from the FPI legend (`stateColorSet.strokeStyleAttr`), so rdss-dms recolors it from a status point instead of showing the color fixed at save. A PowerflowIndicator's `<text>` carries `data-text="0:→,1:←"` (`powerflowTextLegend`, `powerflowGlyph`'s mapping), so rdss-dms turns the arrow live. The `data-fill` legend is now attribute-escaped. Test: `TestRender_IndicatorLiveStateLegends`. `XSLD_FORMAT.md` element table.
