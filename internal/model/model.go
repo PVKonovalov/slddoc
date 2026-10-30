@@ -1146,6 +1146,10 @@ type Label struct {
 	Size   float64 `xml:"size,attr" json:"size"`
 	Anchor string  `xml:"anchor,attr,omitempty" json:"anchor,omitempty"`
 	Bold   bool    `xml:"bold,attr,omitempty" json:"bold,omitempty"`
+	// Underline and Italic are the rest of xsde2svg's font style (Modus
+	// fontStyle UNDERLINE/ITALIC), drawn as text-decoration/font-style.
+	Underline bool `xml:"underline,attr,omitempty" json:"underline,omitempty"`
+	Italic    bool `xml:"italic,attr,omitempty" json:"italic,omitempty"`
 	// Color is the label's own text fill; empty means the default white
 	// WriteLabel has always used, so an already-saved label with no color
 	// attribute at all keeps rendering exactly as before.

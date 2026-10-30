@@ -89,16 +89,18 @@ func textToLabel(t *svgtree.RawNode) model.Label {
 
 	at, turn := textRotation(t.Attr("transform"), model.Point{X: x, Y: y})
 	return model.Label{
-		X:      at.X,
-		Y:      at.Y,
-		Rotate: turn,
-		Size:   size,
-		Anchor: model.StyleProp(style, "text-anchor"),
-		Bold:   strings.Contains(style, "font-weight: bold") || strings.Contains(style, "font-weight:bold"),
-		Color:  model.StyleProp(style, "fill"),
-		VAlign: parseVAlign(style),
-		Font:   model.StyleProp(style, "font-family"),
-		Text:   strings.Join(lines, "\n"),
+		X:         at.X,
+		Y:         at.Y,
+		Rotate:    turn,
+		Size:      size,
+		Anchor:    model.StyleProp(style, "text-anchor"),
+		Bold:      strings.Contains(style, "font-weight: bold") || strings.Contains(style, "font-weight:bold"),
+		Underline: strings.Contains(model.StyleProp(style, "text-decoration"), "underline"),
+		Italic:    model.StyleProp(style, "font-style") == "italic",
+		Color:     model.StyleProp(style, "fill"),
+		VAlign:    parseVAlign(style),
+		Font:      model.StyleProp(style, "font-family"),
+		Text:      strings.Join(lines, "\n"),
 	}
 }
 

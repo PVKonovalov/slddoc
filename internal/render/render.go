@@ -2963,6 +2963,13 @@ func WriteLabel(w io.Writer, l model.Label, mode RenderMode) {
 	if l.Bold {
 		weight = "font-weight: bold;"
 	}
+	// In xsde2svg's order: bold, underline, italic.
+	if l.Underline {
+		weight += "text-decoration: underline;"
+	}
+	if l.Italic {
+		weight += "font-style:italic;"
+	}
 	color := l.Color
 	if color == "" {
 		color = "white"

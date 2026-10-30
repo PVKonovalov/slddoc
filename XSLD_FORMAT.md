@@ -262,6 +262,8 @@ newline (`&#xA;` or a literal line break) starts a new line.
 | `anchor` | enum | no | Horizontal anchor: `start` (default), `middle`, `end` |
 | `valign` | enum | no | Vertical anchor: `top`, `middle`; absent = text baseline at `y` |
 | `bold` | bool | no | Bold text |
+| `underline` | bool | no | Underlined text (`text-decoration: underline`, Modus fontStyle `UNDERLINE`) |
+| `italic` | bool | no | Italic text (`font-style:italic`, Modus fontStyle `ITALIC`) |
 | `color` | color | no | Text color (default `white`) |
 | `font` | string | no | Font family (default `Arial`) |
 | `rotate` | number | no | Clockwise turn in degrees about `x`,`y`, in (-180, 180]; absent = level. Rendered as `transform="rotate(a,x,y)"`, read back from xsde2svg's `rotate(a,cx,cy)` (Modus `angle`/`orient`), and exported to CIM as `TextDiagramObject` `rotation` |
