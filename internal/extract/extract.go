@@ -284,6 +284,8 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 	// sectorColors is the same side channel for a Substation's (360) own
 	// sector fills, resolved into each SubstationSector.Voltage.
 	sectorColors := map[int][]string{}
+	// lineHalos are the untyped polylines since the last typed node (see parseLine).
+	var lineHalos []*svgtree.RawNode
 
 	// cur is the source node being parsed, so addElement can read a lead
 	// shape's own body size and lead length from it (inferLeads).
@@ -319,6 +321,11 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			if n.Tag == "text" {
 				labelNodes = append(labelNodes, n)
 			}
+			// A Line's composite-style halos are untyped polylines just before it: xsde2svg's carry the line's id,
+			// Render's a data-halo style name.
+			if n.Tag == "polyline" {
+				lineHalos = append(lineHalos, n)
+			}
 			// A bare top-level <image> is real xsde2svg's Backdrop/Image
 			// file (shapes 11 and 12, element_11_12.go), written with no
 			// id or data-type: each tag is one whole instance.
@@ -333,6 +340,8 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			}
 			continue
 		}
+		halos := lineHalos
+		lineHalos = nil
 		if dt == "5" {
 			labelNodes = append(labelNodes, n)
 			continue
@@ -507,7 +516,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			addElement(el, nil, "")
 
 		case "1":
-			el, err := parseLine(n)
+			el, err := parseLine(n, halos)
 			if err != nil {
 				report.Failed = append(report.Failed, n.Attr("id"))
 				addMissingLabel(d, n, dt)

@@ -753,6 +753,13 @@ type Element struct {
 	// 8-12), so this editor's own default reflects a road's real visual
 	// weight rather than that generic fallback.
 	StrokeWidth float64 `xml:"strokeWidth,attr,omitempty" json:"strokeWidth,omitempty"`
+	// Styles is a Line's (shape 1) Modus composite style names, comma-separated as in the source's styles="[a,b]"
+	// (e.g. "BadQuality,linked"). Render draws those with a halo in the application's LineHalos; the rest are only
+	// kept.
+	Styles string `xml:"styles,attr,omitempty" json:"styles,omitempty"`
+	// HaloColors overrides the LineHalos color of some of a Line's Styles, "name:color" pairs comma-separated
+	// (e.g. "BadQuality:#ff0000"); see HaloColor.
+	HaloColors string `xml:"haloColors,attr,omitempty" json:"haloColors,omitempty"`
 	// DoubleHeaded draws an Arrow's (shape 2) own open chevron arrowhead
 	// at both Points, not just the second one — matching the real
 	// xsde2svg source's own FDouble flag. Unused by every other class.

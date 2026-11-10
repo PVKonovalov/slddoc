@@ -84,6 +84,8 @@ type (
 	EditorSettings     = model.EditorSettings
 	Electrical         = model.Electrical
 	Element            = model.Element
+	LineHalo           = model.LineHalo
+	LineHalos          = model.LineHalos
 	Label              = model.Label
 	Layer              = model.Layer
 	NeutralGrounding   = model.NeutralGrounding
@@ -240,6 +242,9 @@ func SeedStateColors(d *Diagram, legend []StateColor) { render.SeedStateColors(d
 var (
 	SizeSteps = repair.SizeSteps
 )
+
+// DropDefaultHaloColors removes from e's HaloColors the colors equal to their halos' color in halos.
+func DropDefaultHaloColors(e *Element, halos LineHalos) { model.DropDefaultHaloColors(e, halos) }
 
 func EnsureIDs(d *Diagram) bool { return repair.EnsureIDs(d) }
 

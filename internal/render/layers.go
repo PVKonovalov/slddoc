@@ -66,8 +66,9 @@ var textEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 var firstStartTag = regexp.MustCompile(`<[A-Za-z][\w:.-]*`)
 
 // withItemAttrs adds data-layer="<layer>" (unless layer is BaseLayer,
-// matching xsde2svg) and data-group="<group>" (unless 0) to frag's first
-// start tag, the item's own root node.
+// matching xsde2svg) and data-group="<group>" (unless 0) to each of frag's
+// top-level start tags (a styled Line has several), or to its first one
+// when frag holds a tag tagRe can't read.
 func withItemAttrs(frag string, layer, group int) string {
 	var attrs string
 	if layer != model.BaseLayer {
@@ -79,9 +80,30 @@ func withItemAttrs(frag string, layer, group int) string {
 	if attrs == "" {
 		return frag
 	}
-	loc := firstStartTag.FindStringIndex(frag)
-	if loc == nil {
-		return frag
+	if len(tagOpenRe.FindAllStringIndex(frag, -1)) != len(tagRe.FindAllStringIndex(frag, -1)) {
+		loc := firstStartTag.FindStringIndex(frag)
+		if loc == nil {
+			return frag
+		}
+		return frag[:loc[1]] + attrs + frag[loc[1]:]
 	}
-	return frag[:loc[1]] + attrs + frag[loc[1]:]
+	var sb strings.Builder
+	depth, last := 0, 0
+	for _, m := range tagRe.FindAllStringSubmatchIndex(frag, -1) {
+		closing, selfClose := m[3] > m[2], m[9] > m[8]
+		if closing {
+			depth--
+			continue
+		}
+		if depth == 0 {
+			sb.WriteString(frag[last:m[5]])
+			sb.WriteString(attrs)
+			last = m[5]
+		}
+		if !selfClose {
+			depth++
+		}
+	}
+	sb.WriteString(frag[last:])
+	return sb.String()
 }

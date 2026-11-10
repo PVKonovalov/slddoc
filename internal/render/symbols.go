@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/PVKonovalov/slddoc/internal/model"
 )
 
 // SymbolLibrary holds one reusable, local-coordinate SVG template per
@@ -14,6 +16,12 @@ import (
 // transform="translate(x,y) rotate(orient)".
 type SymbolLibrary struct {
 	templates map[string]string
+	lineHalos model.LineHalos
+}
+
+// SetLineHalos sets the halos Render draws for a Line's composite styles; nil draws none.
+func (l *SymbolLibrary) SetLineHalos(halos model.LineHalos) {
+	l.lineHalos = halos
 }
 
 // NewSymbolLibrary builds a SymbolLibrary directly from a shape->template

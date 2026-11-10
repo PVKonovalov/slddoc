@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2549,7 +2550,9 @@ var lineDashStyles = map[string]model.ConnectorLineStyle{
 // points/style reading exactly, just without a data-name, plus its own
 // LineStyle recovered from the style's own stroke-dasharray (see
 // lineDashStyles).
-func parseLine(n *svgtree.RawNode) (model.Element, error) {
+// halos are the untyped polylines just before n: its halos, read for Styles when n has no data-styles (xsde2svg
+// before it wrote them) and for HaloColors.
+func parseLine(n *svgtree.RawNode, halos []*svgtree.RawNode) (model.Element, error) {
 	id, err := parseElementID(n)
 	if err != nil {
 		return model.Element{}, err
@@ -2560,7 +2563,7 @@ func parseLine(n *svgtree.RawNode) (model.Element, error) {
 	}
 	style := n.Attr("style")
 	strokeWidth, _ := strconv.ParseFloat(model.StyleProp(style, "stroke-width"), 64)
-	return model.Element{
+	el := model.Element{
 		ID:          id,
 		Class:       model.ClassLine,
 		Shape:       "1",
@@ -2571,7 +2574,39 @@ func parseLine(n *svgtree.RawNode) (model.Element, error) {
 		StrokeWidth: strokeWidth,
 		LineStyle:   lineDashStyles[model.StyleProp(style, "stroke-dasharray")],
 		Points:      pts,
-	}, nil
+	}
+	el.Styles, el.HaloColors = lineStyles(n, halos)
+	return el, nil
+}
+
+// lineStyles returns a Line's Styles and HaloColors. Styles is n's data-styles, or else the styles whose
+// xsde2svg halo color is among the halos with n's id, in order. HaloColors holds the colors of halos named by
+// data-halo; the application drops those equal to its defaults (model.DropDefaultHaloColors).
+func lineStyles(n *svgtree.RawNode, halos []*svgtree.RawNode) (styles, haloColors string) {
+	names := model.LineStyleNames(n.Attr("data-styles"))
+	if len(names) == 0 {
+		for _, h := range halos {
+			if h.Attr("id") != n.Attr("id") {
+				continue
+			}
+			c := model.StyleProp(h.Attr("style"), "stroke")
+			for name, color := range model.Xsde2svgLineHaloColors {
+				if strings.EqualFold(color, c) && !slices.Contains(names, name) {
+					names = append(names, name)
+				}
+			}
+		}
+		return strings.Join(names, ","), ""
+	}
+	var colors []string
+	for _, h := range halos {
+		name := h.Attr("data-halo")
+		c := model.StyleProp(h.Attr("style"), "stroke")
+		if name != "" && c != "" && slices.Contains(names, name) {
+			colors = append(colors, name+":"+c)
+		}
+	}
+	return strings.Join(names, ","), strings.Join(colors, ",")
 }
 
 // arcPathRe matches a real Arc's (shape 9) own single-command path,

@@ -664,7 +664,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		// whose own geometry is an arbitrary multi-vertex polyline
 		// (BusBarSection's own convention), not part of the electrical
 		// network, drawn with writePolyline directly.
-		writeLine(w, e, mode)
+		writeLine(w, e, mode, background, lib.lineHalos)
 		return
 	}
 	if e.Class == model.ClassArc {
@@ -1854,7 +1854,8 @@ var lineDashPatterns = map[model.ConnectorLineStyle]string{
 // "resolve first, pass the real string in" approach writeNamedLine already
 // uses for a KindCableLine connector's own dash. A Line with fewer than 2
 // Points draws nothing, same as writeRoad.
-func writeLine(w io.Writer, e model.Element, mode RenderMode) {
+// writeLine draws a Line with the halos of its Styles found in halos.
+func writeLine(w io.Writer, e model.Element, mode RenderMode, background string, halos model.LineHalos) {
 	if len(e.Points) < 2 {
 		return
 	}
@@ -1876,16 +1877,54 @@ func writeLine(w io.Writer, e model.Element, mode RenderMode) {
 		sb.WriteByte(',')
 		sb.WriteString(model.FmtNum(p.Y))
 	}
-	editorAttr := ""
-	if mode == Interactive {
-		editorAttr = " data-editor-kind=\"element\""
-	}
+	points := esc(sb.String())
 	idAttr := ""
 	if e.ID != 0 {
 		idAttr = fmt.Sprintf(" id=\"%d\"", e.ID)
 	}
-	fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;%sstroke-width:%s\" data-voltage=\"%s\" data-type=\"1\"%s%s />\n",
-		esc(sb.String()), esc(stroke), dash, model.FmtNum(strokeWidth), esc(stroke), idAttr, editorAttr)
+	names := model.LineStyleNames(e.Styles)
+	drawn := false
+	for _, name := range names {
+		if _, ok := halos[name]; ok {
+			drawn = true
+		}
+	}
+	stylesAttr := ""
+	if len(names) > 0 {
+		stylesAttr = fmt.Sprintf(" data-styles=\"%s\"", esc(strings.Join(names, ",")))
+	}
+	lineAttrs := idAttr + stylesAttr
+	if mode == Interactive {
+		lineAttrs += " data-editor-kind=\"element\""
+	}
+	// Halos are drawn as more polylines under the line's own, as xsde2svg does, but only the line carries the id. On
+	// the canvas they share one <g> holding the id, since a canvas fragment is one node.
+	group := drawn && mode == Interactive
+	if group {
+		fmt.Fprintf(w, "<g%s data-type=\"1\">\n", lineAttrs)
+		lineAttrs = ""
+	}
+	for _, name := range names {
+		halo, ok := halos[name]
+		if !ok {
+			continue
+		}
+		color := model.HaloColor(e, name)
+		if color == "" {
+			color = halo.Color
+		}
+		fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;stroke-width:%s\" data-halo=\"%s\" />\n",
+			points, esc(color), model.FmtNum(strokeWidth+6), esc(name))
+		if halo.Gap {
+			fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;stroke-width:%s\" />\n",
+				points, esc(background), model.FmtNum(strokeWidth+2))
+		}
+	}
+	fmt.Fprintf(w, "<polyline points=\"%s\" style=\"fill:none;stroke:%s;%sstroke-width:%s\" data-voltage=\"%s\" data-type=\"1\"%s />\n",
+		points, esc(stroke), dash, model.FmtNum(strokeWidth), esc(stroke), lineAttrs)
+	if group {
+		io.WriteString(w, "</g>\n")
+	}
 }
 
 // polygonDashPatterns maps a Polygon's (shape 16) own LineStyle to its real

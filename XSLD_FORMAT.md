@@ -410,6 +410,8 @@ larger side.
 | `stroke` | color | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, WindowIcon (default black), SmallWindow (default gray), Container (default gray), LampOnPole (default gray), ConnectorPoint (default magenta), PostPole, Table, Table2 | Border / line color |
 | `strokeWidth` | number | Rectangle, Circle, Arrow, Line, Polygon, Container, Arc, Road, Button, Table, Table2 | Line width; 0 = default (1, or a thick default for Road) |
 | `lineStyle` | enum | Line, Polygon, Container, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`; Container: `solid`, `dotted` (3,2), `dashed` (6,5)) |
+| `styles` | string | Line | Modus composite style names, comma-separated as in the `.xsde` (`BadQuality,linked`). Those in the application's halo table (`SymbolLibrary.SetLineHalos`; sld-editor's `line_halos`) are drawn as a colored halo under the line; the rest are only kept |
+| `haloColors` | string | Line | Halo colors changed from the default, `name:color` pairs comma-separated (`BadQuality:#ff0000`); a halo style not listed keeps its default |
 | `doubleHeaded` | bool | Arrow | Arrowhead at both ends |
 | `rx`, `ry` | number | Arc | The SVG arc's own radii |
 | `rx` | number | Rectangle | Corner radius; 0 = square corners, capped at half the shorter side |
