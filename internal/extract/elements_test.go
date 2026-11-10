@@ -1819,6 +1819,36 @@ func TestParseShortCircuiterPortAtLeadEnd(t *testing.T) {
 	}
 }
 
+// TestParseShortCircuiter_Unrotated checks an orientation-0 short-circuiter,
+// which xsde2svg writes without rotate(), gets its anchor from the closed
+// group's bar, or from the lead when that group is missing.
+func TestParseShortCircuiter_Unrotated(t *testing.T) {
+	closed := `<g data-state="1" visibility="hidden" >
+<path d="M 700 411 l 0 -8" style="fill:none;stroke:teal;stroke-width:1" />
+<path d="M 696 394  v -6  l -8 3 z" style="fill:teal;stroke:teal;stroke-width:1" />
+<path d="M 700 403 h -5 m 5 0 h 5 M 700 382 v -7 h -7 m 7 0 h 7 M 700 372 h -5 M 700 372 h 5 M 700 369 h -3 M 700 369 h 3" style="fill:none;stroke:teal;stroke-width:1" />
+<path d="M 700 384 v 16 M 700 391 h -4 " style="fill:none;stroke:teal;stroke-width:1" />
+</g>`
+	open := `<g data-state="0" visibility="visible" >
+<path d="M 700 411 l 0 -8" style="fill:none;stroke:teal;stroke-width:1" />
+<path d="M 701 394  v -6  l -8 3 z" style="fill:teal;stroke:teal;stroke-width:1" />
+<path d="M 698 382 a 2 2 0 1 1 4 0 a 2 2 0 1 1 -4 0 m 2 0 l 7 16 M 704 391 h -3 " style="fill:none;stroke:teal;stroke-width:1" />
+</g>`
+	for name, body := range map[string]string{"closed group": closed + open, "lead only": open} {
+		n := parseFirst(t, `<g id="7" data-voltage="teal" data-type="398" data-name="SC" >`+body+`</g>`)
+		el, ports, _, err := parseShortCircuiter(n)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if el.X != 700 || el.Y != 400 || el.Orient != 0 || el.State == nil || *el.State != 0 {
+			t.Errorf("%s: anchor/orient/state = (%v,%v,%d,%v), want (700,400,0,0)", name, el.X, el.Y, el.Orient, el.State)
+		}
+		if len(ports) != 1 || ports[0] != (model.Point{X: 700, Y: 411}) {
+			t.Errorf("%s: ports = %v, want [(700,411)]", name, ports)
+		}
+	}
+}
+
 // TestParsePowerTransformer_UnrotatedAnchorUsesXsde2svgOffsets checks an
 // unrotated transformer's anchor is recovered with xsde2svg's own winding-0
 // offset (0,-25 for 3 windings), not this editor's widened grid one.

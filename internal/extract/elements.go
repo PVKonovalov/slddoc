@@ -938,9 +938,9 @@ func parseGroundSwitch(n *svgtree.RawNode) (model.Element, []model.Point, string
 }
 
 // parseShortCircuiter handles shape 398 (short-circuiter): a single
-// electrical port at the element's own rotation anchor, the same structure
-// parseGroundSwitch uses above — unrotated instances are not yet supported
-// for the same reason.
+// electrical port at the bottom lead's free end. The anchor is the rotate()
+// center; xsde2svg writes no rotate() at orientation 0, so then it is
+// shortCircuiterAnchor's.
 func parseShortCircuiter(n *svgtree.RawNode) (model.Element, []model.Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -973,7 +973,9 @@ func parseShortCircuiter(n *svgtree.RawNode) (model.Element, []model.Point, stri
 
 	angle, center, ok := parseRotate(n.Attr("transform"))
 	if !ok {
-		return model.Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: no rotate() transform (unrotated short-circuiters are not yet supported)", n.Attr("id"))
+		if center, ok = shortCircuiterAnchor(n, visible); !ok {
+			return model.Element{}, nil, "", fmt.Errorf("slddoc: short-circuiter %s: no rotate() transform and no lead to recover the anchor from", n.Attr("id"))
+		}
 	}
 	// The port is the bottom lead's free end, where the wire meets it: the
 	// visible group's first path starts there ("M x y+y1", element_398.go's
@@ -998,6 +1000,40 @@ func parseShortCircuiter(n *svgtree.RawNode) (model.Element, []model.Point, stri
 		State:  state,
 		Ports:  []model.Port{{Name: "1"}},
 	}, []model.Point{port}, n.Attr("data-voltage"), nil
+}
+
+// shortCircuiterAnchor recovers an unrotated short-circuiter's anchor
+// (element_398.go's x, y). The data-state="1" group's last path starts with
+// "M x y-y6 v y6", which ends at the anchor at any scale or mirroring.
+// Otherwise the visible group's lead "M x y+11 l 0 -8" gives it by its
+// 11:8 ratio, as parseGroundSwitch does.
+// n is the 398 group, visible its visible data-state group; ok is false if
+// neither path is there.
+func shortCircuiterAnchor(n, visible *svgtree.RawNode) (model.Point, bool) {
+	for _, g := range n.ChildrenTagged("g") {
+		if g.Attr("data-state") != "1" {
+			continue
+		}
+		ps := g.ChildrenTagged("path")
+		if len(ps) == 0 {
+			break
+		}
+		subs, err := model.ParseSubpaths(ps[len(ps)-1].Attr("d"))
+		if err == nil && len(subs) > 0 && len(subs[0]) == 2 && subs[0][0].X == subs[0][1].X && subs[0][1].Y > subs[0][0].Y {
+			return subs[0][1], true
+		}
+		break
+	}
+	if ps := visible.ChildrenTagged("path"); len(ps) > 0 {
+		subs, err := model.ParseSubpaths(ps[0].Attr("d"))
+		if err == nil && len(subs) > 0 && len(subs[0]) >= 2 {
+			p0, p1 := subs[0][0], subs[0][1]
+			if tail := p0.Y - p1.Y; tail > 0 {
+				return model.Point{X: p0.X, Y: p0.Y - tail*11/8}, true
+			}
+		}
+	}
+	return model.Point{}, false
 }
 
 // substationAnchorFromGeometry recovers PackageSubstation's (385) or
