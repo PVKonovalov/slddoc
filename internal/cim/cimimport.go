@@ -320,9 +320,10 @@ func newCIMImporter(docs [][]byte, opt CIMImportOptions) (*cimImporter, error) {
 		return nil, err
 	}
 	nameVoltages(objs)
+	notes := inferVoltages(objs)
 	im := &cimImporter{opt: opt, objs: objs, byClass: map[string][]*cimObject{}, terminals: map[string][]*cimObject{},
 		points: map[string][]*cimObject{}, dos: map[string][]*cimObject{}, layerOf: map[string]string{},
-		layoutWarnings: map[string][]string{}}
+		layoutWarnings: map[string][]string{}, notes: notes}
 	ids := make([]string, 0, len(objs))
 	for id := range objs {
 		ids = append(ids, id)
@@ -395,6 +396,121 @@ func nameVoltages(objs map[string]*cimObject) {
 		}
 		bv.props["nominalVoltage"] = []string{strconv.FormatFloat(kv, 'f', -1, 64)}
 	}
+}
+
+// standardKV are IEC 60038 nominal voltages, in kV, a measured voltage is rounded to when no other class is near.
+var standardKV = []float64{0.23, 0.4, 0.69, 1, 3, 3.3, 6, 6.6, 10, 11, 15, 20, 22, 30, 33, 35, 45, 50, 66, 69, 110, 115,
+	132, 138, 150, 220, 230, 275, 330, 345, 380, 400, 500, 750, 1150}
+
+// inferVoltages gives each referenced BaseVoltage with no nominal voltage (CGMES keeps them in a boundary set often
+// not sent along) the most common rated voltage of the transformer windings on it, else the median measured voltage
+// (SvVoltage) of its topological nodes rounded to a known class within 15% or to the nearest standard voltage.
+// It returns a note per BaseVoltage inferred or left without a voltage.
+func inferVoltages(objs map[string]*cimObject) []string {
+	var known []float64
+	missing := map[string]bool{}
+	for _, o := range objs {
+		if o.class == "BaseVoltage" {
+			if kv, ok := o.num("nominalVoltage"); ok && kv > 0 {
+				known = append(known, kv)
+			}
+		}
+		for _, ref := range o.props["BaseVoltage"] {
+			if kv, ok := objs[ref].num("nominalVoltage"); !ok || kv <= 0 {
+				missing[ref] = true
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	rated, measured := map[string][]float64{}, map[string][]float64{}
+	for _, o := range objs {
+		switch o.class {
+		case "PowerTransformerEnd":
+			if bv := o.get("BaseVoltage"); missing[bv] {
+				if u, ok := o.num("ratedU"); ok && u > 0 {
+					rated[bv] = append(rated[bv], u)
+				}
+			}
+		case "SvVoltage":
+			if bv := objs[o.get("TopologicalNode")].get("BaseVoltage"); missing[bv] {
+				if v, ok := o.num("v"); ok && v > 0 {
+					measured[bv] = append(measured[bv], v)
+				}
+			}
+		}
+	}
+	ids := slices.Sorted(maps.Keys(missing))
+	kvs := map[string]float64{}
+	var notes []string
+	for _, id := range ids {
+		if vs := rated[id]; len(vs) > 0 {
+			kvs[id] = mostCommon(vs)
+			known = append(known, kvs[id])
+			notes = append(notes, fmt.Sprintf("base voltage %q has no nominal voltage in the files: %s kV is taken from "+
+				"the rated voltage of %d transformer windings", cmp.Or(objs[id].get("name"), id), formatKV(kvs[id]), len(vs)))
+		}
+	}
+	for _, id := range ids {
+		if _, ok := kvs[id]; ok {
+			continue
+		}
+		name := cmp.Or(objs[id].get("name"), id)
+		vs := measured[id]
+		if len(vs) == 0 {
+			notes = append(notes, fmt.Sprintf("base voltage %q has no nominal voltage in the files, and nothing there tells it", name))
+			continue
+		}
+		slices.Sort(vs)
+		kvs[id] = nearestKV(vs[len(vs)/2], known)
+		notes = append(notes, fmt.Sprintf("base voltage %q has no nominal voltage in the files: %s kV is taken from "+
+			"the measured voltage of %d nodes (median %s kV)", name, formatKV(kvs[id]), len(vs), formatKV(vs[len(vs)/2])))
+	}
+	for id, kv := range kvs {
+		bv := objs[id]
+		if bv == nil {
+			bv = &cimObject{id: id, class: "BaseVoltage", props: map[string][]string{}}
+			objs[id] = bv
+		}
+		bv.props["nominalVoltage"] = []string{formatKV(kv)}
+	}
+	return notes
+}
+
+// mostCommon is the value occurring most often in vs, the lowest of a tie.
+func mostCommon(vs []float64) float64 {
+	slices.Sort(vs)
+	best, bestN := vs[0], 0
+	for i := 0; i < len(vs); {
+		j := i
+		for j < len(vs) && vs[j] == vs[i] {
+			j++
+		}
+		if j-i > bestN {
+			best, bestN = vs[i], j-i
+		}
+		i = j
+	}
+	return best
+}
+
+// nearestKV rounds measured voltage v to the closest of known within 15%, else to the closest standard voltage.
+func nearestKV(v float64, known []float64) float64 {
+	closest := func(list []float64) (float64, float64) {
+		best, dist := 0.0, math.Inf(1)
+		for _, k := range list {
+			if d := math.Abs(v-k) / k; d < dist {
+				best, dist = k, d
+			}
+		}
+		return best, dist
+	}
+	if k, d := closest(known); d <= 0.15 {
+		return k
+	}
+	k, _ := closest(standardKV)
+	return k
 }
 
 var unitVoltageRe = regexp.MustCompile(`(?i)([0-9]+(?:[.,][0-9]+)?)\s*(kv|кв|mv|мв|v|в)`)

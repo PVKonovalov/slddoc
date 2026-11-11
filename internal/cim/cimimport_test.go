@@ -491,3 +491,31 @@ func TestImportCIMPlaceholder(t *testing.T) {
 		t.Errorf("skipped %v, warnings %v", pg.Report.Skipped, pg.Warnings)
 	}
 }
+
+// TestCIMInferredVoltage: BaseVoltages referenced but not in the files take their nominal voltage from the rated
+// voltage of the transformer windings on them, else from the measured voltage of their nodes, each with a note.
+func TestCIMInferredVoltage(t *testing.T) {
+	eq := `<cim:VoltageLevel rdf:ID="vh"><cim:VoltageLevel.BaseVoltage rdf:resource="#bvh"/></cim:VoltageLevel>
+<cim:VoltageLevel rdf:ID="vl"><cim:VoltageLevel.BaseVoltage rdf:resource="#bvl"/></cim:VoltageLevel>
+<cim:VoltageLevel rdf:ID="vx"><cim:VoltageLevel.BaseVoltage rdf:resource="#bvx"/></cim:VoltageLevel>
+<cim:PowerTransformerEnd rdf:ID="e1"><cim:TransformerEnd.BaseVoltage rdf:resource="#bvh"/><cim:PowerTransformerEnd.ratedU>115</cim:PowerTransformerEnd.ratedU></cim:PowerTransformerEnd>
+<cim:PowerTransformerEnd rdf:ID="e2"><cim:TransformerEnd.BaseVoltage rdf:resource="#bvh"/><cim:PowerTransformerEnd.ratedU>110</cim:PowerTransformerEnd.ratedU></cim:PowerTransformerEnd>
+<cim:PowerTransformerEnd rdf:ID="e3"><cim:TransformerEnd.BaseVoltage rdf:resource="#bvh"/><cim:PowerTransformerEnd.ratedU>110</cim:PowerTransformerEnd.ratedU></cim:PowerTransformerEnd>
+<cim:TopologicalNode rdf:ID="tl"><cim:TopologicalNode.BaseVoltage rdf:resource="#bvl"/></cim:TopologicalNode>
+<cim:TopologicalNode rdf:ID="tx"><cim:TopologicalNode.BaseVoltage rdf:resource="#bvx"/></cim:TopologicalNode>
+<cim:SvVoltage rdf:ID="s1"><cim:SvVoltage.TopologicalNode rdf:resource="#tl"/><cim:SvVoltage.v>10.2</cim:SvVoltage.v></cim:SvVoltage>
+<cim:SvVoltage rdf:ID="s2"><cim:SvVoltage.TopologicalNode rdf:resource="#tx"/><cim:SvVoltage.v>121</cim:SvVoltage.v></cim:SvVoltage>`
+	objs, err := parseCIM([][]byte{cimDoc(eq)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := inferVoltages(objs)
+	for bv, want := range map[string]float64{"bvh": 110, "bvl": 10, "bvx": 110} {
+		if kv, _ := objs[bv].num("nominalVoltage"); kv != want {
+			t.Errorf("%s: %g kV, want %g", bv, kv, want)
+		}
+	}
+	if len(notes) != 3 {
+		t.Errorf("one note per inferred base voltage: %v", notes)
+	}
+}
