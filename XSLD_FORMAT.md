@@ -352,8 +352,11 @@ An item has at most one binding of each kind (`ValidateBindings`).
 </element>
 ```
 
-On `<diagram>`, `<scheme source ref>` is the provider's scheme the diagram is exported to (RSDU: `VS_FORM.ID`),
-absent until the first export, and `<object>` (a `<binding>`'s attributes) the object the whole diagram is bound to
+On `<diagram>`, `<scheme source ref exported registered>` is the provider's scheme the diagram is linked and exported
+to (RSDU: `VS_FORM.ID`), absent until the user links one; `exported` (RFC 3339, optional) is when the diagram was last
+exported to it; `registered="true"` (optional) tells that an export of this diagram registered the scheme, so the
+scheme's file name follows the diagram's path (a scheme linked from the provider keeps its own). One scheme belongs to at most one diagram. `<scheme>` is written right after `<editor>`, before `<object>` and
+`<layers>`, so `ReadScheme` can read it from the head of a large file. `<object>` (a `<binding>`'s attributes) the object the whole diagram is bound to
 (RSDU: `VS_OBJ_TUNE`).
 
 ## 5. Topology

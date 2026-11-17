@@ -1,8 +1,11 @@
 package model
 
 import (
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
+	"time"
 )
 
 // BindingKind is what a Binding supplies to its item, matching the tabs of RSDU's scheme editor.
@@ -36,6 +39,56 @@ type Binding struct {
 type SchemeRef struct {
 	Source string `xml:"source,attr" json:"source"`
 	Ref    string `xml:"ref,attr" json:"ref"`
+	// Exported is when the diagram was last exported to the scheme; nil = never.
+	Exported *time.Time `xml:"exported,attr,omitempty" json:"exported,omitempty"`
+	// Registered tells that the scheme was registered by an export of this diagram, so its file name follows the
+	// diagram's path; false for a scheme linked from the provider.
+	Registered bool `xml:"registered,attr,omitempty" json:"registered,omitempty"`
+}
+
+// ReadScheme reads only the <scheme> of the .xsld in r, without parsing the rest: it stops at the first child of
+// <diagram> that Save writes after <scheme>. It returns nil when the diagram has no scheme.
+func ReadScheme(r io.Reader) (*SchemeRef, error) {
+	dec := xml.NewDecoder(r)
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			if _, end := tok.(xml.EndElement); end {
+				depth--
+			}
+			continue
+		}
+		depth++
+		if depth == 1 {
+			if start.Name.Local != "diagram" {
+				return nil, fmt.Errorf("not a diagram: <%s>", start.Name.Local)
+			}
+			continue
+		}
+		switch start.Name.Local {
+		case "scheme":
+			var s SchemeRef
+			if err := dec.DecodeElement(&s, &start); err != nil {
+				return nil, err
+			}
+			return &s, nil
+		case "editor":
+			if err := dec.Skip(); err != nil {
+				return nil, err
+			}
+			depth--
+		default:
+			return nil, nil
+		}
+	}
 }
 
 var bindingKinds = map[BindingKind]bool{

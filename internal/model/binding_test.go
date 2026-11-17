@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func boundDiagram() *Diagram {
@@ -135,5 +136,68 @@ func TestValidateBindings(t *testing.T) {
 				t.Errorf("got %v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+func TestSchemeExportedRoundTrip(t *testing.T) {
+	d := boundDiagram()
+	at := time.Date(2026, 11, 17, 10, 30, 0, 0, time.UTC)
+	d.Scheme.Exported = &at
+	d.Scheme.Registered = true
+	var buf bytes.Buffer
+	if err := d.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `<scheme source="rsdu" ref="4512" exported="2026-11-17T10:30:00Z" registered="true"></scheme>`) &&
+		!strings.Contains(buf.String(), `<scheme source="rsdu" ref="4512" exported="2026-11-17T10:30:00Z" registered="true"/>`) {
+		t.Errorf("scheme not written as expected:\n%s", buf.String())
+	}
+	got, err := Load(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Scheme.Exported == nil || !got.Scheme.Exported.Equal(at) || !got.Scheme.Registered {
+		t.Errorf("exported = %v", got.Scheme.Exported)
+	}
+	head, err := ReadScheme(bytes.NewReader(buf.Bytes()))
+	if err != nil || head == nil || head.Ref != "4512" || head.Exported == nil || !head.Exported.Equal(at) || !head.Registered {
+		t.Errorf("ReadScheme = %+v, %v", head, err)
+	}
+	j, _ := json.Marshal(d.Scheme)
+	if string(j) != `{"source":"rsdu","ref":"4512","exported":"2026-11-17T10:30:00Z","registered":true}` {
+		t.Errorf("json %s", j)
+	}
+}
+
+func TestReadScheme(t *testing.T) {
+	plain := boundDiagram()
+	plain.Scheme = nil
+	var none bytes.Buffer
+	if err := plain.Save(&none); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, xml, ref string
+		err            bool
+	}{
+		{"after editor", `<?xml version="1.0"?><diagram width="1" height="1"><editor grid="10"><x/></editor><scheme source="rsdu" ref="7"/><layers/></diagram>`, "7", false},
+		{"no scheme", none.String(), "", false},
+		{"stops at layers", `<diagram><layers><layer id="0"/></layers><scheme source="rsdu" ref="9"/></diagram>`, "", false},
+		{"not a diagram", `<svg/>`, "", true},
+		{"broken", `<diagram><editor>`, "", true},
+	}
+	for _, c := range cases {
+		got, err := ReadScheme(strings.NewReader(c.xml))
+		if (err != nil) != c.err {
+			t.Errorf("%s: err %v", c.name, err)
+			continue
+		}
+		ref := ""
+		if got != nil {
+			ref = got.Ref
+		}
+		if ref != c.ref {
+			t.Errorf("%s: ref %q, want %q", c.name, ref, c.ref)
+		}
 	}
 }

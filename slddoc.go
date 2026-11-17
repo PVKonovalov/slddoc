@@ -205,6 +205,9 @@ func Load(r io.Reader) (*Diagram, error) { return model.Load(r) }
 
 func ValidateBindings(d *Diagram) error { return model.ValidateBindings(d) }
 
+// ReadScheme reads only the <scheme> of the .xsld in r (nil when it has none), without parsing the whole diagram.
+func ReadScheme(r io.Reader) (*SchemeRef, error) { return model.ReadScheme(r) }
+
 func LoadVoltageHints(r io.Reader) (map[string]string, error) { return model.LoadVoltageHints(r) }
 
 func ScaledTerminal(t Point, step int) Point { return model.ScaledTerminal(t, step) }

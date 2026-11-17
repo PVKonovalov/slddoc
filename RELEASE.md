@@ -2,6 +2,12 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-17: `SchemeRef.Registered` (`registered` attribute): the scheme was registered by an export of the diagram,
+so its file name follows the diagram's path. Documented in `XSLD_FORMAT.md`.
+
+2026-11-17: `SchemeRef.Exported` (`exported` attribute, the time of the last export) and `ReadScheme`, which reads only
+the `<scheme>` of an `.xsld` header without loading the diagram (`XSLD_FORMAT.md` §4.10).
+
 2026-11-17: SCADA bindings in the model (`XSLD_FORMAT.md` §4.10). `Binding` (`source`, `kind` — `equipment`,
 `meas1`, `meas2`, `jump` —, `ref`, `option`, `scale`, cached `name`/`type`/`uid`) links a diagram item to an object
 of a SCADA data provider; `Element` and `DigitalDevice` get `Bindings` (`<bindings><binding .../></bindings>`),
