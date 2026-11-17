@@ -43,6 +43,11 @@ type Diagram struct {
 	// configured defaults for anything unset.
 	Editor *EditorSettings `xml:"editor,omitempty" json:"editor,omitempty"`
 
+	// Scheme is the provider's scheme this diagram is exported to; nil until the first export.
+	Scheme *SchemeRef `xml:"scheme,omitempty" json:"scheme,omitempty"`
+	// Object is the object the whole diagram is bound to (RSDU: VS_OBJ_TUNE).
+	Object *Binding `xml:"object,omitempty" json:"object,omitempty"`
+
 	Layers         []Layer        `xml:"layers>layer" json:"layers"`
 	VoltageClasses []VoltageClass `xml:"voltageClasses>class" json:"voltageClasses"`
 	// StateColors is the diagram's own switching-state colors; a state it
@@ -942,6 +947,13 @@ type Element struct {
 	// MRID is the IdentifiedObject.mRID of the CIM equipment it was imported from, kept so a CIM export gives it
 	// the same identity; empty for items drawn here (or copied), which get one derived from the diagram.
 	MRID string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
+
+	// Precision is the number of decimal places of a shown value.
+	Precision int `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	// Features are the provider's display feature aliases, comma-separated (RSDU: VS_COMP_FEATURE.DEFINE_ALIAS).
+	Features string `xml:"features,attr,omitempty" json:"features,omitempty"`
+	// Bindings link the element to SCADA objects, at most one per kind (see ValidateBindings).
+	Bindings []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
 
 // SubstationSector is one sector of a Substation pictogram: Voltage
@@ -1214,6 +1226,10 @@ type DigitalDevice struct {
 	// Unit is an optional unit-of-measure suffix (e.g. "MW", "kV"); empty
 	// omits both the data-unit attribute and the unit <tspan> entirely.
 	Unit string `xml:"unit,attr,omitempty" json:"unit,omitempty"`
+	// Precision, Features and Bindings are as in Element.
+	Precision int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features  string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	Bindings  []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
 
 // emptyElement matches a start tag immediately followed by its own end tag
@@ -1226,7 +1242,8 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Layers/VoltageClasses/Nodes/Elements/Connectors/Labels/DigitalDevices,
 // and Element's own Points ("geometry>point"), Windings
 // ("windings>winding"), and a Table2's own RowHeights/ColumnWidths/Cells
-// ("rows>row"/"columns>column"/"cells>cell") — immediately closed with no
+// ("rows>row"/"columns>column"/"cells>cell"), and Element's/DigitalDevice's
+// Bindings ("bindings>binding") — immediately closed with no
 // children, i.e. its slice happened to be empty. encoding/xml's own
 // omitempty is documented to apply to a slice, but is silently ignored
 // specifically for a tag with a chained "parent>child" path (a
@@ -1237,7 +1254,7 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // emptyElement collapse below), a non-PowerTransformer Element an equally
 // meaningless empty <windings/>, and a non-Table2 Element (every other
 // class) three equally meaningless empty <rows/>/<columns/>/<cells/> the
-// same way. None of these 12 wrapper tags ever carries its own attributes,
+// same way. None of these wrapper tags ever carries its own attributes,
 // so matching the immediately-closed (zero content) case can't mistake a
 // populated one (whose own child elements/whitespace separate its open
 // and close tags) for an empty one. Removed entirely, not just collapsed,
@@ -1249,8 +1266,12 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Element's own tag newly empty, which emptyElement then collapses to
 // self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|history|rows|columns|cells|sectors)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|history|rows|columns|cells|sectors|bindings)></[A-Za-z][\w:.-]*>`,
 )
+
+// emptyDigitalDevice matches a digitalDevice left with only whitespace once emptyPathWrapperLine removed its empty
+// <bindings>; it is written self-closing, as before DigitalDevice had children.
+var emptyDigitalDevice = regexp.MustCompile(`<digitalDevice((?:\s+[A-Za-z_:][\w:.-]*="[^"]*")*)>\s*</digitalDevice>`)
 
 // Save writes d as indented XML.
 func (d *Diagram) Save(w io.Writer) error {
@@ -1264,6 +1285,7 @@ func (d *Diagram) Save(w io.Writer) error {
 		return fmt.Errorf("slddoc: encoding diagram: %w", err)
 	}
 	stripped := emptyPathWrapperLine.ReplaceAll(buf.Bytes(), nil)
+	stripped = emptyDigitalDevice.ReplaceAll(stripped, []byte("<digitalDevice$1/>"))
 	out := emptyElement.ReplaceAll(stripped, []byte("<$1$2/>"))
 	if _, err := w.Write(out); err != nil {
 		return err

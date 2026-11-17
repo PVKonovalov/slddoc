@@ -66,6 +66,8 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
 <diagram width="1800" height="1200" source="diagram.svg" lastId="42">
   <editor gridSpacing="10" snap="true" showGrid="true" background="#12161d"
           defaultVoltage="1" showNodes="true"/>
+  <scheme source="rsdu" ref="4512"/>
+  <object source="rsdu" kind="equipment" ref="1001:7"/>
   <layers>          <layer .../>          ... </layers>
   <voltageClasses>  <class .../>          ... </voltageClasses>
   <stateColors>     <state .../>          ... </stateColors>
@@ -316,6 +318,43 @@ everything else the export derives get derived mRIDs.
 Items drawn in the editor have no `mrid`. Copying (paste, duplicate, a custom element, "Save as custom element")
 drops it, and splitting a line leaves the equipment and its `from` Terminal with the first piece and its `to`
 Terminal with the second.
+
+### 4.10 SCADA bindings — `<bindings>`, `<scheme>`, `<object>`
+
+Links of diagram items to objects of a SCADA data provider, e.g. RSDU. Not rendered; `Extract`, `Repair` and the CIM export/import ignore them.
+
+An `<element>` or `<digitalDevice>` may carry a `<bindings>` list and two attributes:
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `precision` | int | Decimal places of a shown value (0 = provider default) |
+| `features` | string | Provider's display feature aliases, comma-separated (RSDU: `VS_COMP_FEATURE.DEFINE_ALIAS`) |
+
+`<binding>`:
+
+| Attribute | Type | Req. | Meaning |
+|---|---|---|---|
+| `source` | string | yes | Provider, e.g. `rsdu` |
+| `kind` | `equipment` \| `meas1` \| `meas2` \| `jump` | yes | What the binding supplies: the equipment, the main parameter, the additional parameter, a scheme/panel/report to open |
+| `ref` | string | yes | Provider's key of the object, opaque outside it (RSDU: `tableId:id`, `SYS_TBLLST.ID` and the row id) |
+| `option` | string | no | How the value is read (RSDU: `SYS_GTOPT.DEFINE_ALIAS`) |
+| `scale` | int | no | Value multiplier; absent/0 = 1, negative inverts a discrete value |
+| `name`, `type`, `uid` | string | no | Object name, type alias and GUID/mRID cached from the provider for display |
+
+An item has at most one binding of each kind (`ValidateBindings`).
+
+```xml
+<element id="12" class="Breaker" shape="41" layer="0" x="900" y="660" precision="2">
+  <bindings>
+    <binding source="rsdu" kind="equipment" ref="1023:5531" option="GLT_OBJECT_OPT_COMPLEX" name="Q1" type="OTYP_SWITCH"/>
+    <binding source="rsdu" kind="meas1" ref="2011:88231" option="GLT_BOOL_OPT_INSTANT"/>
+  </bindings>
+</element>
+```
+
+On `<diagram>`, `<scheme source ref>` is the provider's scheme the diagram is exported to (RSDU: `VS_FORM.ID`),
+absent until the first export, and `<object>` (a `<binding>`'s attributes) the object the whole diagram is bound to
+(RSDU: `VS_OBJ_TUNE`).
 
 ## 5. Topology
 

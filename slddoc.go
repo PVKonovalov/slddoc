@@ -74,6 +74,8 @@ func ObjectTypeName(code string) string { return extract.ObjectTypeName(code) }
 // From internal/model.
 
 type (
+	Binding            = model.Binding
+	BindingKind        = model.BindingKind
 	Class              = model.Class
 	Connector          = model.Connector
 	ConnectorKind      = model.ConnectorKind
@@ -93,6 +95,7 @@ type (
 	Point              = model.Point
 	Port               = model.Port
 	Revision           = model.Revision
+	SchemeRef          = model.SchemeRef
 	SubstationSector   = model.SubstationSector
 	TableCell          = model.TableCell
 	TerminalDirection  = model.TerminalDirection
@@ -103,6 +106,10 @@ type (
 
 const (
 	BaseLayer                   = model.BaseLayer
+	BindingEquipment            = model.BindingEquipment
+	BindingJump                 = model.BindingJump
+	BindingMeas1                = model.BindingMeas1
+	BindingMeas2                = model.BindingMeas2
 	ClassAnchorPole             = model.ClassAnchorPole
 	ClassArc                    = model.ClassArc
 	ClassArrow                  = model.ClassArrow
@@ -195,6 +202,8 @@ const (
 )
 
 func Load(r io.Reader) (*Diagram, error) { return model.Load(r) }
+
+func ValidateBindings(d *Diagram) error { return model.ValidateBindings(d) }
 
 func LoadVoltageHints(r io.Reader) (map[string]string, error) { return model.LoadVoltageHints(r) }
 

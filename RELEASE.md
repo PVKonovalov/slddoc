@@ -2,6 +2,17 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-17: SCADA bindings in the model (`XSLD_FORMAT.md` §4.10). `Binding` (`source`, `kind` — `equipment`,
+`meas1`, `meas2`, `jump` —, `ref`, `option`, `scale`, cached `name`/`type`/`uid`) links a diagram item to an object
+of a SCADA data provider; `Element` and `DigitalDevice` get `Bindings` (`<bindings><binding .../></bindings>`),
+`Precision` and `Features`; `Diagram` gets `Scheme` (`<scheme source ref>`, the provider's scheme it is exported to)
+and `Object` (`<object>`, the object the whole diagram is bound to). `ValidateBindings` checks kinds, non-empty
+source/ref and at most one binding of each kind per item. All new fields are optional: a diagram without bindings
+saves exactly as before (`bindings` added to `Save`'s empty-wrapper list, and a `<digitalDevice>` left empty by it
+is written self-closing again; checked by loading and saving 910 `.xsld` files with the previous and the new library:
+byte-identical). Not rendered; `Extract`, `Repair` and CIM ignore them. - **Tests:** `TestBindingsXMLRoundTrip`, `TestBindingsJSONRoundTrip`, `TestBindingsAbsentWriteNothing`,
+`TestValidateBindings`.
+
 2026-11-10: Line halos come from the application. The built-in halo table is gone: `SymbolLibrary.SetLineHalos(LineHalos)` sets which composite styles `Render` draws as a halo, in which default color, and with a background stripe (`Gap`); with none set, no halo is drawn. `Extract` recognises halos in markup without `data-styles` by xsde2svg's own colors (`Xsde2svgLineHaloColors`), and now keeps every `data-halo` color in `HaloColors`; `DropDefaultHaloColors` removes those equal to the application's defaults. Blinking (`LineBlinkStyles`, the `<animate>` line) is removed. - **Test:** `TestRender_LineStyles`.
 
 2026-11-10: `Element.HaloColors` (`<element haloColors="name:color,...">`, `XSLD_FORMAT.md`): per-line halo colours overriding `LineStyleHalos` (`LineHaloColor`). `Render` marks each halo with `data-halo="<style>"`, and `Extract` reads back the colours that differ from the default; a Line now takes all untyped polylines just before it as its halos. - **Test:** `TestRender_LineStyles`.
