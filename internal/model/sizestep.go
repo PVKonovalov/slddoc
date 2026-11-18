@@ -65,6 +65,7 @@ var CustomDrawnClasses = map[Class]bool{
 	ClassSmallWindow:        true,
 	ClassPicture:            true,
 	ClassAutomationDevice:   true,
+	ClassDisplayPanel:       true,
 	ClassWindowIcon:         true,
 	ClassRoad:               true,
 	ClassConnectorArrow:     true,

@@ -45,22 +45,26 @@ var elementDataTypes = map[string]bool{
 	"10":     true,
 	"83":     true,
 	"312":    true, "313": true,
-	"399": true,
-	"6":   true,
-	"156": true,
-	"157": true,
-	"163": true,
-	"166": true,
-	"174": true,
-	"175": true,
-	"39":  true,
-	"360": true,
-	"389": true,
-	"38":  true,
-	"19":  true,
-	"103": true,
-	"50":  true,
-	"44":  true,
+	"399":    true,
+	"6":      true,
+	"156":    true,
+	"157":    true,
+	"163":    true,
+	"166":    true,
+	"174":    true,
+	"175":    true,
+	"39":     true,
+	"360":    true,
+	"389":    true,
+	"38":     true,
+	"19":     true,
+	"103":    true,
+	"102":    true,
+	"130":    true,
+	"60":     true,
+	"320006": true,
+	"50":     true,
+	"44":     true,
 	// This editor's own CIM symbols.
 	"330001": true, "330002": true, "330003": true,
 }
@@ -70,7 +74,7 @@ var elementDataTypes = map[string]bool{
 var twoPortShapes = map[string]model.Class{
 	"41": model.ClassBreaker, "43": model.ClassBreaker,
 	"42": model.ClassLoadBreakSwitch,
-	"71": model.ClassDisconnector, "162": model.ClassDisconnector, "49": model.ClassDisconnector,
+	"71": model.ClassDisconnector, "162": model.ClassDisconnector, "49": model.ClassDisconnector, "320006": model.ClassDisconnector,
 	"33":  model.ClassChokeCoil,
 	"34":  model.ClassCurrentTransformer,
 	"35":  model.ClassSurgeArrester,
@@ -96,21 +100,22 @@ var twoPortShapes = map[string]model.Class{
 // from the xsde2svg catalog's own object-type list, not derived from
 // anything in this package.
 var unrecognizedShapeName = map[string]string{
-	"10":   "Connector",
-	"39":   "Synchronous motor",
-	"44":   "Knife switch",
-	"60":   "Zone division",
-	"71":   "RZD connection/disconnector",
-	"83":   "Connector arrow",
-	"102":  "Panel/board",
-	"130":  "Device",
-	"146":  "Power pole",
-	"302":  "Window icon",
-	"310":  "Container",
-	"319":  "Small window",
-	"320":  "Custom element",
-	"391":  "RTF text",
-	"3206": "RZD connection/disconnector (arc-extinguishing contacts)",
+	"10":     "Connector",
+	"39":     "Synchronous motor",
+	"44":     "Knife switch",
+	"60":     "Zone division",
+	"71":     "Railway connection/disconnector",
+	"83":     "Connector arrow",
+	"102":    "Panel/board",
+	"130":    "Device",
+	"146":    "Power pole",
+	"302":    "Window icon",
+	"310":    "Container",
+	"319":    "Small window",
+	"320":    "Custom element",
+	"391":    "RTF text",
+	"3206":   "Railway connection/disconnector (arc-extinguishing contacts)",
+	"320006": "Arc-extinguishing contact",
 }
 
 // ObjectTypeName returns a human-readable English name for an xsde2svg
@@ -302,8 +307,12 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 		}
 	}
 
+	consumed := map[int]bool{}
 	for i, n := range root.Children {
 		cur = n
+		if consumed[i] {
+			continue
+		}
 		if n.Tag == "metadata" {
 			layers, err := parseLayers(n.Text)
 			if err != nil {
@@ -479,8 +488,8 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			}
 			addElement(el, nil, "")
 
-		case "103":
-			el, err := parseAutomationDevice(n)
+		case "103", "102":
+			el, err := parseStatusTile(n, dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.Attr("id"))
 				addMissingLabel(d, n, dt)
@@ -637,6 +646,27 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			}
 			addElement(el, ports, "")
 
+		case "60":
+			el, ports, voltage, err := parseZoneDivision(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.Attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			addElement(el, ports, voltage)
+
+		case "130":
+			el, voltage, err := parseDevice(n)
+			if err != nil {
+				report.Failed = append(report.Failed, n.Attr("id"))
+				addMissingLabel(d, n, dt)
+				continue
+			}
+			if n.Tag == "path" && i+1 < len(root.Children) && isDeviceText(root.Children[i+1]) {
+				consumed[i+1] = true
+			}
+			addElement(el, nil, voltage)
+
 		case "320007":
 			el, voltage, err := parseLED(n)
 			if err != nil {
@@ -682,7 +712,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "146", "156":
+		case "41", "42", "43", "71", "162", "320006", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "146", "156":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.Attr("id"))

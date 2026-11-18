@@ -347,6 +347,12 @@ const (
 	// its base at x = -10 (Mirror points the apex left), one terminal at
 	// the center.
 	ClassAnchorPole Class = "AnchorPole"
+	// ClassDevice (shape 130, Device) is an energy meter: a 30x30 square with a line 10 above its center and an
+	// upright "Wh", drawn in its Voltage color. No Ports.
+	ClassDevice Class = "Device"
+	// ClassZoneDivision (shape 60, Zone division) marks the boundary of two zones on a wire: a 10-long stroke down
+	// from its anchor in its Voltage color under a magenta "Z", with terminals at both ends. Conducting.
+	ClassZoneDivision Class = "ZoneDivision"
 	// ClassAutomationDevice (shape 103, Automation device) is a decorative
 	// two-state status tile drawn from two corner Points like ClassButton:
 	// State 1 (On) shows FillOn, PropertyTextOn and TextColorOn, anything
@@ -354,6 +360,9 @@ const (
 	// (black by default), TextSize the font size (12 by default), Bold the
 	// weight. No Voltage, no Ports.
 	ClassAutomationDevice Class = "AutomationDevice"
+	// ClassDisplayPanel (shape 102, Display panel) is ClassAutomationDevice's sibling with the same fields: gray fill
+	// and border by default, its caption above the box. No Voltage, no Ports.
+	ClassDisplayPanel Class = "DisplayPanel"
 	// ClassButton (shape 113, "Объемная кнопка"/3D button) is a purely
 	// decorative annotation widget — not real electrical equipment, same
 	// non-electrical status as ClassRectangle (no Ports/Voltage/State,
@@ -849,7 +858,7 @@ type Element struct {
 	// corpus shows both a plain and a bold real instance. Unused by every
 	// other class.
 	Bold bool `xml:"bold,attr,omitempty" json:"bold,omitempty"`
-	// PropertyTextOn and TextColorOn are an AutomationDevice's (shape 103)
+	// PropertyTextOn and TextColorOn are an AutomationDevice's (shape 103) or DisplayPanel's (102)
 	// text and text color while it is On (State 1); PropertyText and
 	// TextColor are its Off ones.
 	PropertyTextOn string `xml:"propertyTextOn,attr,omitempty" json:"propertyTextOn,omitempty"`
@@ -1052,19 +1061,6 @@ type TransformerWinding struct {
 	B               *float64 `xml:"b,attr,omitempty" json:"b,omitempty"`
 	PhaseAngleClock *int     `xml:"phaseAngleClock,attr,omitempty" json:"phaseAngleClock,omitempty"`
 }
-
-// shapeDisconnector is the Disconnector's own current Shape key.
-// shapeDisconnectorLegacy was a second, byte-for-byte identical shape the
-// element library used to carry alongside it (sld-svg/symbols.xml's own
-// comment reads "71 / 162: Disconnector") — removed from the library as a
-// confusing duplicate palette entry, but kept understood here so Load can
-// still make sense of an element saved by an older version of this editor
-// (or loaded from an external source) rather than erroring or rendering
-// with a missing-symbol warning.
-const (
-	shapeDisconnector       = "162"
-	shapeDisconnectorLegacy = "71"
-)
 
 // ConnectorKind names a Connector's real-world wire kind.
 type ConnectorKind string
@@ -1393,9 +1389,6 @@ func Load(r io.Reader) (*Diagram, error) {
 		}
 	}
 	for i, e := range d.Elements {
-		if e.Shape == shapeDisconnectorLegacy {
-			d.Elements[i].Shape = shapeDisconnector
-		}
 		if e.Class == ClassCircle {
 			d.Elements[i] = CircleFromCorners(e)
 		}

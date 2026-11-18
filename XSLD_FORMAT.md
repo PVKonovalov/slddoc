@@ -574,7 +574,7 @@ extendable per site); this is the default set.
 | Class | Shape(s) | Ports | Notes |
 |---|---|---|---|
 | Breaker | 41, 43 (withdrawable) | 2 | `state`; 43 also `position` |
-| Disconnector | 162, 49 (withdrawable) | 2 | `state`; 49 also `position` |
+| Disconnector | 162, 71, 320006 (arc-extinguishing contact), 49 (withdrawable) | 2 | `state`; 49 also `position` |
 | LoadBreakSwitch | 42 | 2 | `state` |
 | Sectionalizer | 164, 50 (withdrawable) | 2 | `state` (0/1); 50 also `position`, and `mirror` moves the blade's square |
 | ShortCircuiterNoGround | 163 | 2 | `state` (0/1) |
@@ -627,6 +627,9 @@ extendable per site); this is the default set.
 | Circle | 4 | — | decorative; center `x`/`y`, `radius` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText` |
 | AutomationDevice | 103 | — | decorative two-state tile; `<geometry>`, `state` (1 On, else Off), `fillOff`/`fillOn`, `propertyText`/`propertyTextOn`, `textColor`/`textColorOn`, `stroke` (border, default black), `textSize` (default 12), `bold` |
+| DisplayPanel | 102 | — | AutomationDevice's fields; fill and border default to gray |
+| Device | 130 | — | energy meter: square, line and upright "Wh" in the voltage color; `orient`, `voltage` |
+| ZoneDivision | 60 | 2 | zone boundary on a wire: stroke from the anchor (port 1) to 10 below it (port 2) under a magenta "Z"; conducting (CIM pass-through) |
 | WindowIcon | 302 | — | decorative; `<geometry>`, `propertyText`; fixed 1px border |
 | SmallWindow | 319 | — | decorative; `<geometry>`, `fill`, `stroke` (default gray); fixed 1px border |
 | Picture | 11 | — | decorative; `<geometry>` frame, `<image>` child holding the picture as a data URI (`data:image/...;base64,...`); shape 12 imports as 11 |
@@ -662,7 +665,6 @@ value is written on the next save.
 |---|---|---|
 | `connector/@kind` | `ObjectLink` | `BusWork` |
 | `connector/@kind` | `BusbarWire` (an old Extract bug for code 21) | `BusWork` |
-| `element/@shape` | `71` (duplicate Disconnector) | `162` |
 
 ## 9. Complete example
 

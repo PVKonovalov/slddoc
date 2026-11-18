@@ -17,7 +17,7 @@ func TestParseAutomationDevice(t *testing.T) {
 <rect x="100" y="50" width="60" height="20" style="fill:#00ff00;stroke:black;stroke-width:1" />
 <text x="130" y="62" style="fill:#000000;text-anchor:middle;dominant-baseline:middle;font-size:20px;font-family:Arial ;font-weight: bold" >ATS</text>
 </g>`
-	el, err := parseAutomationDevice(parseFirst(t, svg))
+	el, err := parseStatusTile(parseFirst(t, svg), "103")
 	if err != nil {
 		t.Fatal(err)
 	}

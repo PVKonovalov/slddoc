@@ -111,9 +111,12 @@ const (
 	BindingMeas1                = model.BindingMeas1
 	BindingMeas2                = model.BindingMeas2
 	ClassAnchorPole             = model.ClassAnchorPole
+	ClassDevice                 = model.ClassDevice
+	ClassZoneDivision           = model.ClassZoneDivision
 	ClassArc                    = model.ClassArc
 	ClassArrow                  = model.ClassArrow
 	ClassAutomationDevice       = model.ClassAutomationDevice
+	ClassDisplayPanel           = model.ClassDisplayPanel
 	ClassBlockingFilter         = model.ClassBlockingFilter
 	ClassBooster                = model.ClassBooster
 	ClassBreaker                = model.ClassBreaker

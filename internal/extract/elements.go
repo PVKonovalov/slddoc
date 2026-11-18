@@ -3480,14 +3480,15 @@ func parseAnchorPole(n *svgtree.RawNode) (model.Element, []model.Point, string, 
 	}, []model.Point{anchor}, firstNonEmpty(n.Attr("data-voltage"), n.FirstAttrDescendant("data-voltage")), nil
 }
 
-// parseAutomationDevice handles shape 103 (Automation device, see
-// ClassAutomationDevice): Button's <g><rect/><text/></g>. The source writes
-// only the state it drew and no data-state, so its fill, text and text
-// color are read as the Off ones; this editor's own output carries
-// data-state, and a tile drawn On then fills the On fields instead. The
-// font size comes from the text style (12 is left unset, the default).
-func parseAutomationDevice(n *svgtree.RawNode) (model.Element, error) {
-	box, err := parseTextBox(n, model.ClassAutomationDevice, "103")
+// statusTileClasses are the status tiles parseStatusTile reads, by code.
+var statusTileClasses = map[string]model.Class{"103": model.ClassAutomationDevice, "102": model.ClassDisplayPanel}
+
+// parseStatusTile handles shapes 103 (Automation device) and 102 (Display panel): Button's <g><rect/><text/></g>. The
+// source writes only the state it drew and no data-state, so its fill, text and text color are read as the Off ones;
+// this editor's own output carries data-state, and a tile drawn On then fills the On fields instead. The font size
+// comes from the text style (12 is left unset, the default).
+func parseStatusTile(n *svgtree.RawNode, shape string) (model.Element, error) {
+	box, err := parseTextBox(n, statusTileClasses[shape], shape)
 	if err != nil {
 		return model.Element{}, err
 	}
@@ -3508,4 +3509,89 @@ func parseAutomationDevice(n *svgtree.RawNode) (model.Element, error) {
 		}
 	}
 	return el, nil
+}
+
+// parseDevice handles shape 130 (Device, see ClassDevice): real xsde2svg writes one bare <path> "M x-15 y-15 h 30 v 30
+// h -30 z M x-15 y-10 h 30" carrying the id, data-type, data-voltage and an optional rotate() about the center, then an
+// untyped <text>Wh</text> (see isDeviceText); this editor's own output wraps both in a <g>. The center is the middle of
+// the square's diagonal, at any export scale.
+func parseDevice(n *svgtree.RawNode) (model.Element, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return model.Element{}, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return model.Element{}, "", fmt.Errorf("slddoc: device %s: no <path> geometry", n.Attr("id"))
+	}
+	pts, err := allPathPoints(paths[:1])
+	if err != nil {
+		return model.Element{}, "", err
+	}
+	if len(pts) < 3 {
+		return model.Element{}, "", fmt.Errorf("slddoc: device %s: path too short", n.Attr("id"))
+	}
+	center := model.Point{X: (pts[0].X + pts[2].X) / 2, Y: (pts[0].Y + pts[2].Y) / 2}
+	anchor := center
+	var orient int
+	if angle, c, ok := parseRotate(n.FirstAttrDescendant("transform")); ok {
+		anchor = model.Rotate(center, c, float64(angle))
+		orient = normalizeOrient(angle)
+	}
+	return model.Element{
+		ID:     id,
+		Class:  model.ClassDevice,
+		Shape:  "130",
+		Name:   firstNonEmpty(n.Attr("data-name"), n.FirstAttrDescendant("data-name")),
+		Layer:  resolveLayer(n.Attr("data-layer")),
+		X:      anchor.X,
+		Y:      anchor.Y,
+		Orient: orient,
+	}, firstNonEmpty(n.Attr("data-voltage"), n.FirstAttrDescendant("data-voltage")), nil
+}
+
+// isDeviceText reports whether n is the untyped "Wh" text xsde2svg writes right after a Device's bare path
+// (element_130.go), which belongs to the device rather than being a free caption.
+func isDeviceText(n *svgtree.RawNode) bool {
+	return n.Tag == "text" && n.Attr("data-type") == "" && strings.TrimSpace(n.Text) == "Wh"
+}
+
+// parseZoneDivision handles shape 60 (Zone division, see ClassZoneDivision): real xsde2svg writes one bare <path>
+// "M x y v 10" carrying the id, data-type, data-voltage and an optional rotate() about (x,y), then an untyped magenta
+// "Z" path, which is ignored; this editor's own output wraps both in a <g>. The stroke's ends are the anchor and the
+// second terminal, at any export scale.
+func parseZoneDivision(n *svgtree.RawNode) (model.Element, []model.Point, string, error) {
+	id, err := parseElementID(n)
+	if err != nil {
+		return model.Element{}, nil, "", err
+	}
+	paths := elementPaths(n)
+	if len(paths) == 0 {
+		return model.Element{}, nil, "", fmt.Errorf("slddoc: zone division %s: no <path> geometry", n.Attr("id"))
+	}
+	pts, err := allPathPoints(paths[:1])
+	if err != nil {
+		return model.Element{}, nil, "", err
+	}
+	if len(pts) < 2 {
+		return model.Element{}, nil, "", fmt.Errorf("slddoc: zone division %s: path too short", n.Attr("id"))
+	}
+	top, bottom := pts[0], pts[1]
+	var orient int
+	if angle, c, ok := parseRotate(n.FirstAttrDescendant("transform")); ok {
+		top = model.Rotate(top, c, float64(angle))
+		bottom = model.Rotate(bottom, c, float64(angle))
+		orient = normalizeOrient(angle)
+	}
+	return model.Element{
+		ID:     id,
+		Class:  model.ClassZoneDivision,
+		Shape:  "60",
+		Name:   firstNonEmpty(n.Attr("data-name"), n.FirstAttrDescendant("data-name")),
+		Layer:  resolveLayer(n.Attr("data-layer")),
+		X:      top.X,
+		Y:      top.Y,
+		Orient: orient,
+		Ports:  []model.Port{{Name: "1"}, {Name: "2"}},
+	}, []model.Point{top, bottom}, firstNonEmpty(n.Attr("data-voltage"), n.FirstAttrDescendant("data-voltage")), nil
 }

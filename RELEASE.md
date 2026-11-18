@@ -2,6 +2,21 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-18: Code 320006 (arc-extinguishing contact, xsde2svg 3206) is read by `Extract` as a two-terminal
+Disconnector with its state.
+
+2026-11-18: Shape 60 (Zone division, `ClassZoneDivision`): a conducting two-terminal marker; `Extract` reads
+xsde2svg's bare `<path>` with its two ends as the terminals, and the CIM export treats it as a pass-through.
+
+2026-11-18: Shape 130 (Device, `ClassDevice`): `Extract` reads xsde2svg's bare `<path>` and takes the untyped
+`<text>Wh</text>` right after it as part of the device, not a free label; this library's own output is a `<g>`.
+
+2026-11-18: Shape 102 (Display panel, `ClassDisplayPanel`): Automation device's two-state tile with gray fill and
+border by default; rendered and extracted by the shared `writeStatusTile` / `parseStatusTile`.
+
+2026-11-18: Shape 71 (Railway connection, disconnector) is its own type: `Load` no longer rewrites it to 162. Both are
+Disconnectors drawn alike; elements already saved as 162 by the former rewrite stay 162.
+
 2026-11-17: `ComponentType` (`componentType` attribute) on elements, digital devices, labels and connectors: the
 provider's component type the item is exported as (`XSLD_FORMAT.md` §4.10).
 

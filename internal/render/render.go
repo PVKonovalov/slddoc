@@ -278,12 +278,15 @@ var ShapeName = map[string]string{
 	"106":    "Lamp",
 	"113":    "Button",
 	"302":    "Window icon",
+	"102":    "Display panel",
 	"103":    "Automation device",
 	"319":    "Small window",
 	"360":    "Substation",
 	"389":    "Blocking filter",
 	"38":     "Power plant",
 	"19":     "Metal anchor/angle pole",
+	"130":    "Device",
+	"60":     "Zone division",
 	"11":     "Backdrop/image file",
 	"310":    "Container",
 	"146":    "Power pole",
@@ -319,6 +322,7 @@ var ShapeName = map[string]string{
 	"320001": "Powerflow direction",
 	"320002": "Lamp on pole",
 	"320007": "LED",
+	"320006": "Arc-extinguishing contact",
 	"10":     "Connector",
 	"83":     "Connector arrow",
 	"312":    "Table",
@@ -625,8 +629,12 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		return
 	}
 	if e.Class == model.ClassAutomationDevice {
-		// Button's box and label, picked by State (see writeAutomationDevice).
-		writeAutomationDevice(w, e, mode)
+		// Button's box and label, picked by State (see writeStatusTile).
+		writeStatusTile(w, e, mode, automationDeviceTile)
+		return
+	}
+	if e.Class == model.ClassDisplayPanel {
+		writeStatusTile(w, e, mode, displayPanelTile)
 		return
 	}
 	if e.Class == model.ClassWindowIcon {
@@ -1517,18 +1525,27 @@ type textBoxStyle struct {
 	strokeWidth float64
 }
 
-// AutomationDeviceFontSize is an Automation device's (103) default label
-// size, the source's Scale(scaleChosed, 12).
+// AutomationDeviceFontSize is an Automation device's (103) and a Display panel's (102) default label size, the
+// sources' Scale(scaleChosed, 12).
 const AutomationDeviceFontSize = 12
 
-// writeAutomationDevice draws an Automation device (shape 103) the way
-// internal/modus/element_103.go does: Button's <g><rect/><text/></g> with a
-// 1px border (Stroke, the source's typ103_default black when unset) and the
-// label 2 units below the center, its fill, text and text color picked by
-// State: On (1) FillOn/PropertyTextOn/TextColorOn, otherwise
-// FillOff/PropertyText/TextColor. The source writes no state; this editor
-// adds data-state (when set) so an exported tile reads back in its state.
-func writeAutomationDevice(w io.Writer, e model.Element, mode RenderMode) {
+// statusTile is what an Automation device (103) and a Display panel (102) differ in: their code and the fill and
+// border drawn when unset.
+type statusTile struct {
+	code, fill, stroke string
+}
+
+var (
+	automationDeviceTile = statusTile{code: "103", fill: "none", stroke: "black"}
+	displayPanelTile     = statusTile{code: "102", fill: "gray", stroke: "gray"}
+)
+
+// writeStatusTile draws an Automation device (103) or a Display panel (102) the way internal/modus/element_103.go and
+// element_102.go do: Button's <g><rect/><text/></g> with a 1px border (Stroke, else st.stroke) and the label 2 units
+// below the center, its fill, text and text color picked by State: On (1) FillOn/PropertyTextOn/TextColorOn,
+// otherwise FillOff/PropertyText/TextColor. The source writes no state; this editor adds data-state (when set) so an
+// exported tile reads back in its state.
+func writeStatusTile(w io.Writer, e model.Element, mode RenderMode, st statusTile) {
 	if len(e.Points) < 2 {
 		return
 	}
@@ -1541,14 +1558,14 @@ func writeAutomationDevice(w io.Writer, e model.Element, mode RenderMode) {
 		fill, text, textColor = e.FillOn, e.PropertyTextOn, e.TextColorOn
 	}
 	if fill == "" {
-		fill = "none"
+		fill = st.fill
 	}
 	if textColor == "" {
 		textColor = "black"
 	}
 	stroke := e.Stroke
 	if stroke == "" {
-		stroke = "black"
+		stroke = st.stroke
 	}
 	size := e.TextSize
 	if size <= 0 {
@@ -1562,7 +1579,7 @@ func writeAutomationDevice(w io.Writer, e model.Element, mode RenderMode) {
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"103\" data-name=\"%s\" data-voltage=\"%s\"%s%s>\n", e.ID, esc(e.Name), esc(fill), stateAttr(e.State), editorAttr)
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"%s\" data-name=\"%s\" data-voltage=\"%s\"%s%s>\n", e.ID, st.code, esc(e.Name), esc(fill), stateAttr(e.State), editorAttr)
 	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:1\" />\n",
 		model.FmtNum(x), model.FmtNum(y), model.FmtNum(width), model.FmtNum(height), esc(fill), esc(stroke))
 	if text != "" {

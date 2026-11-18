@@ -68,8 +68,8 @@ go fix ./...
 - Byte-identical round-tripping of a source SVG is not a goal: `Extract` builds a fresh model, `Render` redraws it.
 - Ids are plain ints in one shared space; 0 = unset. This library never assigns ids in an editing flow (sld-editor's
   frontend does); `EnsureIDs` only fills missing ones.
-- `Load` rewrites legacy values (connector `ObjectLink` → BusWork, shape `71` → `162`); drop the 71→162 rewrite once
-  shape 71 is ported as its own type.
+- `Load` rewrites legacy values (connector `ObjectLink` / `BusbarWire` → BusWork). Shapes 71 and 162 are distinct types
+  drawn alike; a 162 saved by the former 71 → 162 rewrite stays 162.
 - `Repair` never moves an existing node (an imported diagram may use one node for a whole busbar).
 - `RenderMode.Static` (saved `.svg`) is xsde2svg-faithful: absolute coordinates, `rotate(a,cx,cy)`. `Interactive` is
   for sld-editor's canvas only. Connector kinds render as type codes 21/22/23/28. The `data-*` attributes are read by

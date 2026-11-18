@@ -147,6 +147,7 @@ var cimClasses = map[model.Class]cimClassInfo{
 	model.ClassCableJoint:             {rolePassThrough, nil},
 	model.ClassPowerPole:              {rolePassThrough, nil},
 	model.ClassAnchorPole:             {rolePassThrough, nil},
+	model.ClassZoneDivision:           {rolePassThrough, nil},
 }
 
 // LinkToObjectCode is the shape code of a link to object (xsde2svg 28), its key in a CIMClassTable's export list.
