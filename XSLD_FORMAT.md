@@ -323,12 +323,15 @@ Terminal with the second.
 
 Links of diagram items to objects of a SCADA data provider, e.g. RSDU. Not rendered; `Extract`, `Repair` and the CIM export/import ignore them.
 
-An `<element>` or `<digitalDevice>` may carry a `<bindings>` list and two attributes:
+An `<element>`, `<digitalDevice>`, `<label>` or `<connector>` may carry a `<bindings>` list and three attributes. A
+`<label>` writes `<bindings>` after its text; reading drops the indentation before it, so a bound label's text can't
+end in a line break followed by blanks:
 
 | Attribute | Type | Meaning |
 |---|---|---|
 | `precision` | int | Decimal places of a shown value (0 = provider default) |
 | `features` | string | Provider's display feature aliases, comma-separated (RSDU: `VS_COMP_FEATURE.DEFINE_ALIAS`) |
+| `componentType` | string | Provider's component type the item is exported as, opaque outside it (RSDU: `VS_TCOMP.ID`); absent: chosen by shape |
 
 `<binding>`:
 

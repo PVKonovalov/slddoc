@@ -952,6 +952,9 @@ type Element struct {
 	Precision int `xml:"precision,attr,omitempty" json:"precision,omitempty"`
 	// Features are the provider's display feature aliases, comma-separated (RSDU: VS_COMP_FEATURE.DEFINE_ALIAS).
 	Features string `xml:"features,attr,omitempty" json:"features,omitempty"`
+	// ComponentType is the provider's component type the element is exported as, opaque outside it (RSDU:
+	// VS_TCOMP.ID); empty: the provider chooses by shape.
+	ComponentType string `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
 	// Bindings link the element to SCADA objects, at most one per kind (see ValidateBindings).
 	Bindings []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
@@ -1140,6 +1143,12 @@ type Connector struct {
 	MRID     string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
 	FromMRID string `xml:"fromMrid,attr,omitempty" json:"fromMrid,omitempty"`
 	ToMRID   string `xml:"toMrid,attr,omitempty" json:"toMrid,omitempty"`
+
+	// Precision, Features, ComponentType and Bindings are as in Element.
+	Precision     int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features      string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	ComponentType string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	Bindings      []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
 
 // Point is one X,Y coordinate in the diagram's own coordinate space.
@@ -1185,7 +1194,52 @@ type Label struct {
 	// Rotate turns the label clockwise by this many degrees about X/Y, as SVG's rotate does; 0 is level. Kept in
 	// (-180, 180] (LabelRotation).
 	Rotate float64 `xml:"rotate,attr,omitempty" json:"rotate,omitempty"`
-	Text   string  `xml:",chardata" json:"text"`
+	// Precision, Features, ComponentType and Bindings are as in Element; <bindings> follows the text (see MarshalXML).
+	Precision     int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features      string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	ComponentType string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	Text          string    `xml:",chardata" json:"text"`
+	Bindings      []Binding `xml:"-" json:"bindings,omitempty"`
+}
+
+// labelXML is a label as written: its <bindings> only when it has some, so an unbound label's text is written
+// exactly as it is.
+type labelXML struct {
+	*plainLabel
+	List *bindingList `xml:"bindings,omitempty"`
+}
+
+type plainLabel Label
+
+type bindingList struct {
+	Items []Binding `xml:"binding"`
+}
+
+// labelIndent matches the indentation Save writes before a label's <bindings> and its end tag, which reading takes as
+// text.
+var labelIndent = regexp.MustCompile(`(\n[ \t]*)+$`)
+
+// MarshalXML writes a label, its bindings after the text.
+func (l Label) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	w := labelXML{plainLabel: (*plainLabel)(&l)}
+	if len(l.Bindings) > 0 {
+		w.List = &bindingList{Items: l.Bindings}
+	}
+	return e.EncodeElement(w, start)
+}
+
+// UnmarshalXML reads a label; a bound label's text loses the indentation Save wrote after it (a line break in the
+// text itself is written as a character reference, so only trailing line breaks followed by blanks are lost).
+func (l *Label) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	w := labelXML{plainLabel: (*plainLabel)(l)}
+	if err := d.DecodeElement(&w, &start); err != nil {
+		return err
+	}
+	if w.List != nil && len(w.List.Items) > 0 {
+		l.Bindings = w.List.Items
+		l.Text = labelIndent.ReplaceAllString(l.Text, "")
+	}
+	return nil
 }
 
 // DigitalDevice is a live SCADA-style analog readout — shape 134 in the
@@ -1226,10 +1280,11 @@ type DigitalDevice struct {
 	// Unit is an optional unit-of-measure suffix (e.g. "MW", "kV"); empty
 	// omits both the data-unit attribute and the unit <tspan> entirely.
 	Unit string `xml:"unit,attr,omitempty" json:"unit,omitempty"`
-	// Precision, Features and Bindings are as in Element.
-	Precision int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
-	Features  string    `xml:"features,attr,omitempty" json:"features,omitempty"`
-	Bindings  []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
+	// Precision, Features, ComponentType and Bindings are as in Element.
+	Precision     int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features      string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	ComponentType string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	Bindings      []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
 
 // emptyElement matches a start tag immediately followed by its own end tag

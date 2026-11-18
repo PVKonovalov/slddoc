@@ -2,6 +2,13 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-17: `ComponentType` (`componentType` attribute) on elements, digital devices, labels and connectors: the
+provider's component type the item is exported as (`XSLD_FORMAT.md` §4.10).
+
+2026-11-17: `Label` and `Connector` carry `Bindings`, `Precision` and `Features` like `Element`; `ValidateBindings`
+checks them. A label writes its `<bindings>` after its text only when bound, so unbound labels are saved unchanged
+(`XSLD_FORMAT.md` §4.10).
+
 2026-11-17: `SchemeRef.Registered` (`registered` attribute): the scheme was registered by an export of the diagram,
 so its file name follows the diagram's path. Documented in `XSLD_FORMAT.md`.
 

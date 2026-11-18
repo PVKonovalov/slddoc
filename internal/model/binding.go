@@ -124,6 +124,12 @@ func ValidateBindings(d *Diagram) error {
 	for _, dd := range d.DigitalDevices {
 		check(fmt.Sprintf("digital device %d", dd.ID), dd.Bindings)
 	}
+	for _, l := range d.Labels {
+		check(fmt.Sprintf("label %d", l.ID), l.Bindings)
+	}
+	for _, c := range d.Connectors {
+		check(fmt.Sprintf("connector %d", c.ID), c.Bindings)
+	}
 	return errors.Join(errs...)
 }
 

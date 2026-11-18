@@ -201,3 +201,48 @@ func TestReadScheme(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelConnectorBindings: labels and connectors keep bindings, precision and features through Save and Load, a
+// bound label's text without the indentation around its <bindings>, an unbound one's exactly.
+func TestLabelConnectorBindings(t *testing.T) {
+	jump := Binding{Source: "rsdu", Kind: BindingJump, Ref: "43:2000", Option: "GLT_OBJECT_OPT_COMPLEX", Name: "Panel"}
+	line := Binding{Source: "rsdu", Kind: BindingEquipment, Ref: "1024:7", Name: "Line segment"}
+	d := &Diagram{
+		Width: 100, Height: 100,
+		Layers: []Layer{{ID: BaseLayer, Name: "Base"}},
+		Labels: []Label{
+			{ID: 1, Layer: BaseLayer, X: 1, Y: 2, Size: 12, Text: "Panel\nsecond line", Precision: 1, Features: "F1", ComponentType: "2000076", Bindings: []Binding{jump}},
+			{ID: 2, Layer: BaseLayer, X: 1, Y: 2, Size: 12, Text: "free\n  "},
+		},
+		Connectors: []Connector{{ID: 5, Kind: KindBusWork, Layer: BaseLayer, From: 8, To: 9, ComponentType: "1489",
+			Points: []Point{{0, 0}, {10, 0}}, Bindings: []Binding{line}}},
+		Nodes: []Node{{ID: 8, X: 0, Y: 0}, {ID: 9, X: 10, Y: 0}},
+	}
+	if err := ValidateBindings(d); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := d.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := got.Labels[0]
+	if l.Text != "Panel\nsecond line" || l.Precision != 1 || l.Features != "F1" || l.ComponentType != "2000076" || !reflect.DeepEqual(l.Bindings, []Binding{jump}) {
+		t.Errorf("bound label: %q %+v\n%s", l.Text, l, buf.String())
+	}
+	if got.Labels[1].Text != "free\n  " || got.Labels[1].Bindings != nil {
+		t.Errorf("unbound label: %q", got.Labels[1].Text)
+	}
+	if !reflect.DeepEqual(got.Connectors[0].Bindings, []Binding{line}) || got.Connectors[0].ComponentType != "1489" {
+		t.Errorf("connector: %+v", got.Connectors[0])
+	}
+
+	d.Connectors[0].Bindings = append(d.Connectors[0].Bindings, line)
+	d.Labels[0].Bindings = append(d.Labels[0].Bindings, Binding{Kind: BindingJump})
+	if err := ValidateBindings(d); err == nil || !strings.Contains(err.Error(), "connector 5") || !strings.Contains(err.Error(), "label 1") {
+		t.Errorf("validate: %v", err)
+	}
+}
