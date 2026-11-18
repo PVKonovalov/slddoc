@@ -1270,7 +1270,8 @@ func substationPropertyText(n *svgtree.RawNode) string {
 }
 
 // sectionalizerAnchorFromTick derives a Sectionalizer's own local anchor
-// point from its "top tick" — a short, exactly-10-unit horizontal segment
+// point from its "top tick" — a short, 10-unit (8 in an older xsde2svg's
+// Open drawing) horizontal segment
 // that, unlike anything else this shape draws, appears identically in both
 // its Closed and Open geometry (see element_164.go's own path1/path2) and
 // is always the topmost point in whichever one is active, at local
@@ -1288,7 +1289,7 @@ func sectionalizerAnchorFromTick(stateGroup *svgtree.RawNode) (model.Point, erro
 			return model.Point{}, err
 		}
 		for _, sp := range subpaths {
-			if len(sp) != 2 || sp[0].Y != sp[1].Y || math.Abs(sp[1].X-sp[0].X) != 10 {
+			if w := math.Abs(sp[1].X - sp[0].X); len(sp) != 2 || sp[0].Y != sp[1].Y || w != 10 && w != 8 {
 				continue
 			}
 			if tick == nil || sp[0].Y < tick[0].Y {
@@ -1314,7 +1315,9 @@ func sectionalizerAnchorFromTick(stateGroup *svgtree.RawNode) (model.Point, erro
 // directly, same as every other two-port shape); at Orient 0 the source
 // omits it entirely (a real corpus's own Sectionalizer instances are
 // overwhelmingly this case), so the anchor instead falls back to
-// sectionalizerAnchorFromTick.
+// sectionalizerAnchorFromTick. An older xsde2svg has no such groups: it draws
+// only the current state as flat paths, read like any other device's
+// (parseState on its paths, the anchor from the same top tick).
 func parseSectionalizer(n *svgtree.RawNode) (model.Element, []model.Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -1334,7 +1337,8 @@ func parseSectionalizer(n *svgtree.RawNode) (model.Element, []model.Point, strin
 		break
 	}
 	if activeGroup == nil {
-		return model.Element{}, nil, "", fmt.Errorf("slddoc: sectionalizer %s: no visible data-state group", n.Attr("id"))
+		// An older xsde2svg draws only the current state, as flat paths with data-state.
+		activeGroup, state = n, parseState(n)
 	}
 
 	var anchor model.Point

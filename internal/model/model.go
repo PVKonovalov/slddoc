@@ -47,6 +47,8 @@ type Diagram struct {
 	Scheme *SchemeRef `xml:"scheme,omitempty" json:"scheme,omitempty"`
 	// Object is the object the whole diagram is bound to (RSDU: VS_OBJ_TUNE).
 	Object *Binding `xml:"object,omitempty" json:"object,omitempty"`
+	// DeletedBindings are the bindings the provider has that the next export deletes.
+	DeletedBindings []DeletedBinding `xml:"deletedBindings>deleted,omitempty" json:"deletedBindings,omitempty"`
 
 	Layers         []Layer        `xml:"layers>layer" json:"layers"`
 	VoltageClasses []VoltageClass `xml:"voltageClasses>class" json:"voltageClasses"`
@@ -964,6 +966,8 @@ type Element struct {
 	// ComponentType is the provider's component type the element is exported as, opaque outside it (RSDU:
 	// VS_TCOMP.ID); empty: the provider chooses by shape.
 	ComponentType string `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	// ComponentEdited tells that Precision, Features or ComponentType changed since the provider got them.
+	ComponentEdited bool `xml:"componentEdited,attr,omitempty" json:"componentEdited,omitempty"`
 	// Bindings link the element to SCADA objects, at most one per kind (see ValidateBindings).
 	Bindings []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
@@ -1140,11 +1144,12 @@ type Connector struct {
 	FromMRID string `xml:"fromMrid,attr,omitempty" json:"fromMrid,omitempty"`
 	ToMRID   string `xml:"toMrid,attr,omitempty" json:"toMrid,omitempty"`
 
-	// Precision, Features, ComponentType and Bindings are as in Element.
-	Precision     int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
-	Features      string    `xml:"features,attr,omitempty" json:"features,omitempty"`
-	ComponentType string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
-	Bindings      []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
+	// Precision, Features, ComponentType, ComponentEdited and Bindings are as in Element.
+	Precision       int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features        string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	ComponentType   string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	ComponentEdited bool      `xml:"componentEdited,attr,omitempty" json:"componentEdited,omitempty"`
+	Bindings        []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
 
 // Point is one X,Y coordinate in the diagram's own coordinate space.
@@ -1190,12 +1195,14 @@ type Label struct {
 	// Rotate turns the label clockwise by this many degrees about X/Y, as SVG's rotate does; 0 is level. Kept in
 	// (-180, 180] (LabelRotation).
 	Rotate float64 `xml:"rotate,attr,omitempty" json:"rotate,omitempty"`
-	// Precision, Features, ComponentType and Bindings are as in Element; <bindings> follows the text (see MarshalXML).
-	Precision     int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
-	Features      string    `xml:"features,attr,omitempty" json:"features,omitempty"`
-	ComponentType string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
-	Text          string    `xml:",chardata" json:"text"`
-	Bindings      []Binding `xml:"-" json:"bindings,omitempty"`
+	// Precision, Features, ComponentType, ComponentEdited and Bindings are as in Element; <bindings> follows the text
+	// (see MarshalXML).
+	Precision       int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features        string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	ComponentType   string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	ComponentEdited bool      `xml:"componentEdited,attr,omitempty" json:"componentEdited,omitempty"`
+	Text            string    `xml:",chardata" json:"text"`
+	Bindings        []Binding `xml:"-" json:"bindings,omitempty"`
 }
 
 // labelXML is a label as written: its <bindings> only when it has some, so an unbound label's text is written
@@ -1276,11 +1283,12 @@ type DigitalDevice struct {
 	// Unit is an optional unit-of-measure suffix (e.g. "MW", "kV"); empty
 	// omits both the data-unit attribute and the unit <tspan> entirely.
 	Unit string `xml:"unit,attr,omitempty" json:"unit,omitempty"`
-	// Precision, Features, ComponentType and Bindings are as in Element.
-	Precision     int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
-	Features      string    `xml:"features,attr,omitempty" json:"features,omitempty"`
-	ComponentType string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
-	Bindings      []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
+	// Precision, Features, ComponentType, ComponentEdited and Bindings are as in Element.
+	Precision       int       `xml:"precision,attr,omitempty" json:"precision,omitempty"`
+	Features        string    `xml:"features,attr,omitempty" json:"features,omitempty"`
+	ComponentType   string    `xml:"componentType,attr,omitempty" json:"componentType,omitempty"`
+	ComponentEdited bool      `xml:"componentEdited,attr,omitempty" json:"componentEdited,omitempty"`
+	Bindings        []Binding `xml:"bindings>binding,omitempty" json:"bindings,omitempty"`
 }
 
 // emptyElement matches a start tag immediately followed by its own end tag

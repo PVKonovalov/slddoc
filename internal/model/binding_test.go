@@ -246,3 +246,39 @@ func TestLabelConnectorBindings(t *testing.T) {
 		t.Errorf("validate: %v", err)
 	}
 }
+
+// TestBindingStatusRoundTrip: the export statuses (binding status, componentEdited, deletedBindings) survive Save and
+// Load, and ValidateBindings rejects an unknown status.
+func TestBindingStatusRoundTrip(t *testing.T) {
+	d := boundDiagram()
+	d.Elements[0].ComponentEdited = true
+	d.Elements[0].Bindings[1].Status = BindingEdited
+	d.DigitalDevices[0].Bindings[0].Status = BindingNew
+	d.Labels = []Label{{ID: 8, Layer: BaseLayer, Text: "T", ComponentEdited: true,
+		Bindings: []Binding{{Source: "rsdu", Kind: BindingJump, Ref: "43:1", Status: BindingNew}}}}
+	d.DeletedBindings = []DeletedBinding{{Item: 3, Source: "rsdu", Kind: BindingMeas2, Ref: "1:2"}, {Item: 0, Source: "rsdu", Kind: BindingEquipment, Ref: "5:6"}}
+	var buf bytes.Buffer
+	if err := d.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	saved := buf.String()
+	for _, want := range []string{`componentEdited="true"`, `status="edited"`, `<deleted item="3" source="rsdu" kind="meas2" ref="1:2"/>`, `<deleted item="0" source="rsdu" kind="equipment" ref="5:6"/>`} {
+		if !strings.Contains(saved, want) {
+			t.Errorf("saved .xsld lacks %s:\n%s", want, saved)
+		}
+	}
+	got, err := Load(strings.NewReader(saved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Scheme, d.Scheme) || !reflect.DeepEqual(got.DeletedBindings, d.DeletedBindings) ||
+		!reflect.DeepEqual(got.Elements[0].Bindings, d.Elements[0].Bindings) || !got.Elements[0].ComponentEdited ||
+		!reflect.DeepEqual(got.Labels[0].Bindings, d.Labels[0].Bindings) || !got.Labels[0].ComponentEdited ||
+		got.DigitalDevices[0].Bindings[0].Status != BindingNew {
+		t.Errorf("got %+v", got)
+	}
+	d.Elements[0].Bindings[0].Status = "gone"
+	if err := ValidateBindings(d); err == nil || !strings.Contains(err.Error(), "unknown status") {
+		t.Errorf("ValidateBindings: %v", err)
+	}
+}

@@ -18,6 +18,14 @@ const (
 	BindingJump      BindingKind = "jump"      // another scheme, panel or report opened from the item
 )
 
+// BindingStatus is how a binding differs from what the provider has; empty: the provider has it as it is.
+type BindingStatus string
+
+const (
+	BindingNew    BindingStatus = "new"    // the provider doesn't have it yet
+	BindingEdited BindingStatus = "edited" // the provider has it with another option or scale
+)
+
 // Binding links a diagram item to an object of a SCADA data provider.
 type Binding struct {
 	// Source names the provider, e.g. "rsdu".
@@ -33,6 +41,17 @@ type Binding struct {
 	Name string `xml:"name,attr,omitempty" json:"name,omitempty"`
 	Type string `xml:"type,attr,omitempty" json:"type,omitempty"`
 	UID  string `xml:"uid,attr,omitempty" json:"uid,omitempty"`
+	// Status is what the next export writes for it, set by the editor.
+	Status BindingStatus `xml:"status,attr,omitempty" json:"status,omitempty"`
+}
+
+// DeletedBinding is a binding the provider has that was removed from item Item (0: the diagram's object), or whose
+// ref was changed (the new one is a BindingNew); the next export deletes it.
+type DeletedBinding struct {
+	Item   int         `xml:"item,attr" json:"item"`
+	Source string      `xml:"source,attr" json:"source"`
+	Kind   BindingKind `xml:"kind,attr" json:"kind"`
+	Ref    string      `xml:"ref,attr" json:"ref"`
 }
 
 // SchemeRef identifies the scheme a diagram is exported to at a provider (RSDU: VS_FORM.ID).
@@ -115,6 +134,11 @@ func ValidateBindings(d *Diagram) error {
 	if d.Object != nil {
 		check("diagram object", []Binding{*d.Object})
 	}
+	for _, del := range d.DeletedBindings {
+		if del.Source == "" || del.Ref == "" || del.Item < 0 || !bindingKinds[del.Kind] {
+			errs = append(errs, fmt.Errorf("deleted binding %+v: bad item, source, kind or ref", del))
+		}
+	}
 	if d.Scheme != nil && (d.Scheme.Source == "" || d.Scheme.Ref == "") {
 		errs = append(errs, errors.New("diagram scheme: empty source or ref"))
 	}
@@ -136,6 +160,9 @@ func ValidateBindings(d *Diagram) error {
 func validateBinding(b Binding) error {
 	if !bindingKinds[b.Kind] {
 		return fmt.Errorf("unknown binding kind %q", b.Kind)
+	}
+	if b.Status != "" && b.Status != BindingNew && b.Status != BindingEdited {
+		return fmt.Errorf("%q binding: unknown status %q", b.Kind, b.Status)
 	}
 	if b.Source == "" || b.Ref == "" {
 		return fmt.Errorf("%q binding: empty source or ref", b.Kind)

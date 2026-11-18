@@ -76,6 +76,8 @@ func ObjectTypeName(code string) string { return extract.ObjectTypeName(code) }
 type (
 	Binding            = model.Binding
 	BindingKind        = model.BindingKind
+	BindingStatus      = model.BindingStatus
+	DeletedBinding     = model.DeletedBinding
 	Class              = model.Class
 	Connector          = model.Connector
 	ConnectorKind      = model.ConnectorKind
@@ -110,6 +112,8 @@ const (
 	BindingJump                 = model.BindingJump
 	BindingMeas1                = model.BindingMeas1
 	BindingMeas2                = model.BindingMeas2
+	BindingNew                  = model.BindingNew
+	BindingEdited               = model.BindingEdited
 	ClassAnchorPole             = model.ClassAnchorPole
 	ClassDevice                 = model.ClassDevice
 	ClassZoneDivision           = model.ClassZoneDivision

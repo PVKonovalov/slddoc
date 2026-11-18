@@ -2,6 +2,14 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-18: Export statuses: `Binding.Status` (`new`/`edited`), `ComponentEdited` on elements, connectors, labels and
+digital devices and `Diagram.DeletedBindings` (`<deletedBindings><deleted item source kind ref/>`), saved in `.xsld`
+and checked by `ValidateBindings`; the editor uses them to export only what changed.
+
+2026-11-18: Sectionalizer (164) in an older xsde2svg's SVG, drawn as flat paths of only its current state (no
+visibility-swapped state groups), is read by `Extract`: state from the paths' `data-state`, position from the top tick
+(10 wide when Closed, 8 when Open). It failed to import before.
+
 2026-11-18: Code 320006 (arc-extinguishing contact, xsde2svg 3206) is read by `Extract` as a two-terminal
 Disconnector with its state.
 

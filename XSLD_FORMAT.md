@@ -332,6 +332,7 @@ end in a line break followed by blanks:
 | `precision` | int | Decimal places of a shown value (0 = provider default) |
 | `features` | string | Provider's display feature aliases, comma-separated (RSDU: `VS_COMP_FEATURE.DEFINE_ALIAS`) |
 | `componentType` | string | Provider's component type the item is exported as, opaque outside it (RSDU: `VS_TCOMP.ID`); absent: chosen by shape |
+| `componentEdited` | bool | `true`: `precision`, `features` or `componentType` changed since the last export (see `<deletedBindings>` below) |
 
 `<binding>`:
 
@@ -343,6 +344,7 @@ end in a line break followed by blanks:
 | `option` | string | no | How the value is read (RSDU: `SYS_GTOPT.DEFINE_ALIAS`) |
 | `scale` | int | no | Value multiplier; absent/0 = 1, negative inverts a discrete value |
 | `name`, `type`, `uid` | string | no | Object name, type alias and GUID/mRID cached from the provider for display |
+| `status` | `new` \| `edited` | no | Not yet exported: added (or its `ref` changed), or its `option`/`scale` changed; absent: as the provider has it (see `<deletedBindings>` below) |
 
 An item has at most one binding of each kind (`ValidateBindings`).
 
@@ -361,6 +363,11 @@ exported to it; `registered="true"` (optional) tells that an export of this diag
 scheme's file name follows the diagram's path (a scheme linked from the provider keeps its own). One scheme belongs to at most one diagram. `<scheme>` is written right after `<editor>`, before `<object>` and
 `<layers>`, so `ReadScheme` can read it from the head of a large file. `<object>` (a `<binding>`'s attributes) the object the whole diagram is bound to
 (RSDU: `VS_OBJ_TUNE`).
+
+`<deletedBindings>`, after `<object>`, lists the bindings the provider has that the next export deletes:
+`<deleted item source kind ref>`, the `kind` binding with ref `ref` of item `item` (0: the diagram's `<object>`),
+removed from it or replaced by one with another ref (then a `new` one). The editor keeps the bindings' `status`, the
+items' `componentEdited` and this list on every edit; an export writes only what they name and clears them.
 
 ## 5. Topology
 
