@@ -533,7 +533,7 @@ func parseTwoPortDevice(n *svgtree.RawNode, class model.Class, shape string) (mo
 		}
 	}
 	voltage := firstNonEmpty(n.Attr("data-voltage"), n.FirstAttrDescendant("data-voltage"))
-	return model.Element{
+	el := model.Element{
 		ID:     id,
 		Class:  class,
 		Shape:  shape,
@@ -548,7 +548,11 @@ func parseTwoPortDevice(n *svgtree.RawNode, class model.Class, shape string) (mo
 			{Name: "1"},
 			{Name: "2"},
 		},
-	}, ports, voltage, nil
+	}
+	if shape == "154" {
+		readWithdrawableFuse(&el, n, [2]model.Point{p1, p2}, anchor)
+	}
+	return el, ports, voltage, nil
 }
 
 // mirrorSides is, for each two-port shape drawn lopsided, the side of its axis its unmirrored drawing leans to (-1

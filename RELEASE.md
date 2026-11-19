@@ -2,6 +2,8 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-19: Extract: a withdrawable fuse (154) gets `Position` (from `data-trolley`, or from the drawing of an older xsde2svg: a shifted body is Service, reversed inner chevrons are Test) and `Scale` (from a `scale()` or its chevron tips, ±Scale(s, 31)); new `fuse_test.go`.
+
 2026-11-19: Render: Table (312) and Table2 (313) drop `data-voltage` from their `<g>` (a table has no voltage); the render tests check that a table has none.
 
 2026-11-19: Table2: `TableCell` gets `RowSpan`/`ColSpan` (merged cells), multi-line `Text`, `FontSize`, `Bold`, `Italic`, `Underline`, `AlignH`/`AlignV` (`TableCellFontSize`, `Spans`). `WriteTable2` draws a merged cell as one path and places the text as xsde2svg's element_313/TableCaption do (lines as `<tspan>`s); `parseTable2` reads them all back. Both test tables (merges in every direction, all alignments, bold sizes) now give xsde2svg's markup exactly. `XSLD_FORMAT.md` §6.5 updated; new `table2_test.go`.

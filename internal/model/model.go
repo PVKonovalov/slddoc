@@ -702,8 +702,8 @@ type Element struct {
 	// (Service/Normal/Test — see config.Config's PositionStates), a status
 	// axis independent of State: a withdrawable breaker/disconnector can be
 	// closed-and-racked-in, open-and-racked-in, or racked-out/test entirely
-	// regardless of its own open/closed State. Only shapes 43/49 (Breaker/
-	// Disconnector, withdrawable) currently use it.
+	// regardless of its own open/closed State. Used by the withdrawable
+	// shapes 43/49/50/154 (Breaker, Disconnector, Sectionalizer, Fuse).
 	Position *int `xml:"position,attr,omitempty" json:"position,omitempty"`
 	// FillOff/FillOn are a Lamp's (shape 106) two display colors, chosen by
 	// State. Unlike the switch-like devices' state indicator (a fixed
