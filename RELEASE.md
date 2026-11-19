@@ -2,6 +2,8 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-19: Extract: a Sectionalizer (164) gets `Mirror` (the filled arrow on the +x side of the unrotated drawing, as xsde2svg draws `xMirror`; or this editor's `scale(-1,1)`) and its terminals at the ends of its legs (xsde2svg's for a `distance` over 2, or this editor's leads), so `Span` follows; new `sectionalizer_mirror_test.go`.
+
 2026-11-19: Extract: a withdrawable fuse (154) gets `Position` (from `data-trolley`, or from the drawing of an older xsde2svg: a shifted body is Service, reversed inner chevrons are Test) and `Scale` (from a `scale()` or its chevron tips, ±Scale(s, 31)); new `fuse_test.go`.
 
 2026-11-19: Render: Table (312) and Table2 (313) drop `data-voltage` from their `<g>` (a table has no voltage); the render tests check that a table has none.

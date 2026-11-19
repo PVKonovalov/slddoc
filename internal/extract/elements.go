@@ -1307,6 +1307,39 @@ func sectionalizerAnchorFromTick(stateGroup *svgtree.RawNode) (model.Point, erro
 	return model.Point{X: (tick[0].X + tick[1].X) / 2, Y: tick[0].Y + 10}, nil
 }
 
+// sectionalizerLegsAndMirror reads a Sectionalizer's (164) state drawing g around anchor, both in its unrotated frame.
+// half is the distance from anchor to a terminal: the far end of its legs (an unfilled path lying wholly on the axis:
+// xsde2svg's legs for a distance over 2, or this editor's leads), at least 10. mirror tells whether the filled arrow
+// lies on the +x side, as xsde2svg draws it with xMirror.
+func sectionalizerLegsAndMirror(g *svgtree.RawNode, anchor model.Point) (half float64, mirror bool) {
+	half = 10
+	for _, p := range elementPaths(g) {
+		d := p.Attr("d")
+		subs, err := model.ParseSubpaths(d)
+		if err != nil || len(subs) == 0 || len(subs[0]) == 0 {
+			continue
+		}
+		fill := model.StyleProp(p.Attr("style"), "fill")
+		if fill != "" && fill != "none" {
+			if strings.ContainsAny(d, "zZ") {
+				mirror = subs[0][0].X > anchor.X
+			}
+			continue
+		}
+		far, onAxis := 0.0, true
+		for _, sp := range subs {
+			for _, q := range sp {
+				onAxis = onAxis && math.Abs(q.X-anchor.X) <= 0.5
+				far = math.Max(far, math.Abs(q.Y-anchor.Y))
+			}
+		}
+		if onAxis {
+			half = math.Max(half, far)
+		}
+	}
+	return half, mirror
+}
+
 // parseSectionalizer handles shape 164 (Отделитель/Sectionalizer): a
 // two-terminal device whose real Closed(1)/Open(0) state, unlike every
 // other switching device here, isn't a data-state attribute on a <path>
@@ -1356,9 +1389,13 @@ func parseSectionalizer(n *svgtree.RawNode) (model.Element, []model.Point, strin
 		}
 	}
 
+	half, mirror := sectionalizerLegsAndMirror(activeGroup, anchor)
+	if strings.Contains(n.Attr("transform"), "scale(-1") {
+		mirror = !mirror
+	}
 	ports := []model.Point{
-		model.Rotate(model.Point{X: anchor.X, Y: anchor.Y - 10}, anchor, float64(angle)),
-		model.Rotate(model.Point{X: anchor.X, Y: anchor.Y + 10}, anchor, float64(angle)),
+		model.Rotate(model.Point{X: anchor.X, Y: anchor.Y - half}, anchor, float64(angle)),
+		model.Rotate(model.Point{X: anchor.X, Y: anchor.Y + half}, anchor, float64(angle)),
 	}
 
 	return model.Element{
@@ -1370,6 +1407,7 @@ func parseSectionalizer(n *svgtree.RawNode) (model.Element, []model.Point, strin
 		X:      anchor.X,
 		Y:      anchor.Y,
 		Orient: angle,
+		Mirror: mirror,
 		State:  state,
 		Ports: []model.Port{
 			{Name: "1"},
