@@ -476,7 +476,7 @@ larger side.
 | `fillOff`, `fillOn` | color | Lamp | Colors for `state` 0 / 1 |
 | `nType` | int | PackageSubstation | Appearance: `0` box-in-box (default), `1` triangle |
 | `orient` | int | Table, Container | Rotates only the overlay text, not the box |
-| `textSize` | number | Container | Caption font size; 0 = 14 |
+| `textSize` | number | Container, AutomationDevice, DisplayPanel, Button | Text font size; 0 = 14 (Container), 12 (AutomationDevice, DisplayPanel), 23 (Button) |
 | `textDx`, `textDy` | number | Container | Caption anchor offset from the outline's top-left (min x/y of its vertices) |
 | `textAnchor`, `textBaseline` | string | Container | Caption `text-anchor` / `dominant-baseline`; empty = `middle` |
 
@@ -639,7 +639,7 @@ extendable per site); this is the default set.
 | Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
 | Rectangle / Arrow | 3 / 2 | — | decorative; `<geometry>` (Rectangle: + `rx` corner radius) |
 | Circle | 4 | — | decorative; center `x`/`y`, `radius` |
-| Button | 113 | — | decorative; `<geometry>`, `propertyText` |
+| Button | 113 | — | decorative; `<geometry>`, `propertyText`, `textSize` (default 23) |
 | AutomationDevice | 103 | — | decorative two-state tile; `<geometry>`, `state` (1 On, else Off), `fillOff`/`fillOn`, `propertyText`/`propertyTextOn`, `textColor`/`textColorOn`, `stroke` (border, default black), `textSize` (default 12), `bold` |
 | DisplayPanel | 102 | — | AutomationDevice's fields; fill and border default to gray |
 | Device | 130 | — | energy meter: square, line and upright "Wh" in the voltage color; `orient`, `voltage` |

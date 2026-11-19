@@ -2352,6 +2352,9 @@ func parseTextBox(n *svgtree.RawNode, class model.Class, shape string) (model.El
 		el.PropertyText = t.Text
 		el.TextColor = model.StyleProp(textStyle, "fill")
 		el.Bold = strings.Contains(textStyle, "font-weight: bold") || strings.Contains(textStyle, "font-weight:bold")
+		if size, err := strconv.ParseFloat(strings.TrimSuffix(model.StyleProp(textStyle, "font-size"), "px"), 64); err == nil && class == model.ClassButton && size != render.ButtonFontSize {
+			el.TextSize = size
+		}
 	}
 	return el, nil
 }

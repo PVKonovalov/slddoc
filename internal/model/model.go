@@ -877,7 +877,8 @@ type Element struct {
 	// outline's own top-left (min x/y of Points, so the caption moves with
 	// it), and its text-anchor/dominant-baseline ("" = middle/middle).
 	// Stored as drawn rather than as the source's position presets, so a
-	// real caption round-trips exactly. Unused by every other class.
+	// real caption round-trips exactly. TextSize is also an AutomationDevice's,
+	// DisplayPanel's and Button's text size. The rest are unused by every other class.
 	TextSize     float64 `xml:"textSize,attr,omitempty" json:"textSize,omitempty"`
 	TextDx       float64 `xml:"textDx,attr,omitempty" json:"textDx,omitempty"`
 	TextDy       float64 `xml:"textDy,attr,omitempty" json:"textDy,omitempty"`

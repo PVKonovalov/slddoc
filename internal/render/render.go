@@ -1328,10 +1328,9 @@ func writeCircle(w io.Writer, e model.Element, mode RenderMode) {
 		e.ID, model.FmtNum(e.X), model.FmtNum(e.Y), r, r, esc(fill), esc(stroke), model.FmtNum(strokeWidth), esc(e.Name), esc(stroke), editorAttr)
 }
 
-// buttonFontSize is a Button's (113) own PropertyText size — fixed, not
-// per-instance, matching every real corpus instance found (23px regardless
-// of the button's own drawn width/height).
-const buttonFontSize = 23
+// ButtonFontSize is a Button's (113) PropertyText size when its TextSize is
+// unset: xsde2svg's for a font size of 14 (14·1.7).
+const ButtonFontSize = 23
 
 // writeButton draws a Button (shape 113) as a <rect>+<text> pair inside a
 // wrapping <g id data-type="113">, matching real xsde2svg-exported markup
@@ -1350,7 +1349,7 @@ const buttonFontSize = 23
 // A Button with fewer than 2 Points draws nothing, same as writeRectangle.
 func writeButton(w io.Writer, e model.Element, mode RenderMode) {
 	writeTextBox(w, e, mode, textBoxStyle{
-		code: "113", fontSize: buttonFontSize, stroke: "white", textColor: "white", strokeWidth: e.StrokeWidth,
+		code: "113", fontSize: ButtonFontSize, textDY: 2, stroke: "white", textColor: "white", strokeWidth: e.StrokeWidth,
 	})
 }
 
@@ -1627,14 +1626,18 @@ func writeTextBox(w io.Writer, e model.Element, mode RenderMode, st textBoxStyle
 	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;stroke-width:%s\" />\n",
 		model.FmtNum(x), model.FmtNum(y), model.FmtNum(width), model.FmtNum(height), esc(fill), esc(stroke), model.FmtNum(strokeWidth))
 	if e.PropertyText != "" {
-		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial%s", textColor, st.fontSize, weight)
+		size := float64(st.fontSize)
+		if e.TextSize > 0 {
+			size = e.TextSize
+		}
+		style := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%spx;font-family:Arial%s", textColor, model.FmtNum(size), weight)
 		fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", model.FmtNum(x+width/2), model.FmtNum(y+height/2+st.textDY), esc(style), esc(e.PropertyText))
 	}
 	fmt.Fprint(w, "</g>\n")
 }
 
 // tableFontSize is a Table's (312) own PropertyText size — fixed, not
-// per-instance, the same simplification buttonFontSize already makes (the
+// per-instance, the same simplification ButtonFontSize makes (the
 // real source's own default computes to ~13.6px; a genuinely varying
 // per-instance ParamText.Font.Size is not modeled).
 const tableFontSize = 14
