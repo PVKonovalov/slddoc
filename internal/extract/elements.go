@@ -1977,12 +1977,10 @@ func parseCircle(n *svgtree.RawNode) (model.Element, error) {
 // transform="rotate(...)" on the node, when present, is applied to both
 // derived points to get their real diagram-space positions; when absent
 // (the axis-aligned case, which never gets one), the path's own
-// coordinates are already absolute. DoubleHeaded is deliberately never
-// set true here — telling a real instance's own doubled starting chevron
-// apart from an ordinary single-headed one from raw geometry alone isn't
-// reliable enough to be worth attempting, so an extracted double-headed
-// arrow round-trips as a plausible-looking single-headed one instead of
-// risking a false positive on an ordinary one.
+// coordinates are already absolute. DoubleHeaded is set when the path
+// comes back to its start point: a double-headed arrow draws its starting
+// chevron first and returns to the start before the line, a single-headed
+// one never revisits it.
 func parseArrow(n *svgtree.RawNode) (model.Element, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -2001,8 +1999,12 @@ func parseArrow(n *svgtree.RawNode) (model.Element, error) {
 	}
 	p0, p1 := pts[0], pts[0]
 	bestDist := 0.0
+	doubleHeaded := false
 	for _, p := range pts[1:] {
 		dist := math.Hypot(p.X-p0.X, p.Y-p0.Y)
+		if dist < 1e-6 {
+			doubleHeaded = true
+		}
 		if dist > bestDist {
 			bestDist = dist
 			p1 = p
@@ -2027,11 +2029,12 @@ func parseArrow(n *svgtree.RawNode) (model.Element, error) {
 		// reads Points[0]/[1] directly and never looks at X/Y at all for
 		// an Arrow; kept consistent anyway so a freshly extracted arrow
 		// and a freshly drawn one carry the same kind of anchor.
-		X:           (p0.X + p1.X) / 2,
-		Y:           (p0.Y + p1.Y) / 2,
-		Stroke:      model.StyleProp(style, "stroke"),
-		StrokeWidth: strokeWidth,
-		Points:      []model.Point{p0, p1},
+		X:            (p0.X + p1.X) / 2,
+		Y:            (p0.Y + p1.Y) / 2,
+		Stroke:       model.StyleProp(style, "stroke"),
+		StrokeWidth:  strokeWidth,
+		Points:       []model.Point{p0, p1},
+		DoubleHeaded: doubleHeaded,
 	}, nil
 }
 
@@ -2318,25 +2321,10 @@ func mostCommon(vals []string) string {
 	return best
 }
 
-// parseTable2 handles shape 313 (Таблица 2/Table 2): a purely decorative
-// multi-row/multi-column grid (see ClassTable2's own doc comment for the
-// full model, and what it deliberately doesn't recover — cell merging,
-// multi-paragraph cell text) — no Ports are ever created for one. A real
-// instance is a <g id data-type="313"> (this project's own addition to
-// the real source, see ClassTable2's own doc comment for why) wrapping one
-// bare <path style> per real cell (table2CellPathRe's own d format) and,
-// for a cell that carries one, an immediately-following <text> sibling
-// (matching writeTable2's own document-order pairing exactly — real
-// xsde2svg emits Path then, only when that cell's own text is non-empty,
-// Textspan/Span/TextEnd right after it, the identical adjacency). Row/
-// column boundaries (and so each cell's own Row/Col) are reconstructed
-// purely from the cells' own real drawn geometry (tableBoundaries/
-// boundaryIndex) — there's no other structure to read them from, since a
-// real cell carries no row/col index of its own at all. Every real cell
-// found gets its own TableCell entry regardless of whether it carries
-// text or a Fill/TextColor override, so an entirely blank cell still
-// round-trips as a real (empty) grid position rather than silently
-// vanishing.
+// parseTable2 reads a Table2 (313) <g id data-type="313">: one closed <path> per cell, each followed by its <text> when
+// it has one. Rows and columns come from the cells' edges; a cell whose path covers several of them is a merged one.
+// Text lines, color, font size, bold/italic/underline and alignment come from the <text>, read back the way
+// writeTableCellText places them. Every cell gets a TableCell, blank ones too.
 func parseTable2(n *svgtree.RawNode) (model.Element, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -2346,8 +2334,7 @@ func parseTable2(n *svgtree.RawNode) (model.Element, error) {
 	type rawCell struct {
 		x, y, w, h float64
 		fill       string
-		text       string
-		textColor  string
+		text       *svgtree.RawNode
 	}
 	var cells []rawCell
 	for i, child := range n.Children {
@@ -2364,9 +2351,7 @@ func parseTable2(n *svgtree.RawNode) (model.Element, error) {
 		h, _ := strconv.ParseFloat(m[4], 64)
 		c := rawCell{x: x, y: y, w: w, h: h, fill: model.StyleProp(child.Attr("style"), "fill")}
 		if i+1 < len(n.Children) && n.Children[i+1].Tag == "text" {
-			t := n.Children[i+1]
-			c.text = t.Text
-			c.textColor = model.StyleProp(t.Attr("style"), "fill")
+			c.text = n.Children[i+1]
 		}
 		cells = append(cells, c)
 	}
@@ -2427,9 +2412,15 @@ func parseTable2(n *svgtree.RawNode) (model.Element, error) {
 		if row < 0 || col < 0 {
 			continue
 		}
-		cell := model.TableCell{Row: row, Col: col, Text: c.text}
-		if c.textColor != "" && c.textColor != "black" {
-			cell.TextColor = c.textColor
+		cell := model.TableCell{Row: row, Col: col}
+		if span := boundaryIndex(rowBounds, c.y+c.h) - row; span > 1 {
+			cell.RowSpan = span
+		}
+		if span := boundaryIndex(colBounds, c.x+c.w) - col; span > 1 {
+			cell.ColSpan = span
+		}
+		if c.text != nil {
+			readTableCellText(&cell, c.text, c.x, c.y, c.w, c.h)
 		}
 		if c.fill != "" && c.fill != defaultFill {
 			cell.Fill = c.fill
@@ -2438,6 +2429,55 @@ func parseTable2(n *svgtree.RawNode) (model.Element, error) {
 	}
 
 	return el, nil
+}
+
+// readTableCellText fills cell's text and its style from t, the <text> drawn in the box x, y, w, h.
+func readTableCellText(cell *model.TableCell, t *svgtree.RawNode, x, y, w, h float64) {
+	lines := []string{t.Text}
+	for _, span := range t.ChildrenTagged("tspan") {
+		line := span.Text
+		if line == " " {
+			line = ""
+		}
+		lines = append(lines, line)
+	}
+	cell.Text = strings.Join(lines, "\n")
+
+	style := t.Attr("style")
+	if color := model.StyleProp(style, "fill"); color != "" && color != "black" {
+		cell.TextColor = color
+	}
+	fontSize, _ := strconv.ParseFloat(strings.TrimSuffix(model.StyleProp(style, "font-size"), "px"), 64)
+	if fontSize > 0 && fontSize != model.TableCellFontSize {
+		cell.FontSize = fontSize
+	}
+	if fontSize <= 0 {
+		fontSize = model.TableCellFontSize
+	}
+	cell.Bold = model.StyleProp(style, "font-weight") == "bold"
+	cell.Italic = model.StyleProp(style, "font-style") == "italic"
+	cell.Underline = strings.Contains(model.StyleProp(style, "text-decoration"), "underline")
+
+	switch model.StyleProp(style, "text-anchor") {
+	case "start":
+		cell.AlignH = model.AlignLeft
+	case "end":
+		cell.AlignH = model.AlignRight
+	}
+	if len(lines) > 1 {
+		return
+	}
+	ty, err := strconv.ParseFloat(t.Attr("y"), 64)
+	if err != nil {
+		return
+	}
+	switch {
+	case math.Abs(ty-(y+h/2)) <= 0.5:
+	case math.Abs(ty-(y+fontSize)) <= 0.5:
+		cell.AlignV = model.AlignTop
+	case math.Abs(ty-(y+h-fontSize)) <= 0.5:
+		cell.AlignV = model.AlignBottom
+	}
 }
 
 // parseRoad handles shape 335 (Дорога/Road): a purely decorative

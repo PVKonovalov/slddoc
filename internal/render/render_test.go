@@ -1039,8 +1039,11 @@ func TestRender_Table(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.Contains(out, `<g id="1" data-type="312" data-name="Note" data-voltage="#952896" data-editor-kind="element">`) {
+	if !strings.Contains(out, `<g id="1" data-type="312" data-name="Note" data-editor-kind="element">`) {
 		t.Errorf("table should carry its own id/data-type/data-name in a wrapping <g>: %s", out)
+	}
+	if strings.Contains(out, "data-voltage") {
+		t.Errorf("a table has no voltage, so no data-voltage: %s", out)
 	}
 	if !strings.Contains(out, `<rect x="10" y="10" width="50" height="30" style="fill:gray;stroke:#952896;stroke-dasharray: 6,5;stroke-width:2" />`) {
 		t.Errorf("table's own rect missing expected geometry/style: %s", out)
@@ -1095,8 +1098,11 @@ func TestRender_Table2(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.Contains(out, `<g id="1" data-type="313" data-name="" data-voltage="#952896" data-editor-kind="element">`) {
+	if !strings.Contains(out, `<g id="1" data-type="313" data-name="" data-editor-kind="element">`) {
 		t.Errorf("table2 should carry its own id/data-type in a wrapping <g>: %s", out)
+	}
+	if strings.Contains(out, "data-voltage") {
+		t.Errorf("a table has no voltage, so no data-voltage: %s", out)
 	}
 	// Cell (0,0): top-left at the table's own X,Y anchor.
 	if !strings.Contains(out, `<path d="M 100 200 h 60 v 20 h -60 v -20 " style="fill:gray;stroke:#952896;stroke-width:1" />`) {

@@ -565,17 +565,8 @@ const (
 	// decorative shape so far, its own geometry isn't Points-based: X/Y is
 	// its own top-left anchor, and RowHeights/ColumnWidths (each row's/
 	// column's own real size) lay out a grid from there — Cells then
-	// places each real cell's own text (and, only when a real extracted
-	// instance sets one, its own Fill/TextColor override — see TableCell's
-	// own doc comment) at a (Row, Col) position within that grid. The real
-	// source's own cell-merging (one cell spanning several grid positions
-	// at once) is deliberately not modeled — a real instance using it
-	// still extracts, its own would-be-merged cells just render as
-	// separate ones instead of one wide/tall cell, the same kind of
-	// partial-fidelity tradeoff already made for a few other shapes (e.g.
-	// ClassCableConnector's own unmodeled CustomView variant) — nor is a
-	// cell's own real multi-paragraph text (the real source's own literal
-	// "#x9" newline-split), reduced here to a single line per cell.
+	// places each cell (text, colors, font, alignment and merge span — see
+	// TableCell) at a (Row, Col) position within that grid.
 	// Reuses Stroke/StrokeWidth/LineStyle for the grid's own line color/
 	// thickness/dash (LineStyle resolved through its own real dash value,
 	// different from every other consumer's — see writeTable2) and Fill
@@ -605,29 +596,44 @@ const (
 	ClassStaticVarCompensator Class = "StaticVarCompensator"
 )
 
-// TableCell is one real cell of a Table2 (shape 313) grid — see
-// ClassTable2's own doc comment for what this schema does and doesn't
-// model of the real shape. Row/Col are 0-based grid positions (matching
-// however many entries RowHeights/ColumnWidths respectively give the
-// owning Element); a (Row, Col) with no corresponding TableCell entry at
-// all is simply not drawn, rather than defaulting to an empty cell — real
-// corpus tables are usually, but not always, a fully-populated rectangle.
+// TableCell is one cell of a Table2 (shape 313) grid. Row/Col are its 0-based top-left grid position. A merged cell
+// spans RowSpan rows and ColSpan columns (0 means 1); the positions it covers have no TableCell of their own, as does a
+// position that isn't drawn at all.
 type TableCell struct {
-	Row int `xml:"row,attr" json:"row"`
-	Col int `xml:"col,attr" json:"col"`
-	// Text is this cell's own content, reduced to a single line — see
-	// ClassTable2's own doc comment for why a real multi-paragraph cell
-	// isn't modeled.
+	Row     int `xml:"row,attr" json:"row"`
+	Col     int `xml:"col,attr" json:"col"`
+	RowSpan int `xml:"rowSpan,attr,omitempty" json:"rowSpan,omitempty"`
+	ColSpan int `xml:"colSpan,attr,omitempty" json:"colSpan,omitempty"`
+	// Text is the cell's content; "\n" separates lines.
 	Text string `xml:"text,attr,omitempty" json:"text,omitempty"`
-	// Fill overrides the owning Element's own Fill (its table-wide default
-	// cell background) for this one cell — empty means "use the table's
-	// own default", matching the real source's own cell.GridProp.BGColor-
-	// falls-back-to-sde.BGColor convention exactly.
+	// Fill overrides the table's Fill for this cell; empty uses the table's.
 	Fill string `xml:"fill,attr,omitempty" json:"fill,omitempty"`
-	// TextColor overrides this cell's own text color; empty falls back to
-	// black, the real source's own default when a cell sets no color of
-	// its own.
+	// TextColor is the text color; empty means black.
 	TextColor string `xml:"textColor,attr,omitempty" json:"textColor,omitempty"`
+	// FontSize is the text size in px; 0 means TableCellFontSize.
+	FontSize  float64 `xml:"fontSize,attr,omitempty" json:"fontSize,omitempty"`
+	Bold      bool    `xml:"bold,attr,omitempty" json:"bold,omitempty"`
+	Italic    bool    `xml:"italic,attr,omitempty" json:"italic,omitempty"`
+	Underline bool    `xml:"underline,attr,omitempty" json:"underline,omitempty"`
+	// AlignH is "left", "right" or empty (center); AlignV is "top", "bottom" or empty (middle).
+	AlignH string `xml:"alignH,attr,omitempty" json:"alignH,omitempty"`
+	AlignV string `xml:"alignV,attr,omitempty" json:"alignV,omitempty"`
+}
+
+// TableCellFontSize is a table cell's default text size in px: Modus's default 8 pt scaled by xsde2svg's 1.4.
+const TableCellFontSize = 11
+
+// Table cell text alignments.
+const (
+	AlignLeft   = "left"
+	AlignRight  = "right"
+	AlignTop    = "top"
+	AlignBottom = "bottom"
+)
+
+// Spans returns the cell's row and column span, at least 1 each.
+func (c TableCell) Spans() (rows, cols int) {
+	return max(c.RowSpan, 1), max(c.ColSpan, 1)
 }
 
 // Element is one placed piece of equipment.

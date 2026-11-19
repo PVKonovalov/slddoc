@@ -522,16 +522,23 @@ The `ratedU` … `phaseAngleClock` rows are nameplate parameters (CIM `PowerTran
   <rows><row>20</row><row>20</row></rows>
   <columns><column>80</column><column>40</column></columns>
   <cells>
-    <cell row="0" col="0" text="P, MW"/>
+    <cell row="0" col="0" text="P, MW" bold="true" alignH="left"/>
     <cell row="0" col="1" text="12.5" fill="yellow" textColor="red"/>
+    <cell row="1" col="0" colSpan="2" text="Line 1&#xA;Line 2" fontSize="14"/>
   </cells>
 </element>
 ```
 
 - `<row>` / `<column>` hold each row height / column width.
-- `<cell>`: `row`, `col` (0-based), `text` (single line), optional `fill` and
-  `textColor` overrides. A grid position with no `<cell>` is not drawn.
-- Cell merging is not modeled.
+- `<cell>`: `row`, `col` (0-based top-left position), `text` (lines separated
+  by a line break, `&#xA;`), optional `fill` and `textColor` (default black).
+- `rowSpan` / `colSpan` (default 1) merge the cell with its neighbours below /
+  to the right; the positions a merged cell covers have no `<cell>`. A grid
+  position with no `<cell>` is not drawn.
+- Font: `fontSize` in px (default 11, Modus's 8 pt × 1.4 as in xsde2svg),
+  `bold`, `italic`, `underline` (`true`/absent).
+- Alignment: `alignH` `left` / `right` (default center), `alignV` `top` /
+  `bottom` (default middle). Text with several lines always starts at the top.
 
 ### 6.6 Electrical parameters — `<electrical>`
 

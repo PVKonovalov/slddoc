@@ -1700,7 +1700,7 @@ func writeTable(w io.Writer, e model.Element, mode RenderMode) {
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"312\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, esc(e.Name), esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"312\" data-name=\"%s\"%s>\n", e.ID, esc(e.Name), editorAttr)
 	fmt.Fprintf(w, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" style=\"fill:%s;stroke:%s;%sstroke-width:%s\" />\n",
 		model.FmtNum(x), model.FmtNum(y), model.FmtNum(width), model.FmtNum(height), esc(fill), esc(stroke), dash, model.FmtNum(strokeWidth))
 	if e.PropertyText != "" {
@@ -1715,11 +1715,6 @@ func writeTable(w io.Writer, e model.Element, mode RenderMode) {
 	fmt.Fprint(w, "</g>\n")
 }
 
-// tableCellFontSize is a Table2's (313) own per-cell text size — fixed,
-// not per-instance, the same simplification tableFontSize/buttonFontSize
-// already make.
-const tableCellFontSize = 11
-
 // table2DashPatterns maps a Table2's (313) own LineStyle to its real
 // stroke-dasharray value, matching xsde2svg's own line-style switch
 // (internal/modus/element_313.go's own single "пунктирная" case) — unlike
@@ -1732,24 +1727,9 @@ var table2DashPatterns = map[model.ConnectorLineStyle]string{
 	model.LineStyleDashed: "stroke-dasharray: 3,2;",
 }
 
-// WriteTable2 draws a Table2 (shape 313) as a grid of individually-drawn
-// bare <path> cells (each a closed rectangle, matching the real source's
-// own canvas.Path M-h-v-h-v convention) inside a wrapping <g id
-// data-type="313"> — see ClassTable2's own doc comment for why that
-// wrapping <g> exists at all (this project's own request, since a real
-// cell carries no id/grouping of its own). Cumulative sums of
-// RowHeights/ColumnWidths (from the table's own X,Y top-left anchor) place
-// each cell; a (Row, Col) with no entry in Cells at all, or one naming a
-// row/column index out of range, is simply not drawn (see TableCell's own
-// doc comment). Each cell's own Fill falls back to the table-wide Fill
-// (itself falling back to "white", the real source's own default when
-// neither a cell nor the table sets one); Stroke/StrokeWidth/LineStyle are
-// shared by every cell (the real source's own rare per-cell override of
-// stroke width/style isn't modeled). cell.Text, when set, draws centered
-// in its own cell in cell.TextColor (falling back to black, the real
-// source's own default). A Table2 with no RowHeights or no ColumnWidths
-// draws nothing, the same "not enough geometry" treatment writeRectangle/
-// writeTable give too few Points.
+// WriteTable2 draws a Table2 (shape 313) as xsde2svg does: a <g id data-type="313"> holding one closed <path> per
+// cell (a merged cell is one path over its whole span) followed by the cell's <text>, if any. Cells outside the grid
+// are skipped; a Table2 without rows or columns draws nothing.
 func WriteTable2(w io.Writer, e model.Element, mode RenderMode) {
 	if len(e.RowHeights) == 0 || len(e.ColumnWidths) == 0 {
 		return
@@ -1769,11 +1749,6 @@ func WriteTable2(w io.Writer, e model.Element, mode RenderMode) {
 		defaultFill = "white"
 	}
 
-	// rowY[i]/colX[j] is row i's/column j's own top/left edge, relative to
-	// the table's own X,Y anchor — cumulative sums of RowHeights/
-	// ColumnWidths, one entry longer than each so a cell's own bottom/
-	// right edge is always rowY[i+1]/colX[j+1] without a separate bounds
-	// check.
 	rowY := make([]float64, len(e.RowHeights)+1)
 	for i, h := range e.RowHeights {
 		rowY[i+1] = rowY[i] + h
@@ -1787,15 +1762,18 @@ func WriteTable2(w io.Writer, e model.Element, mode RenderMode) {
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"313\" data-name=\"%s\" data-voltage=\"%s\"%s>\n", e.ID, esc(e.Name), esc(stroke), editorAttr)
+	fmt.Fprintf(w, "<g id=\"%d\" data-type=\"313\" data-name=\"%s\"%s>\n", e.ID, esc(e.Name), editorAttr)
 	for _, cell := range e.Cells {
 		if cell.Row < 0 || cell.Row >= len(e.RowHeights) || cell.Col < 0 || cell.Col >= len(e.ColumnWidths) {
 			continue
 		}
+		rows, cols := cell.Spans()
+		lastRow := min(cell.Row+rows, len(e.RowHeights))
+		lastCol := min(cell.Col+cols, len(e.ColumnWidths))
 		x := e.X + colX[cell.Col]
 		y := e.Y + rowY[cell.Row]
-		cw := colX[cell.Col+1] - colX[cell.Col]
-		ch := rowY[cell.Row+1] - rowY[cell.Row]
+		cw := colX[lastCol] - colX[cell.Col]
+		ch := rowY[lastRow] - rowY[cell.Row]
 
 		fill := cell.Fill
 		if fill == "" {
@@ -1804,17 +1782,66 @@ func WriteTable2(w io.Writer, e model.Element, mode RenderMode) {
 		style := fmt.Sprintf("fill:%s;stroke:%s;%sstroke-width:%s", fill, stroke, dash, model.FmtNum(strokeWidth))
 		path := fmt.Sprintf("M %s %s h %s v %s h %s v %s ", model.FmtNum(x), model.FmtNum(y), model.FmtNum(cw), model.FmtNum(ch), model.FmtNum(-cw), model.FmtNum(-ch))
 		fmt.Fprintf(w, "<path d=\"%s\" style=\"%s\" />\n", path, style)
-
-		if cell.Text != "" {
-			textColor := cell.TextColor
-			if textColor == "" {
-				textColor = "black"
-			}
-			textStyle := fmt.Sprintf("fill:%s;text-anchor:middle;dominant-baseline:middle;font-size:%dpx;font-family:Arial", textColor, tableCellFontSize)
-			fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s</text>\n", model.FmtNum(x+cw/2), model.FmtNum(y+ch/2), textStyle, esc(cell.Text))
-		}
+		writeTableCellText(w, cell, x, y, cw, ch)
 	}
 	fmt.Fprint(w, "</g>\n")
+}
+
+// writeTableCellText draws cell's text in the box x, y, cw, ch, placed as xsde2svg's TableCaption does: 2 px in from
+// the left/right edge, one font size in from the top/bottom edge; several lines start at the top and share the
+// height equally.
+func writeTableCellText(w io.Writer, cell model.TableCell, x, y, cw, ch float64) {
+	if cell.Text == "" {
+		return
+	}
+	color := cell.TextColor
+	if color == "" {
+		color = "black"
+	}
+	fontSize := cell.FontSize
+	if fontSize <= 0 {
+		fontSize = model.TableCellFontSize
+	}
+
+	anchor, tx := "middle", x+cw/2
+	switch cell.AlignH {
+	case model.AlignLeft:
+		anchor, tx = "start", x+2
+	case model.AlignRight:
+		anchor, tx = "end", x+cw-2
+	}
+	ty := y + ch/2
+	switch cell.AlignV {
+	case model.AlignTop:
+		ty = y + fontSize
+	case model.AlignBottom:
+		ty = y + ch - fontSize
+	}
+	lines := strings.Split(cell.Text, "\n")
+	if len(lines) > 1 {
+		ty = y + fontSize
+	}
+
+	fontStyle := ""
+	if cell.Bold {
+		fontStyle += ";font-weight: bold"
+	}
+	if cell.Underline {
+		fontStyle += ";text-decoration: underline"
+	}
+	if cell.Italic {
+		fontStyle += ";font-style:italic"
+	}
+	style := fmt.Sprintf("fill:%s;text-anchor:%s;dominant-baseline:middle;font-size:%spx;font-family:Arial%s", esc(color), anchor, model.FmtNum(fontSize), fontStyle)
+	fmt.Fprintf(w, "<text x=\"%s\" y=\"%s\" style=\"%s\">%s", model.FmtNum(tx), model.FmtNum(ty), style, esc(lines[0]))
+	step := math.Floor(ch / float64(len(lines)))
+	for _, line := range lines[1:] {
+		if line == "" {
+			line = " "
+		}
+		fmt.Fprintf(w, "<tspan style=\"%s\" x=\"%s\" dy=\"%s\">%s</tspan>", style, model.FmtNum(tx), model.FmtNum(step), esc(line))
+	}
+	fmt.Fprint(w, "</text>\n")
 }
 
 // writeRoad draws a Road (shape 335) as a single flat <polyline>, matching

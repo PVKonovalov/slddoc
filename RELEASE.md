@@ -2,6 +2,12 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-19: Render: Table (312) and Table2 (313) drop `data-voltage` from their `<g>` (a table has no voltage); the render tests check that a table has none.
+
+2026-11-19: Table2: `TableCell` gets `RowSpan`/`ColSpan` (merged cells), multi-line `Text`, `FontSize`, `Bold`, `Italic`, `Underline`, `AlignH`/`AlignV` (`TableCellFontSize`, `Spans`). `WriteTable2` draws a merged cell as one path and places the text as xsde2svg's element_313/TableCaption do (lines as `<tspan>`s); `parseTable2` reads them all back. Both test tables (merges in every direction, all alignments, bold sizes) now give xsde2svg's markup exactly. `XSLD_FORMAT.md` §6.5 updated; new `table2_test.go`.
+
+2026-11-19: Extract: an Arrow (2) whose path comes back to its start point (the starting chevron of a double-headed arrow, as xsde2svg and `writeArrow` draw it) gets `DoubleHeaded`; before, it was never set. New `arrow_test.go`.
+
 2026-11-18: Export statuses: `Binding.Status` (`new`/`edited`), `ComponentEdited` on elements, connectors, labels and
 digital devices and `Diagram.DeletedBindings` (`<deletedBindings><deleted item source kind ref/>`), saved in `.xsld`
 and checked by `ValidateBindings`; the editor uses them to export only what changed.
