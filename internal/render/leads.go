@@ -40,7 +40,7 @@ func HasLeads(shape string) bool {
 
 // sizeStepRange is the size steps Extract considers (the editor's own
 // selector offers the same).
-const MinSizeStep, MaxSizeStep = -2, 4
+const MinSizeStep, MaxSizeStep = -2, 5
 
 // leadExtension is the extra path a lead shape with a Span draws from its
 // template's own terminals (0,±terminal) out to (0,±Span/2), in the

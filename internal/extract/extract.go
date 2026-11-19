@@ -298,6 +298,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 	var cur *svgtree.RawNode
 	addElement := func(el model.Element, ports []model.Point, voltage string) {
 		inferLeads(&el, cur, ports)
+		applySourceAttrs(&el, cur)
 		el.Group = parseGroup(cur)
 		colors = append(colors, voltage)
 		elementVoltage = append(elementVoltage, voltage)

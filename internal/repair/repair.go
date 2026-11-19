@@ -24,7 +24,7 @@ const (
 )
 
 // SizeSteps are the size steps the editor offers and InferSizeSteps tries.
-var SizeSteps = []int{-2, -1, 0, 1, 2, 3, 4}
+var SizeSteps = []int{-2, -1, 0, 1, 2, 3, 4, 5}
 
 // legacyTerminals are the local terminal positions base.xml used before they were snapped to the 10-grid, by shape.
 var legacyTerminals = map[string][]model.Point{

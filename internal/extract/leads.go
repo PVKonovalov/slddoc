@@ -47,7 +47,7 @@ func bodyHalfLength(n *svgtree.RawNode, anchor model.Point) (float64, bool) {
 	return best, found
 }
 
-// inferLeads sets a lead shape's Scale from its drawn body and its Span from
+// inferLeads sets a lead shape's Scale from data-scale or its drawn body and its Span from
 // its two port points (left 0 when that is just the library's own spacing at
 // that step). n is the element's source markup.
 func inferLeads(el *model.Element, n *svgtree.RawNode, ports []model.Point) {
@@ -55,7 +55,9 @@ func inferLeads(el *model.Element, n *svgtree.RawNode, ports []model.Point) {
 	if !ok || len(ports) != 2 || n == nil {
 		return
 	}
-	if h, ok := bodyHalfLength(n, model.Point{X: el.X, Y: el.Y}); ok && h > 0 {
+	if step, ok := sourceScale(n); ok {
+		el.Scale = step
+	} else if h, ok := bodyHalfLength(n, model.Point{X: el.X, Y: el.Y}); ok && h > 0 {
 		step := int(math.Round(2 * math.Log2(h/ls.BodyHalf)))
 		el.Scale = min(max(step, render.MinSizeStep), render.MaxSizeStep)
 	}

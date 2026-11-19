@@ -1771,9 +1771,12 @@ func parsePowerTransformer(n *svgtree.RawNode) (model.Element, []model.Point, []
 			break
 		}
 	}
-	step := transformerSizeStep(circles[0].radius)
-	mirror := false
-	if !autotransformer {
+	step, scaled := sourceScale(n)
+	if !scaled {
+		step = transformerSizeStep(circles[0].radius)
+	}
+	mirror := sourceMirror(n)
+	if !mirror && !autotransformer {
 		mirror = transformerDrawnMirrored(circles[0].center.X, circles[1].center.X, circles[len(circles)-1].center.X, len(circles))
 	}
 	if !hasRotate {
