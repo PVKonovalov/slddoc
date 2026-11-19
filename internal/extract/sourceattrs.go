@@ -9,10 +9,10 @@ import (
 
 // sourceMirrorShapes are the shapes whose Mirror is xsde2svg's xMirror: drawn as the same symbol flipped about its
 // axis, checked against xsde2svg's drawing. Another shape's xMirror is ignored by xsde2svg, drawn differently
-// (Thyristor 157 turns half size) or not checked yet (51, 173, 360, 397).
+// (Thyristor 157 turns half size) or not checked yet (173, 360, 397).
 var sourceMirrorShapes = map[string]bool{
 	"19": true, "29": true, "32": true, "33": true, "34": true, "37": true, "38": true, "43": true, "47": true,
-	"50": true, "163": true, "164": true, "166": true, "168": true, "398": true, "399": true,
+	"50": true, "51": true, "163": true, "164": true, "166": true, "168": true, "398": true, "399": true,
 }
 
 // sourceScale reads the size step xsde2svg writes on an element's node (data-scale, since 1.4.28), clamped to the

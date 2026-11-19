@@ -551,8 +551,26 @@ func parseTwoPortDevice(n *svgtree.RawNode, class model.Class, shape string) (mo
 	}
 	if shape == "154" {
 		readWithdrawableFuse(&el, n, [2]model.Point{p1, p2}, anchor)
+	} else {
+		el.Position = parsePosition(n)
+	}
+	if shape == "51" && el.Position != nil && *el.Position == trolleyService {
+		el.Mirror = chassisRackedOutLeft(n, anchor)
 	}
 	return el, ports, voltage, nil
+}
+
+// chassisRackedOutLeft tells whether a Chassis (51) racked out to Service has its body (the path with data-trolley)
+// shifted to the -x side of anchor in its unrotated frame, as xsde2svg draws it mirrored.
+func chassisRackedOutLeft(n *svgtree.RawNode, anchor model.Point) bool {
+	for _, p := range elementPaths(n) {
+		if p.Attr("data-trolley") == "" {
+			continue
+		}
+		subs, err := model.ParseSubpaths(p.Attr("d"))
+		return err == nil && len(subs) > 0 && len(subs[0]) > 0 && subs[0][0].X < anchor.X-0.5
+	}
+	return false
 }
 
 // mirrorSides is, for each two-port shape drawn lopsided, the side of its axis its unmirrored drawing leans to (-1

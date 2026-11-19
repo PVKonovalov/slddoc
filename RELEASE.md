@@ -2,6 +2,8 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-19: Extract: every two-terminal device reads `Position` from `data-trolley` (was only a withdrawable fuse); a Chassis (51) racked out to Service is `Mirror` when its body is shifted to -x (`chassisRackedOutLeft`), and 51 joins `sourceMirrorShapes`. New `chassis_test.go`.
+
 2026-11-19: Extract reads `Scale` from xsde2svg's `data-scale` and `Mirror` from `data-mirror` (1.4.28) for every element (`applySourceAttrs`; mirroring only for the shapes in `sourceMirrorShapes`); a lead shape and a power transformer use them before their drawing. `MaxSizeStep` and `SizeSteps` go up to 5. New `sourceattrs_test.go`.
 
 2026-11-19: Power transformer (47): `UsesSizeStep` now includes it; Render draws it at its size step (`scale()`, stroke widths kept), keeps the winding marks and the regulation arrow unmirrored as xsde2svg does, and puts the arrow in a `<g data-tap-changer>`; `SymbolTerminals` scales its terminals. Extract reads `Scale` (circle radius, Scale(s, 22), or `scale()`), `Mirror` (winding layout, or `scale(-1,1)`), each winding's `Terminal` when not the default, and `TapChanger` (`data-tap-changer`, or an older xsde2svg's loose arrow after the group: winding 1); the anchor of an unrotated one accounts for size and mirroring. New `transformer_size_test.go`.
