@@ -27,18 +27,28 @@ func readWithdrawableFuse(el *model.Element, n *svgtree.RawNode, tips [2]model.P
 		el.Position = fusePositionFromDrawing(n, anchor)
 	}
 
-	if ops, err := render.ParseTransformList(n.Attr("transform")); err == nil {
-		for _, op := range ops {
-			if op.Name == "scale" && len(op.Args) == 1 && op.Args[0] > 0 {
-				el.Scale = clampStep(int(math.Round(2 * math.Log2(op.Args[0]))))
-				return
-			}
-		}
+	if step, ok := transformSizeStep(n.Attr("transform")); ok {
+		el.Scale = step
+		return
 	}
 	half := math.Hypot(tips[1].X-tips[0].X, tips[1].Y-tips[0].Y) / 2
 	if half > 0 {
 		el.Scale = clampStep(int(math.Round(2 * math.Log2(half/fuseTipHalf))))
 	}
+}
+
+// transformSizeStep reads the size step of a scale(f) in transform, as this editor writes it.
+func transformSizeStep(transform string) (int, bool) {
+	ops, err := render.ParseTransformList(transform)
+	if err != nil {
+		return 0, false
+	}
+	for _, op := range ops {
+		if op.Name == "scale" && len(op.Args) == 1 && op.Args[0] > 0 {
+			return clampStep(int(math.Round(2 * math.Log2(op.Args[0])))), true
+		}
+	}
+	return 0, false
 }
 
 func clampStep(step int) int {

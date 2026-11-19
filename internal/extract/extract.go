@@ -2,6 +2,7 @@ package extract
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/PVKonovalov/slddoc/internal/model"
@@ -973,6 +974,12 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 				report.Failed = append(report.Failed, n.Attr("id"))
 				addMissingLabel(d, n, dt)
 				continue
+			}
+			if i+2 < len(root.Children) && looseRegulationArrow(root.Children[i+1], root.Children[i+2], n) {
+				consumed[i+1], consumed[i+2] = true, true
+				if !slices.ContainsFunc(el.Windings, func(w model.TransformerWinding) bool { return w.TapChanger }) && len(el.Windings) > 0 {
+					el.Windings[0].TapChanger = true
+				}
 			}
 			idx := len(d.Elements)
 			addElement(el, ports, "")

@@ -1633,9 +1633,11 @@ func parseVoltageTransformer(n *svgtree.RawNode) (model.Element, []model.Point, 
 // subpath, four points, closed" shape a delta glyph has) from being
 // misread as some winding's own delta scheme.
 //
-// Known gaps, not yet recovered from rendered geometry at all: which
-// winding (if any) has TapChanger set (the regulation arrow's own
-// presence/color don't reliably tie back to one specific winding), a
+// Mirror, Scale, each winding's lead side (Terminal, when not the default)
+// and TapChanger (data-tap-changer; an older xsde2svg's loose arrow after
+// the group marks winding 1, see looseRegulationArrow) are read too.
+//
+// Known gaps, not yet recovered from rendered geometry at all: a
 // winding's own NeutralGrounding (real xsde2svg's "neutral_ground"
 // WindingType — a distinct, more complex glyph than plain wye-with-neutral
 // — isn't pattern-matched here, so a grounded winding is read back as
@@ -1769,9 +1771,33 @@ func parsePowerTransformer(n *svgtree.RawNode) (model.Element, []model.Point, []
 			break
 		}
 	}
+	step := transformerSizeStep(circles[0].radius)
+	mirror := false
+	if !autotransformer {
+		mirror = transformerDrawnMirrored(circles[0].center.X, circles[1].center.X, circles[len(circles)-1].center.X, len(circles))
+	}
 	if !hasRotate {
 		off0X, off0Y := render.Xsde2svgWindingZeroOffset(len(circles))
+		off0X, off0Y = model.ScaledLength(off0X, step), model.ScaledLength(off0Y, step)
+		if mirror {
+			off0X = -off0X
+		}
 		center = model.Point{X: circles[0].center.X - off0X, Y: circles[0].center.Y - off0Y}
+	}
+	for ci, circ := range circles {
+		dir := leadDirection(circ.center, leadFor[ci].end, mirror)
+		if dir != render.DefaultTerminal(len(circles), ci) {
+			windings[ci].Terminal = dir
+		}
+	}
+	if k, err := strconv.Atoi(n.FirstAttrDescendant("data-tap-changer")); err == nil && k >= 0 && k < len(windings) {
+		windings[k].TapChanger = true
+	}
+	if s, ok := transformSizeStep(n.Attr("transform")); ok {
+		step = s
+	}
+	if strings.Contains(n.Attr("transform"), "scale(-1") {
+		mirror = !mirror
 	}
 	// A transformer's own anchor and each winding's own lead tip are
 	// snapped to this editor's own 10-unit default grid (EditorSettings'
@@ -1806,10 +1832,87 @@ func parsePowerTransformer(n *svgtree.RawNode) (model.Element, []model.Point, []
 		X:               center.X,
 		Y:               center.Y,
 		Orient:          angle,
+		Mirror:          mirror,
+		Scale:           step,
 		Ports:           ports,
 		Autotransformer: autotransformer,
 		Windings:        windings,
 	}, globalPorts, colors, nil
+}
+
+// transformerSizeStep is the size step at which xsde2svg draws a winding circle of radius r (Scale(s, 22)), 0 when
+// none matches (a Size preset).
+func transformerSizeStep(r float64) int {
+	for s := render.MinSizeStep; s <= render.MaxSizeStep; s++ {
+		if model.ScaledLength(render.TransformerRadius, s) == r {
+			return s
+		}
+	}
+	return 0
+}
+
+// transformerDrawnMirrored tells whether a transformer of count windings is drawn mirrored (xsde2svg's xMirror), from
+// the x of its first, second and last winding circles in its unrotated frame: unmirrored, the first winding of two,
+// the second of three and the last of four sit on the +x side of their pair.
+func transformerDrawnMirrored(first, second, last float64, count int) bool {
+	switch count {
+	case 2:
+		return first < second
+	case 3:
+		return second < last
+	case 4:
+		return last < second
+	}
+	return false
+}
+
+// leadDirection is the side of its circle (center c) a winding's lead ending at end leaves from, in the transformer's
+// own local frame: left and right swap when the drawing is mirrored.
+func leadDirection(c, end model.Point, mirror bool) model.TerminalDirection {
+	dx, dy := end.X-c.X, end.Y-c.Y
+	if math.Abs(dx) <= math.Abs(dy) {
+		if dy > 0 {
+			return model.TerminalBottom
+		}
+		return model.TerminalTop
+	}
+	if (dx > 0) != mirror {
+		return model.TerminalRight
+	}
+	return model.TerminalLeft
+}
+
+// looseRegulationArrow tells whether line and head, the two nodes right after transformer group g, are the regulation
+// arrow an older xsde2svg draws outside the group: an untyped diagonal line "M x y l a -a" centered on the
+// transformer's anchor (the rotate() center, or the middle of its circles), then its closed head.
+func looseRegulationArrow(line, head, g *svgtree.RawNode) bool {
+	if line.Tag != "path" || head.Tag != "path" || line.Attr("data-type") != "" || head.Attr("data-type") != "" ||
+		!strings.ContainsAny(head.Attr("d"), "zZ") {
+		return false
+	}
+	subs, err := model.ParseSubpaths(line.Attr("d"))
+	if err != nil || len(subs) != 1 || len(subs[0]) != 2 {
+		return false
+	}
+	a, b := subs[0][0], subs[0][1]
+	if dx, dy := b.X-a.X, b.Y-a.Y; dx <= 0 || math.Abs(dx+dy) > 0.5 {
+		return false
+	}
+	mid := model.Point{X: (a.X + b.X) / 2, Y: (a.Y + b.Y) / 2}
+	if _, c, ok := parseRotate(g.Attr("transform")); ok {
+		return distance(mid, c) <= 1
+	}
+	var minX, minY, maxX, maxY float64
+	first := true
+	for _, c := range g.ChildrenTagged("circle") {
+		cx, _ := strconv.ParseFloat(c.Attr("cx"), 64)
+		cy, _ := strconv.ParseFloat(c.Attr("cy"), 64)
+		if first {
+			minX, minY, maxX, maxY, first = cx, cy, cx, cy, false
+		}
+		minX, minY, maxX, maxY = min(minX, cx), min(minY, cy), max(maxX, cx), max(maxY, cy)
+	}
+	return !first && mid.X >= minX && mid.X <= maxX && mid.Y >= minY && mid.Y <= maxY
 }
 
 // extractGridSpacing is the fixed grid snapPointToGrid rounds a

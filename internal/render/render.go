@@ -2921,7 +2921,8 @@ func writeAutotransformerTap(w io.Writer, cx, cy float64, color string) (float64
 // writePowerTransformer draws a PowerTransformer element (shape 47): one
 // circle per winding (e.Windings, in order), each with its own lead,
 // connection-scheme glyph, and (wye-with-neutral only) grounding mark; one
-// diagonal regulation arrow, centered on the element's own anchor, for
+// diagonal regulation arrow (in a <g data-tap-changer="winding index">, as
+// xsde2svg draws it), centered on the element's own anchor, for
 // whichever winding has TapChanger set (matching real xsde2svg's own
 // "last one wins" behavior when more than one winding requests it — see
 // TransformerWinding.TapChanger's own doc comment); and, when
@@ -2947,7 +2948,10 @@ func writePowerTransformer(w io.Writer, e model.Element, voltageColor map[int]st
 		attrs = " data-type=\"47\""
 	}
 	fmt.Fprintf(w, "<g id=\"%d\" data-name=\"%s\"%s transform=\"translate(%s,%s) rotate(%d)%s\">\n",
-		e.ID, esc(e.Name), attrs, model.FmtNum(e.X), model.FmtNum(e.Y), e.Orient, mirrorScale(e.Mirror))
+		e.ID, esc(e.Name), attrs, model.FmtNum(e.X), model.FmtNum(e.Y), e.Orient, mirrorScale(e.Mirror)+model.SizeStepScale(e))
+	out := w
+	var body bytes.Buffer
+	w = &body
 
 	for i := range count {
 		var winding model.TransformerWinding
@@ -2985,7 +2989,10 @@ func writePowerTransformer(w io.Writer, e model.Element, voltageColor map[int]st
 		if winding.Scheme == model.SchemeWyeN {
 			writeGroundingMark(&glyph, cx, cy, winding.Grounding, color)
 		}
-		if glyph.Len() > 0 && e.Orient != 0 {
+		if glyph.Len() > 0 && e.Mirror {
+			fmt.Fprintf(w, "<g transform=\"translate(%s,%s) scale(-1,1) rotate(%d) translate(%s,%s)\">\n%s</g>\n",
+				model.FmtNum(cx), model.FmtNum(cy), -e.Orient, model.FmtNum(-cx), model.FmtNum(-cy), glyph.String())
+		} else if glyph.Len() > 0 && e.Orient != 0 {
 			fmt.Fprintf(w, "<g transform=\"rotate(%d,%s,%s)\">\n%s</g>\n", -e.Orient, model.FmtNum(cx), model.FmtNum(cy), glyph.String())
 		} else {
 			w.Write(glyph.Bytes())
@@ -2996,8 +3003,10 @@ func writePowerTransformer(w io.Writer, e model.Element, voltageColor map[int]st
 	}
 
 	regulatedColor := ""
+	regulated := 0
 	for i := 0; i < count && i < len(e.Windings); i++ {
 		if e.Windings[i].TapChanger {
+			regulated = i
 			regulatedColor = voltageColor[e.Windings[i].Voltage]
 			if regulatedColor == "" {
 				regulatedColor = fallbackColor
@@ -3009,8 +3018,14 @@ func writePowerTransformer(w io.Writer, e model.Element, voltageColor map[int]st
 		endStyle := fmt.Sprintf("fill:%s;stroke:%s;stroke-width:1", esc(regulatedColor), esc(regulatedColor))
 		x0, y0 := -transformerArrowSize-transformerArrowShift, transformerArrowSize+transformerArrowShift
 		x1, y1 := transformerArrowSize+transformerArrowShift, -(transformerArrowSize + transformerArrowShift)
+		mirror := ""
+		if e.Mirror {
+			mirror = " transform=\"scale(-1,1)\""
+		}
+		fmt.Fprintf(w, "<g data-tap-changer=\"%d\"%s>\n", regulated, mirror)
 		fmt.Fprintf(w, "<path d=\"M %s %s L %s %s\" style=\"%s\" />\n", model.FmtNum(float64(x0)), model.FmtNum(float64(y0)), model.FmtNum(float64(x1)), model.FmtNum(float64(y1)), style)
 		fmt.Fprintf(w, "<path d=\"M %s %s l -5 -5 l 7 -2 z\" style=\"%s\" />\n", model.FmtNum(float64(x1)+3), model.FmtNum(float64(y1)+2), endStyle)
+		fmt.Fprint(w, "</g>\n")
 	}
 
 	if e.VectorGroupLabel != "" {
@@ -3024,7 +3039,12 @@ func writePowerTransformer(w io.Writer, e model.Element, voltageColor map[int]st
 			vectorGroupLabelOffset, esc(fallbackColor), esc(e.VectorGroupLabel))
 	}
 
-	fmt.Fprint(w, "</g>\n")
+	if e.Scale != 0 {
+		io.WriteString(out, model.SizeStepTemplate(body.String(), model.SizeFactor(e.Scale)))
+	} else {
+		out.Write(body.Bytes())
+	}
+	fmt.Fprint(out, "</g>\n")
 }
 
 // labelTypeCode is a free caption's (Label's) xsde2svg catalog code.

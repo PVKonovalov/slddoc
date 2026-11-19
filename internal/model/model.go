@@ -682,7 +682,8 @@ type Element struct {
 	// Scale is the real xsde2svg per-element size step: every length in
 	// its symbol is Scale(s, v) = int(v·√2^s) of its step-0 value, so each
 	// step is √2 larger (0 = the symbol library's own size). It only
-	// applies to a symbol drawn from its library template (UsesSizeStep);
+	// applies to a symbol drawn from its library template, and to a
+	// PowerTransformer (UsesSizeStep);
 	// Render scales that template about (X,Y), keeping its stroke width,
 	// and a terminal t sits at ScaledTerminal(t, Scale).
 	Scale int `xml:"scale,attr,omitempty" json:"scale,omitempty"`

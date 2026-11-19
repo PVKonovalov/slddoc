@@ -49,7 +49,7 @@ func ScaledTerminal(t Point, step int) Point {
 // CustomDrawnClasses are the classes Render draws with dedicated code
 // rather than their symbol library template (renderElementLocal's own
 // early returns). Their geometry has its own size fields, so Scale doesn't
-// apply to them.
+// apply to them, except to a PowerTransformer (see UsesSizeStep).
 var CustomDrawnClasses = map[Class]bool{
 	ClassBusBarSection:      true,
 	ClassPowerTransformer:   true,
@@ -81,7 +81,7 @@ var CustomDrawnClasses = map[Class]bool{
 // UsesSizeStep reports whether Element.Scale applies to class c: true for
 // every class drawn from its symbol library template.
 func UsesSizeStep(c Class) bool {
-	return !CustomDrawnClasses[c]
+	return !CustomDrawnClasses[c] || c == ClassPowerTransformer
 }
 
 var strokeWidthRe = regexp.MustCompile(`(stroke-width\s*[:=]\s*"?)([0-9]*\.?[0-9]+)`)

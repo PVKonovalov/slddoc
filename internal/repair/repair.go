@@ -526,10 +526,10 @@ func SymbolTerminals(el *model.Element, terminals map[string][]model.Point) []mo
 				dir = el.Windings[i].Terminal
 			}
 			x, y := render.TransformerLegEndpoint(ox, oy, dir, render.TransformerLeadLength)
-			out = append(out, PlaceLocal(el, model.Point{X: x, Y: y}))
+			out = append(out, PlaceLocal(el, model.ScaledTerminal(model.Point{X: x, Y: y}, el.Scale)))
 		}
 		if el.Autotransformer {
-			out = append(out, PlaceLocal(el, model.Point{X: 0, Y: render.TransformerTapOffsetY}))
+			out = append(out, PlaceLocal(el, model.ScaledTerminal(model.Point{X: 0, Y: render.TransformerTapOffsetY}, el.Scale)))
 		}
 		return out
 	}

@@ -35,15 +35,18 @@ func TestRenderSizeStep(t *testing.T) {
 }
 
 func TestSizeStepIgnoredByCustomDrawnClasses(t *testing.T) {
-	if model.UsesSizeStep(model.ClassPowerTransformer) || model.UsesSizeStep(model.ClassBusBarSection) {
-		t.Error("custom-drawn classes must not use a size step")
+	if model.UsesSizeStep(model.ClassBusBarSection) || !model.UsesSizeStep(model.ClassPowerTransformer) {
+		t.Error("custom-drawn classes must not use a size step, except a power transformer")
 	}
 	if !model.UsesSizeStep(model.ClassNonIntersection) || !model.UsesSizeStep(model.ClassThyristor) {
 		t.Error("template classes must use a size step")
 	}
-	// Every custom-drawn class bypasses the template path, so its own
-	// output never carries the size step's scale().
+	// Every custom-drawn class but a power transformer bypasses the template
+	// path, so its own output never carries the size step's scale().
 	for c := range model.CustomDrawnClasses {
+		if c == model.ClassPowerTransformer {
+			continue
+		}
 		d := &model.Diagram{Width: 100, Height: 100, Elements: []model.Element{
 			{ID: 1, Class: c, Shape: "x", X: 10, Y: 10, Scale: 2,
 				Points: []model.Point{{X: 0, Y: 0}, {X: 20, Y: 20}}},
