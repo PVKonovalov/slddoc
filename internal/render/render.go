@@ -214,6 +214,35 @@ func applyTapChanger(tmpl string, on bool) string {
 	})
 }
 
+// terminalRe matches a template's {terminal:top|bottom} placeholder: bottom when the element's Terminal is
+// TerminalBottom, top otherwise.
+var terminalRe = regexp.MustCompile(`\{terminal:([^|}]*)\|([^}]*)\}`)
+
+func applyTerminal(tmpl string, dir model.TerminalDirection) string {
+	return terminalRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		g := terminalRe.FindStringSubmatch(m)
+		if dir == model.TerminalBottom {
+			return g[2]
+		}
+		return g[1]
+	})
+}
+
+// textRe matches a template's {text:default} placeholder: the element's
+// PropertyText, or default when that is empty.
+var textRe = regexp.MustCompile(`\{text:([^}]*)\}`)
+
+// applyText fills tmpl's {text:default} placeholders with text (escaped as
+// SVG text content), falling back to each placeholder's own default.
+func applyText(tmpl, text string) string {
+	return textRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		if text == "" {
+			return textRe.FindStringSubmatch(m)[1]
+		}
+		return textEscaper.Replace(text)
+	})
+}
+
 func applyStateLine(tmpl string, state *int) string {
 	return stateLineRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		g := stateLineRe.FindStringSubmatch(m)
@@ -722,7 +751,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		}
 		return
 	}
-	body := applyStateLine(applyTapChanger(tmpl, e.TapChanger), e.State)
+	body := applyTerminal(applyStateLine(applyTapChanger(tmpl, e.TapChanger), e.State), e.Terminal)
 	// {counterRotate} is the negated Orient — wrapping a template fragment
 	// in <g transform="rotate({counterRotate})"> cancels the outer <g
 	// transform="...rotate(Orient)"> this function itself emits below, so
@@ -751,6 +780,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 	if e.Scale != 0 {
 		body = model.SizeStepTemplate(body, model.SizeFactor(e.Scale))
 	}
+	body = applyText(body, e.PropertyText)
 	// data-editor-kind (this editor's own addition, not part of the
 	// xsde2svg format) is what the frontend hit-tests against — it no
 	// longer pairs with any invisible fixed-radius hit-target geometry
@@ -1217,14 +1247,14 @@ func writePolyline(w io.Writer, id int, kind string, pts []model.Point, color st
 // but a hand-edited or corrupt file could carry one) draws nothing rather
 // than guessing a size.
 func writeRectangle(w io.Writer, e model.Element, mode RenderMode) {
-	writeRect(w, e, mode, "3", "white", e.StrokeWidth, e.RadiusX)
+	writeRect(w, e, mode, "3", "white", containerDashPatterns[e.LineStyle], e.StrokeWidth, e.RadiusX)
 }
 
 // writeSmallWindow draws a Small window (shape 319) as Rectangle's same bare
 // <rect>, with element_319.go's fixed 1px border and gray as the default
 // border color.
 func writeSmallWindow(w io.Writer, e model.Element, mode RenderMode) {
-	writeRect(w, e, mode, "319", "gray", 1, 0)
+	writeRect(w, e, mode, "319", "gray", "", 1, 0)
 }
 
 // writePicture draws a Picture (shape 11). Static is real xsde2svg's own bare
@@ -1264,10 +1294,11 @@ func writePicture(w io.Writer, e model.Element, mode RenderMode) {
 }
 
 // writeRect is writeRectangle/writeSmallWindow's shared writer: code is the
-// data-type, defaultStroke the unset-Stroke fallback, strokeWidth the
+// data-type, defaultStroke the unset-Stroke fallback, dash the border's
+// stroke-dasharray declaration ("" = solid), strokeWidth the
 // border width (0 = 1), radius the corner radius (0 = square, capped at half
 // the shorter side).
-func writeRect(w io.Writer, e model.Element, mode RenderMode, code, defaultStroke string, strokeWidth, radius float64) {
+func writeRect(w io.Writer, e model.Element, mode RenderMode, code, defaultStroke, dash string, strokeWidth, radius float64) {
 	if len(e.Points) < 2 {
 		return
 	}
@@ -1295,8 +1326,8 @@ func writeRect(w io.Writer, e model.Element, mode RenderMode, code, defaultStrok
 	if mode == Interactive {
 		editorAttr = " data-editor-kind=\"element\""
 	}
-	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\"%s style=\"fill:%s;stroke:%s;stroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s />\n",
-		e.ID, model.FmtNum(x), model.FmtNum(y), model.FmtNum(width), model.FmtNum(height), corner, esc(fill), esc(stroke), model.FmtNum(strokeWidth), esc(e.Name), esc(stroke), code, editorAttr)
+	fmt.Fprintf(w, "<rect id=\"%d\" x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\"%s style=\"fill:%s;stroke:%s;%sstroke-width:%s\" data-name=\"%s\" data-voltage=\"%s\" data-type=\"%s\"%s />\n",
+		e.ID, model.FmtNum(x), model.FmtNum(y), model.FmtNum(width), model.FmtNum(height), corner, esc(fill), esc(stroke), dash, model.FmtNum(strokeWidth), esc(e.Name), esc(stroke), code, editorAttr)
 }
 
 // writeCircle draws a Circle (shape 4) as a bare <ellipse> with rx = ry =

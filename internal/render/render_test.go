@@ -1232,6 +1232,44 @@ func TestRender_TapChangerFragment(t *testing.T) {
 	}
 }
 
+// TestRender_TextPlaceholder checks that {text:default} becomes the element's escaped PropertyText, or default when
+// unset.
+func TestRender_TextPlaceholder(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"330003": `<text>{text:SVC}</text>`})
+	for _, c := range []struct{ text, want string }{
+		{"", "<text>SVC</text>"},
+		{"A&B <{color}>", "<text>A&amp;B &lt;{color}&gt;</text>"},
+	} {
+		d := &model.Diagram{Width: 100, Height: 100, Elements: []model.Element{
+			{ID: 1, Class: model.ClassStaticVarCompensator, Shape: "330003", X: 10, Y: 10, PropertyText: c.text},
+		}}
+		var buf bytes.Buffer
+		if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), c.want) {
+			t.Errorf("text %q: want %s in %s", c.text, c.want, buf.String())
+		}
+	}
+}
+
+// TestRender_TerminalPlaceholder checks that {terminal:top|bottom} picks bottom only for TerminalBottom.
+func TestRender_TerminalPlaceholder(t *testing.T) {
+	lib := NewSymbolLibrary(map[string]string{"330003": `<path d="M 0 0 v {terminal:6|-6}" />`})
+	for dir, want := range map[model.TerminalDirection]string{"": "v 6", model.TerminalTop: "v 6", model.TerminalBottom: "v -6"} {
+		d := &model.Diagram{Width: 100, Height: 100, Elements: []model.Element{
+			{ID: 1, Class: model.ClassStaticVarCompensator, Shape: "330003", X: 10, Y: 10, Terminal: dir},
+		}}
+		var buf bytes.Buffer
+		if err := Render(d, lib, &buf, Interactive, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("terminal %q: want %s in %s", dir, want, buf.String())
+		}
+	}
+}
+
 // TestRender_BackgroundPlaceholder checks that a template's {background}
 // becomes the diagram's own background (or the default one when unset), in
 // both Render and RenderFragments.

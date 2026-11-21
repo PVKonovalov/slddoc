@@ -86,6 +86,7 @@ type (
 	DiagramStateColor  = model.DiagramStateColor
 	DigitalDevice      = model.DigitalDevice
 	EditorSettings     = model.EditorSettings
+	TracingImage       = model.TracingImage
 	Electrical         = model.Electrical
 	Element            = model.Element
 	LineHalo           = model.LineHalo

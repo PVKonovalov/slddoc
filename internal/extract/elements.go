@@ -1452,6 +1452,21 @@ func parseSectionalizer(n *svgtree.RawNode) (model.Element, []model.Point, strin
 // rotated *through* that transform to get the true, post-rotation anchor,
 // the same way parseTwoPortDevice's own ports are, rather than just
 // reusing the transform's center directly as parseGround does.
+// svcBodyAbove reports whether a Static var compensator's box (its second path) is drawn above its terminal (the
+// first path's start), both in the unrotated frame: its Terminal is then TerminalBottom.
+func svcBodyAbove(n *svgtree.RawNode) bool {
+	paths := elementPaths(n)
+	if len(paths) < 2 {
+		return false
+	}
+	stem, err1 := model.ParseSubpaths(paths[0].Attr("d"))
+	box, err2 := model.ParseSubpaths(paths[1].Attr("d"))
+	if err1 != nil || err2 != nil || len(stem) == 0 || len(stem[0]) == 0 || len(box) == 0 || len(box[0]) == 0 {
+		return false
+	}
+	return box[0][0].Y < stem[0][0].Y
+}
+
 func parseOnePortDevice(n *svgtree.RawNode, class model.Class, shape string) (model.Element, []model.Point, string, error) {
 	id, err := parseElementID(n)
 	if err != nil {
@@ -2024,7 +2039,17 @@ func parseRectangle(n *svgtree.RawNode) (model.Element, error) {
 	}
 	el, err := parseRect(n, id, model.ClassRectangle, "3")
 	el.RadiusX, _ = strconv.ParseFloat(n.Attr("rx"), 64)
+	el.LineStyle = rectangleDashStyles[strings.TrimSpace(model.StyleProp(n.Attr("style"), "stroke-dasharray"))]
 	return el, err
+}
+
+// rectangleDashStyles reads a Rectangle's border dash: the Container's patterns (what Render writes), plus
+// element_3.go's own dotted "6,8" and dash-dot "9 2 2 2", read as the nearest of those (dotted and dashed).
+var rectangleDashStyles = map[string]model.ConnectorLineStyle{
+	"3,2":     model.LineStyleDotted,
+	"6,5":     model.LineStyleDashed,
+	"6,8":     model.LineStyleDotted,
+	"9 2 2 2": model.LineStyleDashed,
 }
 
 // parseSmallWindow handles shape 319 (Окошко/Small window, see

@@ -42,6 +42,9 @@ type Diagram struct {
 	// Background, from that style); callers fall back to the server's
 	// configured defaults for anything unset.
 	Editor *EditorSettings `xml:"editor,omitempty" json:"editor,omitempty"`
+	// TracingImage is the picture the editor shows under the diagram to draw it over; nil when there is none. Editor
+	// state only: never rendered or exported.
+	TracingImage *TracingImage `xml:"tracingImage,omitempty" json:"tracingImage,omitempty"`
 
 	// Scheme is the provider's scheme this diagram is exported to; nil until the first export.
 	Scheme *SchemeRef `xml:"scheme,omitempty" json:"scheme,omitempty"`
@@ -107,6 +110,18 @@ type EditorSettings struct {
 	// same voltage class cross unconnected; nil means the editor's default.
 	// Only round-tripped.
 	JumpSameVoltage *bool `xml:"jumpSameVoltage,attr,omitempty" json:"jumpSameVoltage,omitempty"`
+}
+
+// TracingImage is a diagram's tracing image: File is the image file's name, stored next to the diagram's own file
+// (the editor names it after the diagram); X/Y/Width/Height its place in diagram units; Opacity 0…1; Hidden hides it.
+type TracingImage struct {
+	File    string  `xml:"file,attr" json:"file"`
+	X       float64 `xml:"x,attr" json:"x"`
+	Y       float64 `xml:"y,attr" json:"y"`
+	Width   float64 `xml:"width,attr" json:"width"`
+	Height  float64 `xml:"height,attr" json:"height"`
+	Opacity float64 `xml:"opacity,attr" json:"opacity"`
+	Hidden  bool    `xml:"hidden,attr,omitempty" json:"hidden,omitempty"`
 }
 
 // Layer is one entry of a diagram's visibility layers. A viewer toggles
@@ -797,7 +812,11 @@ type Element struct {
 	// "sqware" value (see ClassPostPole's own doc comment). Unused by
 	// every other class.
 	Square bool `xml:"square,attr,omitempty" json:"square,omitempty"`
-	// LineStyle is a Line's (shape 1) own dash pattern, a Table's (312)
+	// Terminal is the side a symbol with a {terminal:top|bottom} template (Static var compensator, 330003) has its
+	// terminal on: TerminalBottom draws the body above the terminal, anything else (empty = TerminalTop) below it.
+	Terminal TerminalDirection `xml:"terminal,attr,omitempty" json:"terminal,omitempty"`
+	// LineStyle is a Line's (shape 1) own dash pattern, a Rectangle's (3)
+	// border dash (the Container's (310) solid/dotted/dashed), a Table's (312)
 	// own box border dash pattern, or a Table2's (313) own grid line dash
 	// pattern — reuses Connector's own ConnectorLineStyle type (the same
 	// solid/dashed/dashDot choice), but each resolved through its own

@@ -66,6 +66,7 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
 <diagram width="1800" height="1200" source="diagram.svg" lastId="42">
   <editor gridSpacing="10" snap="true" showGrid="true" background="#12161d"
           defaultVoltage="1" showNodes="true"/>
+  <tracingImage file="diagram.tracing.png" x="0" y="0" width="1800" height="1200" opacity="0.4"/>
   <scheme source="rsdu" ref="4512"/>
   <object source="rsdu" kind="equipment" ref="1001:7"/>
   <layers>          <layer .../>          ... </layers>
@@ -109,6 +110,18 @@ SVG root's `background-color` style, when that style is present.
 | `activeLayer` | id → `layer` | Layer newly placed objects go on (0 = the base layer) |
 | `showNodes` | bool | Draw a debug marker at every `<node>` |
 | `jumpSameVoltage` | bool | Also put a wire jump where two buswork wires of the same voltage class cross; absent = the editor's default |
+
+### 3.3 `<tracingImage>` (optional)
+
+A picture sld-editor shows under the diagram to draw it over. Editor state only: never rendered, exported or read by
+`Extract`.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `file` | string | Image file name, in the same folder as the diagram's `.xsld` (sld-editor writes `<diagram>.tracing.<ext>`) |
+| `x`, `y`, `width`, `height` | number | Its place in diagram units |
+| `opacity` | number | 0…1 |
+| `hidden` | bool | Not shown |
 
 ## 4. Sections
 
@@ -461,16 +474,17 @@ larger side.
 | `fill` | color | Rectangle, SmallWindow, Circle, Polygon, Container, JunctionPoint, PostPole, PackageSubstation (inner box), Table, Table2 (default cell fill) | Interior color; empty = `none` |
 | `stroke` | color | Rectangle, Circle, Arrow, Line, Polygon, Arc, Road, Button, WindowIcon (default black), SmallWindow (default gray), Container (default gray), LampOnPole (default gray), ConnectorPoint (default magenta), PostPole, Table, Table2 | Border / line color |
 | `strokeWidth` | number | Rectangle, Circle, Arrow, Line, Polygon, Container, Arc, Road, Button, Table, Table2 | Line width; 0 = default (1, or a thick default for Road) |
-| `lineStyle` | enum | Line, Polygon, Container, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`; Container: `solid`, `dotted` (3,2), `dashed` (6,5)) |
+| `lineStyle` | enum | Line, Polygon, Container, Rectangle, Table, Table2 | `solid` (default), `dashed`, `dashDot` (Polygon: `solid`, `dotted`, `dashDot`; Container and Rectangle (border): `solid`, `dotted` (3,2), `dashed` (6,5)) |
 | `styles` | string | Line | Modus composite style names, comma-separated as in the `.xsde` (`BadQuality,linked`). Those in the application's halo table (`SymbolLibrary.SetLineHalos`; sld-editor's `line_halos`) are drawn as a colored halo under the line; the rest are only kept |
 | `haloColors` | string | Line | Halo colors changed from the default, `name:color` pairs comma-separated (`BadQuality:#ff0000`); a halo style not listed keeps its default |
 | `doubleHeaded` | bool | Arrow | Arrowhead at both ends |
 | `rx`, `ry` | number | Arc | The SVG arc's own radii |
 | `rx` | number | Rectangle | Corner radius; 0 = square corners, capped at half the shorter side |
+| `terminal` | enum | any symbol whose template has `{terminal:top|bottom}` (StaticVarCompensator) | `top` (default) or `bottom`: the side of the body the terminal is on; the anchor stays the terminal |
 | `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
 | `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10), Circle (default 20) | Circle radius (PostPole square: half-width) |
-| `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), Button, WindowIcon, Table, Container (caption) | Centered overlay text |
+| `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), any symbol whose template has `{text:default}` (e.g. StaticVarCompensator, default `SVC`), Button, WindowIcon, Table, Container (caption) | Centered overlay text |
 | `textColor` | color | Button (default white), WindowIcon (default black), Container (default white; `none` is an invisible caption), PowerflowIndicator, Table (default black) | Text / glyph color |
 | `bold` | bool | Button, WindowIcon | Bold overlay text |
 | `fillOff`, `fillOn` | color | Lamp | Colors for `state` 0 / 1 |
@@ -631,13 +645,13 @@ extendable per site); this is the default set.
 | FaultPassageIndicator | 320003 | 0 | `state`, `radius`, `propertyText`; SVG: the FPI legend as `data-stroke-style` (ring) and `data-fill` (text) via `{fpiStrokeAttr}`/`{fpiFillAttr}`, recolored live by rdss-dms |
 | Load | 330001 | 1 | Editor's own symbol (consumer) |
 | NetworkInfeed | 330002 | 1 | Editor's own symbol (outside network) |
-| StaticVarCompensator | 330003 | 1 | Editor's own symbol |
+| StaticVarCompensator | 330003 | 1 | Editor's own symbol; `propertyText` (default `SVC`, template `{text:SVC}`), `terminal` (`top` default, `bottom`: the box above the terminal; template `{terminal:top|bottom}`) |
 | PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor`; SVG `data-text="0:→,1:←"`, the glyph per state for rdss-dms |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |
 | Polygon | 16 | — | decorative; `<geometry>` |
 | Container | 310 | — | decorative; `<geometry>`, caption `propertyText` + `text*` |
 | Arc | 9 | — | decorative; `<geometry>` + `rx`/`ry`/`largeArc`/`sweep` |
-| Rectangle / Arrow | 3 / 2 | — | decorative; `<geometry>` (Rectangle: + `rx` corner radius) |
+| Rectangle / Arrow | 3 / 2 | — | decorative; `<geometry>` (Rectangle: + `rx` corner radius, `lineStyle` border) |
 | Circle | 4 | — | decorative; center `x`/`y`, `radius` |
 | Button | 113 | — | decorative; `<geometry>`, `propertyText`, `textSize` (default 23) |
 | AutomationDevice | 103 | — | decorative two-state tile; `<geometry>`, `state` (1 On, else Off), `fillOff`/`fillOn`, `propertyText`/`propertyTextOn`, `textColor`/`textColorOn`, `stroke` (border, default black), `textSize` (default 12), `bold` |

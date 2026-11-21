@@ -857,6 +857,14 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 				addMissingLabel(d, n, dt)
 				continue
 			}
+			if dt == "330003" {
+				if text := substationPropertyText(n); text != "SVC" {
+					el.PropertyText = text
+				}
+				if svcBodyAbove(n) {
+					el.Terminal = model.TerminalBottom
+				}
+			}
 			addElement(el, ports, voltage)
 
 		case "39":
