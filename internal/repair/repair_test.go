@@ -158,3 +158,23 @@ func TestRepair_SplitsSharedBusbarNode(t *testing.T) {
 		t.Error("a second Repair should change nothing")
 	}
 }
+
+func TestEnsureIDs_Functions(t *testing.T) {
+	d := &model.Diagram{
+		LastID:   3,
+		Elements: []model.Element{{ID: 1, Function: 3}, {ID: 2, Function: 1}},
+		Functions: []model.Function{
+			{ID: 1, Kind: model.FunctionVoltageLevel},
+			{ID: 3, Parent: 1, Pair: 1},
+		},
+	}
+	if !EnsureIDs(d) {
+		t.Fatal("EnsureIDs reported no change")
+	}
+	if d.Functions[0].ID != 4 || d.Elements[1].Function != 4 || d.Functions[1].Parent != 4 || d.Functions[1].Pair != 4 {
+		t.Errorf("colliding function should be renumbered with its references: %+v %+v", d.Functions, d.Elements)
+	}
+	if d.Functions[1].ID != 3 || d.Elements[0].Function != 3 || d.LastID != 4 {
+		t.Errorf("a free function id should be kept: %+v, lastId %d", d.Functions, d.LastID)
+	}
+}

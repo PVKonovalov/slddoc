@@ -41,8 +41,8 @@ field as possibly absent.
 
 ## 2. Ids
 
-Every `Layer`, `VoltageClass`, `Node`, `Element`, `Connector`, `Label` and
-`DigitalDevice` carries an `id`:
+Every `Layer`, `VoltageClass`, `Node`, `Element`, `Connector`, `Label`,
+`DigitalDevice` and `Function` carries an `id`:
 
 - an id is a **plain positive integer**, never a string;
 - there is **one shared id space** for elements, connectors, labels and digital
@@ -77,6 +77,7 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
   <connectors>      <connector ...>...    ... </connectors>
   <labels>          <label ...>text       ... </labels>
   <digitalDevices>  <digitalDevice .../>  ... </digitalDevices>
+  <functions>       <function .../>       ... </functions>
   <history>         <revision .../>       ... </history>
 </diagram>
 ```
@@ -110,6 +111,8 @@ SVG root's `background-color` style, when that style is present.
 | `activeLayer` | id → `layer` | Layer newly placed objects go on (0 = the base layer) |
 | `showNodes` | bool | Draw a debug marker at every `<node>` |
 | `jumpSameVoltage` | bool | Also put a wire jump where two buswork wires of the same voltage class cross; absent = the editor's default |
+| `designationFormat` | string | What designation labels show: `full` (`=E1=T1-QA1`, the default) or `short` (`QA1`: the product part without its dash; elements are then numbered per letter code across the diagram, so it stays unique); see §4.11 |
+| `designationLayer` | id → `layer` | The layer designation labels go on (0 = not created yet) |
 
 ### 3.3 `<tracingImage>` (optional)
 
@@ -211,6 +214,7 @@ decorative shape (rectangle, line, table, ...).
 | `span` | number | no | Lead shapes only (breakers 41, load-break switch 42, disconnectors 71/162, 163, 164, 166, fuse 203, 399 — `HasLeads`): distance between the two terminals in diagram units. The leads are drawn out to ±`span`/2 along the local y axis; the body keeps its size step. 0 = the library's spacing at that step. Extract reads it from the two port points |
 | `cim` | string | no | The CIM class the element exports as, when its class allows more than one (see §7.1); absent = the default |
 | `mrid` | string | no | The `IdentifiedObject.mRID` of the CIM equipment it was imported from (see §4.9) |
+| `function` | id → `function` | no | The functional unit it belongs to (0 = none, see §4.11) |
 
 **Children**
 
@@ -381,6 +385,36 @@ scheme's file name follows the diagram's path (a scheme linked from the provider
 `<deleted item source kind ref>`, the `kind` binding with ref `ref` of item `item` (0: the diagram's `<object>`),
 removed from it or replaced by one with another ref (then a `new` one). The editor keeps the bindings' `status`, the
 items' `componentEdited` and this list on every edit; an export writes only what they name and clears them.
+
+### 4.11 Functional hierarchy — `<functions>` / `<function>`
+
+The diagram's IEC 81346 functional hierarchy: voltage levels, and the units (bays) in them. An element names its unit
+with `function`, and its `name` holds its full reference designation: the unit's designation, `-`, the element's
+IEC 81346-2 letter code and its number within the unit per letter code, e.g. `=E1=T1-QA1`. A file without
+`<functions>` has no hierarchy.
+
+```xml
+<functions>
+  <function id="501" kind="voltageLevel" code="E" number="1" voltage="3"/>
+  <function id="502" parent="501" kind="transformer" code="T" number="1" pair="504"/>
+  <function id="503" parent="501" kind="outgoingFeeder" code="H" number="3" digits="2" guessed="true"/>
+  <function id="504" parent="505" kind="transformer" code="T" number="1" pair="502"/>
+</functions>
+```
+
+| Attribute | Type | Req. | Meaning |
+|---|---|---|---|
+| `id` | int | yes | Function id (shared id space) |
+| `parent` | id → `function` | no | The function it is part of (0 = top level: a voltage level) |
+| `kind` | string | yes | `voltageLevel`, `incomingFeeder`, `outgoingFeeder`, `generator`, `transformer`, `busCoupler` (a bus section or coupler), `busbar` (a busbar system), `measuring` (a VT bay) or `other` |
+| `code` | string | yes | Letter code, e.g. `E`, `T`, `H` |
+| `number` | int | yes | Number; the designation is the parent's followed by `=` code number, e.g. `=E1=H03` |
+| `digits` | int | no | The number's zero-padded width (absent = no padding) |
+| `voltage` | id → `class` | no | A voltage level's voltage class |
+| `pair` | id → `function` | no | A transformer unit's unit on the transformer's other side (the lower sides point to the higher one, the higher one to its first lower side), so they read as one transformer |
+| `guessed` | bool | no | A feeder whose incoming/outgoing kind was guessed and not yet confirmed |
+
+The transformer itself belongs to the unit on its higher-voltage side.
 
 ## 5. Topology
 

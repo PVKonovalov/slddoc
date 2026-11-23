@@ -105,6 +105,9 @@ func EnsureIDs(d *model.Diagram) bool {
 			for _, dd := range d.DigitalDevices {
 				m = max(m, dd.ID)
 			}
+			for _, f := range d.Functions {
+				m = max(m, f.ID)
+			}
 			d.LastID = m
 		}
 		for i := range d.Labels {
@@ -169,6 +172,15 @@ func ensureUniqueIDs(d *model.Diagram) {
 			used[old] = true
 		}
 	}
+	functionID := map[int]int{}
+	for i := range d.Functions {
+		if old := d.Functions[i].ID; collides(old) {
+			d.Functions[i].ID = take()
+			functionID[old] = d.Functions[i].ID
+		} else {
+			used[old] = true
+		}
+	}
 	if next == d.LastID {
 		return
 	}
@@ -203,6 +215,20 @@ func ensureUniqueIDs(d *model.Diagram) {
 	}
 	if d.Editor != nil {
 		volt(&d.Editor.DefaultVoltage)
+	}
+	function := func(id *int) {
+		if f, ok := functionID[*id]; ok && *id != 0 {
+			*id = f
+		}
+	}
+	for i := range d.Elements {
+		function(&d.Elements[i].Function)
+	}
+	for i := range d.Functions {
+		f := &d.Functions[i]
+		function(&f.Parent)
+		function(&f.Pair)
+		volt(&f.Voltage)
 	}
 }
 

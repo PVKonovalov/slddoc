@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/PVKonovalov/slddoc/internal/cim"
+	"github.com/PVKonovalov/slddoc/internal/designate"
 	"github.com/PVKonovalov/slddoc/internal/extract"
 	"github.com/PVKonovalov/slddoc/internal/model"
 	"github.com/PVKonovalov/slddoc/internal/render"
@@ -59,6 +60,18 @@ func NewCIMClassTable(shapes map[string]Class, export map[string][]string, draw 
 
 func ParseVoltage(name string) (float64, bool) { return cim.ParseVoltage(name) }
 
+// From internal/designate.
+
+type (
+	DesignateOptions = designate.Options
+	DesignationPlan  = designate.Plan
+	DesignationRow   = designate.Row
+	UnitCode         = designate.UnitCode
+	VoltageCode      = designate.VoltageCode
+)
+
+func Designate(d *Diagram, opt DesignateOptions) DesignationPlan { return designate.Designate(d, opt) }
+
 // From internal/extract.
 
 type (
@@ -105,7 +118,29 @@ type (
 	TransformerWinding = model.TransformerWinding
 	VoltageClass       = model.VoltageClass
 	WindingScheme      = model.WindingScheme
+	Function           = model.Function
+	FunctionKind       = model.FunctionKind
 )
+
+const (
+	DesignationFull        = model.DesignationFull
+	DesignationShort       = model.DesignationShort
+	FunctionVoltageLevel   = model.FunctionVoltageLevel
+	FunctionIncomingFeeder = model.FunctionIncomingFeeder
+	FunctionOutgoingFeeder = model.FunctionOutgoingFeeder
+	FunctionGenerator      = model.FunctionGenerator
+	FunctionTransformer    = model.FunctionTransformer
+	FunctionBusCoupler     = model.FunctionBusCoupler
+	FunctionBusbar         = model.FunctionBusbar
+	FunctionMeasuring      = model.FunctionMeasuring
+	FunctionOther          = model.FunctionOther
+)
+
+var FunctionKinds = model.FunctionKinds
+
+func FunctionDesignation(fs []Function, id int) string { return model.FunctionDesignation(fs, id) }
+
+func ProductPart(name string) string { return model.ProductPart(name) }
 
 const (
 	BaseLayer                   = model.BaseLayer

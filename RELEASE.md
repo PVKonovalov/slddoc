@@ -2,6 +2,12 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-23: `DesignationRow.Isolated`: the element's unit reaches no busbar, in a diagram that has busbars.
+
+2026-11-23: `DesignateOptions.UniqueNumbers` numbers each letter code across the whole diagram instead of per unit (so the product part alone names an element); a kept number that would repeat its letter code is renumbered. Elements are numbered in unit reading order, then along the energy flow, then in reading order.
+
+2026-11-23: Functional hierarchy (IEC 81346): `<functions>` / `<function>` (`id`, `parent`, `kind`, `code`, `number`, `digits`, `voltage`, `pair`, `guessed`), the element's `function` attribute, and `<editor designationFormat designationLayer>` (XSLD_FORMAT §4.11); files without them load as before, and `EnsureIDs` covers function ids and their references. New `internal/designate`, exported as `Designate`: builds the hierarchy from the topology (voltage levels as switchgear joined without transformers or lines; bays traced from each busbar without passing another busbar, a transformer or a line; classified as transformer, generator, bus coupler/section, measuring, incoming or outgoing feeder — a line feeder on its network's highest voltage level is a guessed incoming one; collinear busbar sections joined by a bay are one busbar system; a transformer belongs to its higher-voltage side's unit, the units on both sides share its number and are paired) and numbers the equipment per letter code within its unit along the energy flow, then in reading order. Existing units and numbers are kept, new ones take the next free number; renumbering is on request. Tests on synthetic diagrams.
+
 2026-11-19: Button (113): `TextSize` is its text size (`ButtonFontSize`, 23, when unset), read by Extract from the drawn `font-size` and drawn by Render, with the text 2px below the box's center as xsde2svg draws it. New `button_test.go`.
 
 2026-11-19: Extract: every two-terminal device reads `Position` from `data-trolley` (was only a withdrawable fuse); a Chassis (51) racked out to Service is `Mirror` when its body is shifted to -x (`chassisRackedOutLeft`), and 51 joins `sourceMirrorShapes`. New `chassis_test.go`.

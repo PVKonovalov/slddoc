@@ -63,6 +63,8 @@ type Diagram struct {
 	Connectors     []Connector         `xml:"connectors>connector" json:"connectors"`
 	Labels         []Label             `xml:"labels>label" json:"labels"`
 	DigitalDevices []DigitalDevice     `xml:"digitalDevices>digitalDevice" json:"digitalDevices"`
+	// Functions is the diagram's functional hierarchy (IEC 81346): voltage levels and the units in them.
+	Functions []Function `xml:"functions>function,omitempty" json:"functions,omitempty"`
 
 	// History lists the diagram's saves, oldest first. The editor's server
 	// appends one entry per save; it never affects rendering.
@@ -110,7 +112,17 @@ type EditorSettings struct {
 	// same voltage class cross unconnected; nil means the editor's default.
 	// Only round-tripped.
 	JumpSameVoltage *bool `xml:"jumpSameVoltage,attr,omitempty" json:"jumpSameVoltage,omitempty"`
+	// DesignationFormat is what designation labels show: DesignationFull (default) or DesignationShort.
+	DesignationFormat string `xml:"designationFormat,attr,omitempty" json:"designationFormat,omitempty"`
+	// DesignationLayer references the Layer.ID designation labels go on; 0: not created yet.
+	DesignationLayer int `xml:"designationLayer,attr,omitempty" json:"designationLayer,omitempty"`
 }
+
+// Designation label formats (EditorSettings.DesignationFormat).
+const (
+	DesignationFull  = "full"
+	DesignationShort = "short"
+)
 
 // TracingImage is a diagram's tracing image: File is the image file's name, stored next to the diagram's own file
 // (the editor names it after the diagram); X/Y/Width/Height its place in diagram units; Opacity 0…1; Hidden hides it.
@@ -985,6 +997,8 @@ type Element struct {
 	// MRID is the IdentifiedObject.mRID of the CIM equipment it was imported from, kept so a CIM export gives it
 	// the same identity; empty for items drawn here (or copied), which get one derived from the diagram.
 	MRID string `xml:"mrid,attr,omitempty" json:"mrid,omitempty"`
+	// Function references the Function (unit) the element belongs to; 0: none.
+	Function int `xml:"function,attr,omitempty" json:"function,omitempty"`
 
 	// Precision is the number of decimal places of a shown value.
 	Precision int `xml:"precision,attr,omitempty" json:"precision,omitempty"`
@@ -1352,7 +1366,7 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Element's own tag newly empty, which emptyElement then collapses to
 // self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|history|rows|columns|cells|sectors|bindings)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|functions|history|rows|columns|cells|sectors|bindings)></[A-Za-z][\w:.-]*>`,
 )
 
 // emptyDigitalDevice matches a digitalDevice left with only whitespace once emptyPathWrapperLine removed its empty
