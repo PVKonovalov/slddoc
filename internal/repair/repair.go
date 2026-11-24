@@ -575,8 +575,12 @@ func SymbolTerminals(el *model.Element, terminals map[string][]model.Point) []mo
 	if render.HasLeads(el.Shape) && el.Span != 0 {
 		half = el.Span / 2
 	}
+	side := model.SideTerminals(el)
 	out := make([]model.Point, len(ts))
 	for i, t := range ts {
+		if side {
+			t.X, t.Y = t.Y, t.X
+		}
 		x, y := model.ScaledLength(t.X*scale, step), model.ScaledLength(t.Y*scale, step)
 		if half > math.Abs(y) && y != 0 {
 			y = math.Copysign(half, y)

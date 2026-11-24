@@ -218,6 +218,7 @@ const (
 	ClassSurgeArrester          = model.ClassSurgeArrester
 	ClassSynchronousCompensator = model.ClassSynchronousCompensator
 	ClassSynchronousMotor       = model.ClassSynchronousMotor
+	ClassTwoTerminalBox         = model.ClassTwoTerminalBox
 	ClassTable                  = model.ClassTable
 	ClassTable2                 = model.ClassTable2
 	ClassThyristor              = model.ClassThyristor

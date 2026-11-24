@@ -515,10 +515,11 @@ larger side.
 | `rx`, `ry` | number | Arc | The SVG arc's own radii |
 | `rx` | number | Rectangle | Corner radius; 0 = square corners, capped at half the shorter side |
 | `terminal` | enum | any symbol whose template has `{terminal:top|bottom}` (StaticVarCompensator) | `top` (default) or `bottom`: the side of the body the terminal is on; the anchor stays the terminal |
+| `terminal` | enum | TwoTerminalBox | empty (default): terminals above and below the box; `left` or `right`: left and right of it |
 | `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
 | `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10), Circle (default 20) | Circle radius (PostPole square: half-width) |
-| `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), any symbol whose template has `{text:default}` (e.g. StaticVarCompensator, default `SVC`), Button, WindowIcon, Table, Container (caption) | Centered overlay text |
+| `propertyText` | string | PackageSubstation, EnclosedSubstation (e.g. rating `160`), FaultPassageIndicator (default `FPI`), any symbol whose template has `{text:default}` (e.g. StaticVarCompensator, default `SVC`; TwoTerminalBox, empty), Button, WindowIcon, Table, Container (caption) | Centered overlay text |
 | `textColor` | color | Button (default white), WindowIcon (default black), Container (default white; `none` is an invisible caption), PowerflowIndicator, Table (default black) | Text / glyph color |
 | `bold` | bool | Button, WindowIcon | Bold overlay text |
 | `fillOff`, `fillOn` | color | Lamp | Colors for `state` 0 / 1 |
@@ -680,6 +681,7 @@ extendable per site); this is the default set.
 | Load | 330001 | 1 | Editor's own symbol (consumer) |
 | NetworkInfeed | 330002 | 1 | Editor's own symbol (outside network) |
 | StaticVarCompensator | 330003 | 1 | Editor's own symbol; `propertyText` (default `SVC`, template `{text:SVC}`), `terminal` (`top` default, `bottom`: the box above the terminal; template `{terminal:top|bottom}`) |
+| TwoTerminalBox | 330004 | 2 | Editor's own generic in-line box, never turned (no `orient`); port 1 above and port 2 below it, or with `terminal` `left` (or `right`) port 1 left and port 2 right of it (template `{terminalAxis:vertical|horizontal}`); `propertyText` (empty by default, template `{text:}`); no CIM equipment, the CIM export passes its connection through |
 | PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor`; SVG `data-text="0:→,1:←"`, the glyph per state for rdss-dms |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |
 | Polygon | 16 | — | decorative; `<geometry>` |

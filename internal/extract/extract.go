@@ -67,7 +67,7 @@ var elementDataTypes = map[string]bool{
 	"50":     true,
 	"44":     true,
 	// This editor's own CIM symbols.
-	"330001": true, "330002": true, "330003": true,
+	"330001": true, "330002": true, "330003": true, "330004": true,
 }
 
 // twoPortShapes maps a two-terminal shape code (see parseTwoPortDevice) to
@@ -76,21 +76,22 @@ var twoPortShapes = map[string]model.Class{
 	"41": model.ClassBreaker, "43": model.ClassBreaker,
 	"42": model.ClassLoadBreakSwitch,
 	"71": model.ClassDisconnector, "162": model.ClassDisconnector, "49": model.ClassDisconnector, "320006": model.ClassDisconnector,
-	"33":  model.ClassChokeCoil,
-	"34":  model.ClassCurrentTransformer,
-	"35":  model.ClassSurgeArrester,
-	"29":  model.ClassSurgeArrester,
-	"203": model.ClassFuse,
-	"154": model.ClassFuse,
-	"388": model.ClassCapacitor,
-	"37":  model.ClassReactor,
-	"76":  model.ClassStarter,
-	"14":  model.ClassNonIntersection,
-	"51":  model.ClassChassis,
-	"56":  model.ClassCableConnector,
-	"32":  model.ClassCableJoint,
-	"146": model.ClassPowerPole,
-	"156": model.ClassResistor,
+	"33":     model.ClassChokeCoil,
+	"34":     model.ClassCurrentTransformer,
+	"35":     model.ClassSurgeArrester,
+	"29":     model.ClassSurgeArrester,
+	"203":    model.ClassFuse,
+	"154":    model.ClassFuse,
+	"388":    model.ClassCapacitor,
+	"37":     model.ClassReactor,
+	"76":     model.ClassStarter,
+	"14":     model.ClassNonIntersection,
+	"51":     model.ClassChassis,
+	"56":     model.ClassCableConnector,
+	"32":     model.ClassCableJoint,
+	"146":    model.ClassPowerPole,
+	"156":    model.ClassResistor,
+	"330004": model.ClassTwoTerminalBox,
 }
 
 // unrecognizedShapeName gives a human-readable name for an xsde2svg
@@ -714,12 +715,19 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 			}
 			addElement(el, nil, "")
 
-		case "41", "42", "43", "71", "162", "320006", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "146", "156":
+		case "41", "42", "43", "71", "162", "320006", "49", "33", "34", "35", "203", "388", "37", "29", "76", "154", "14", "51", "56", "32", "146", "156", "330004":
 			el, ports, voltage, err := parseTwoPortDevice(n, twoPortShapes[dt], dt)
 			if err != nil {
 				report.Failed = append(report.Failed, n.Attr("id"))
 				addMissingLabel(d, n, dt)
 				continue
+			}
+			if dt == "330004" {
+				el.PropertyText = substationPropertyText(n)
+				if el.Orient == 90 || el.Orient == -90 {
+					el.Terminal = model.TerminalLeft
+				}
+				el.Orient, el.Mirror = 0, false
 			}
 			addElement(el, ports, voltage)
 

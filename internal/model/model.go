@@ -621,6 +621,10 @@ const (
 	ClassLoad                 Class = "Load"
 	ClassNetworkInfeed        Class = "NetworkInfeed"
 	ClassStaticVarCompensator Class = "StaticVarCompensator"
+	// ClassTwoTerminalBox (shape 330004) is this editor's own generic in-line device: a labelled box between two
+	// terminals, above and below it or (SideTerminals) left and right of it; the box itself never turns. It stands
+	// for no CIM equipment; the CIM export passes its connection through.
+	ClassTwoTerminalBox Class = "TwoTerminalBox"
 )
 
 // TableCell is one cell of a Table2 (shape 313) grid. Row/Col are its 0-based top-left grid position. A merged cell
@@ -826,6 +830,7 @@ type Element struct {
 	Square bool `xml:"square,attr,omitempty" json:"square,omitempty"`
 	// Terminal is the side a symbol with a {terminal:top|bottom} template (Static var compensator, 330003) has its
 	// terminal on: TerminalBottom draws the body above the terminal, anything else (empty = TerminalTop) below it.
+	// For a Two-terminal box (330004) TerminalLeft or TerminalRight puts its terminals left and right (SideTerminals).
 	Terminal TerminalDirection `xml:"terminal,attr,omitempty" json:"terminal,omitempty"`
 	// LineStyle is a Line's (shape 1) own dash pattern, a Rectangle's (3)
 	// border dash (the Container's (310) solid/dotted/dashed), a Table's (312)
@@ -1047,6 +1052,12 @@ const (
 	GroundingResistor NeutralGrounding = "resistor"
 )
 
+// SideTerminals reports whether e is a Two-terminal box with its terminals left and right: its library terminals
+// (above and below) are then taken with x and y swapped.
+func SideTerminals(e *Element) bool {
+	return e.Class == ClassTwoTerminalBox && (e.Terminal == TerminalLeft || e.Terminal == TerminalRight)
+}
+
 // TerminalDirection is which side of a winding's own circle its lead (and
 // real electrical Port) is drawn on, in the transformer's own local
 // (pre-rotation) frame — this editor's own replacement for real xsde2svg's
@@ -1199,8 +1210,8 @@ type Point struct {
 	Y float64 `xml:"y,attr" json:"y"`
 }
 
-// Label is a standalone text caption. For carries the id of the Element it
-// annotates (0 means unset — a standalone label).
+// Label is a standalone text caption. For carries the id of the Element or
+// link-to-object Connector it annotates (0 means unset — a standalone label).
 type Label struct {
 	// ID, like every other id-shaped field in this model, is a plain
 	// positive integer the frontend's own IdSequence assigns (0 means

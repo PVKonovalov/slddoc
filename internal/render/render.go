@@ -218,6 +218,20 @@ func applyTapChanger(tmpl string, on bool) string {
 // TerminalBottom, top otherwise.
 var terminalRe = regexp.MustCompile(`\{terminal:([^|}]*)\|([^}]*)\}`)
 
+// terminalAxisRe matches a template's {terminalAxis:vertical|horizontal} placeholder: horizontal when the element
+// has side terminals (model.SideTerminals), vertical otherwise.
+var terminalAxisRe = regexp.MustCompile(`\{terminalAxis:([^|}]*)\|([^}]*)\}`)
+
+func applyTerminalAxis(tmpl string, side bool) string {
+	return terminalAxisRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		g := terminalAxisRe.FindStringSubmatch(m)
+		if side {
+			return g[2]
+		}
+		return g[1]
+	})
+}
+
 func applyTerminal(tmpl string, dir model.TerminalDirection) string {
 	return terminalRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		g := terminalRe.FindStringSubmatch(m)
@@ -340,6 +354,7 @@ var ShapeName = map[string]string{
 	"330001": "Load",
 	"330002": "Network infeed",
 	"330003": "Static var compensator",
+	"330004": "Two-terminal box",
 	"385":    "Package substation",
 	"386":    "Enclosed substation",
 	"335":    "Road",
@@ -751,7 +766,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		}
 		return
 	}
-	body := applyTerminal(applyStateLine(applyTapChanger(tmpl, e.TapChanger), e.State), e.Terminal)
+	body := applyTerminalAxis(applyTerminal(applyStateLine(applyTapChanger(tmpl, e.TapChanger), e.State), e.Terminal), model.SideTerminals(&e))
 	// {counterRotate} is the negated Orient — wrapping a template fragment
 	// in <g transform="rotate({counterRotate})"> cancels the outer <g
 	// transform="...rotate(Orient)"> this function itself emits below, so
