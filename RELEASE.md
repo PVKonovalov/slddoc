@@ -2,6 +2,8 @@
 
 Earlier history is in the commit messages and in sld-editor's RELEASE.md.
 
+2026-11-25: `DesignationPlan.Levels` (`LevelMember`): the elements in scope in no unit (no letter code, or no unit found) whose voltage level has a function, with that function, so a caller can place them under their voltage level.
+
 2026-11-23: `DesignationRow.Isolated`: the element's unit reaches no busbar, in a diagram that has busbars.
 
 2026-11-23: `DesignateOptions.UniqueNumbers` numbers each letter code across the whole diagram instead of per unit (so the product part alone names an element); a kept number that would repeat its letter code is renumbered. Elements are numbered in unit reading order, then along the energy flow, then in reading order.

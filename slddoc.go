@@ -66,6 +66,7 @@ type (
 	DesignateOptions = designate.Options
 	DesignationPlan  = designate.Plan
 	DesignationRow   = designate.Row
+	LevelMember      = designate.LevelMember
 	UnitCode         = designate.UnitCode
 	VoltageCode      = designate.VoltageCode
 )

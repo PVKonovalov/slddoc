@@ -63,13 +63,20 @@ type Row struct {
 	Isolated  bool   `json:"isolated,omitempty"`
 }
 
+// LevelMember is an element in no unit (no letter code, or no unit found) and the voltage level Function it lies in.
+type LevelMember struct {
+	Element  int `json:"element"`
+	Function int `json:"function"`
+}
+
 // Plan is Designate's result: the whole new function list (functions it creates have negative ids, for the caller
-// to replace with its own), a row per element whose name or function changes, and the elements in scope no unit
-// could be found for.
+// to replace with its own), a row per element whose name or function changes, the elements in scope no unit
+// could be found for, and the elements in scope in no unit whose voltage level has a function.
 type Plan struct {
 	Functions []model.Function `json:"functions"`
 	Rows      []Row            `json:"rows"`
 	Unplaced  []int            `json:"unplaced"`
+	Levels    []LevelMember    `json:"levels"`
 }
 
 var designationRe = regexp.MustCompile(`^(?:=[A-Z]+[0-9]+)+-([A-Z]+)([0-9]+)$`)
@@ -482,7 +489,22 @@ func (x *designator) plan() Plan {
 			target[e.ID] = u.fn
 		}
 	}
-	return Plan{Functions: x.fs, Rows: x.number(target, in), Unplaced: unplaced}
+	return Plan{Functions: x.fs, Rows: x.number(target, in), Unplaced: unplaced, Levels: x.levelMembers(target, in)}
+}
+
+// levelMembers returns the elements in scope (in) with no target unit whose component's voltage level has a function.
+func (x *designator) levelMembers(target map[int]int, in func(int) bool) []LevelMember {
+	var out []LevelMember
+	for i := range x.d.Elements {
+		e := &x.d.Elements[i]
+		if _, ok := target[e.ID]; ok || !in(e.ID) {
+			continue
+		}
+		if l := x.levels[x.compOf(e)]; l != nil && l.fn != 0 {
+			out = append(out, LevelMember{Element: e.ID, Function: l.fn})
+		}
+	}
+	return out
 }
 
 func (x *designator) matchLevels() {

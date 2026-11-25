@@ -1,6 +1,7 @@
 package designate
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
@@ -371,5 +372,40 @@ func TestDesignate_Isolated(t *testing.T) {
 	g.element("41", 0, 20, 2, n1, n2)
 	if r := Designate(g.d, testOptions).Rows; len(r) != 1 || r[0].Isolated {
 		t.Errorf("a diagram without busbars warns of nothing: %+v", r)
+	}
+}
+
+func TestDesignate_LevelMembers(t *testing.T) {
+	b, _ := substation()
+	opt := testOptions
+	opt.LetterCodes = maps.Clone(testOptions.LetterCodes)
+	delete(opt.LetterCodes, "24")
+	p := Designate(b.d, opt)
+	in := map[int]int{}
+	for _, m := range p.Levels {
+		in[m.Element] = m.Function
+	}
+	fs := map[int]model.Function{}
+	for _, f := range p.Functions {
+		fs[f.ID] = f
+	}
+	busbars := 0
+	for _, e := range b.d.Elements {
+		if e.Shape != "24" {
+			continue
+		}
+		busbars++
+		f, ok := fs[in[e.ID]]
+		if !ok || f.Kind != model.FunctionVoltageLevel || f.Voltage != e.Voltage {
+			t.Errorf("busbar %d should lie in its voltage level, got %+v", e.ID, f)
+		}
+	}
+	if busbars != 2 {
+		t.Fatalf("expected 2 busbars, got %d", busbars)
+	}
+	for _, r := range p.Rows {
+		if _, ok := in[r.Element]; ok {
+			t.Errorf("element %d is both in a unit and a level member", r.Element)
+		}
 	}
 }
