@@ -99,6 +99,9 @@ type (
 	Diagram            = model.Diagram
 	DiagramStateColor  = model.DiagramStateColor
 	DigitalDevice      = model.DigitalDevice
+	BarInstrument      = model.BarInstrument
+	BarColors          = model.BarColors
+	BarDefaults        = render.BarDefaults
 	EditorSettings     = model.EditorSettings
 	TracingImage       = model.TracingImage
 	Electrical         = model.Electrical
@@ -145,10 +148,17 @@ func ProductPart(name string) string { return model.ProductPart(name) }
 
 const (
 	BaseLayer                   = model.BaseLayer
+	BarInstrumentShape          = model.BarInstrumentShape
+	BarHorizontal               = model.BarHorizontal
+	BarVertical                 = model.BarVertical
 	BindingEquipment            = model.BindingEquipment
 	BindingJump                 = model.BindingJump
 	BindingMeas1                = model.BindingMeas1
 	BindingMeas2                = model.BindingMeas2
+	BindingSetpointLA           = model.BindingSetpointLA
+	BindingSetpointLW           = model.BindingSetpointLW
+	BindingSetpointHW           = model.BindingSetpointHW
+	BindingSetpointHA           = model.BindingSetpointHA
 	BindingNew                  = model.BindingNew
 	BindingEdited               = model.BindingEdited
 	ClassAnchorPole             = model.ClassAnchorPole
@@ -249,6 +259,15 @@ const (
 func Load(r io.Reader) (*Diagram, error) { return model.Load(r) }
 
 func ValidateBindings(d *Diagram) error { return model.ValidateBindings(d) }
+
+// IsSetpointKind tells whether k is a bar instrument's setpoint binding kind.
+func IsSetpointKind(k BindingKind) bool { return model.IsSetpointKind(k) }
+
+// ValidateBarInstrument checks one bar instrument's values; see the model.
+func ValidateBarInstrument(b BarInstrument) error { return model.ValidateBarInstrument(b) }
+
+// ValidateBarInstruments returns one warning per invalid bar instrument of d; nothing is changed.
+func ValidateBarInstruments(d *Diagram) []string { return model.ValidateBarInstruments(d) }
 
 // ReadScheme reads only the <scheme> of the .xsld in r (nil when it has none), without parsing the whole diagram.
 func ReadScheme(r io.Reader) (*SchemeRef, error) { return model.ReadScheme(r) }

@@ -929,7 +929,7 @@ func Render(d *model.Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, 
 	// Items are drawn layer group by layer group, lowest Layer.Z first (see
 	// Layer.Z); an unknown layer counts as Z 0. Within a group the order is
 	// fixed: devices, wires, elementZOrder's indicator tiers, text labels,
-	// digital devices.
+	// digital devices, bar instruments.
 	layerZ := map[int]int{}
 	for _, l := range d.Layers {
 		layerZ[l.ID] = l.Z
@@ -946,6 +946,9 @@ func Render(d *model.Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, 
 	}
 	for _, dd := range d.DigitalDevices {
 		zSet[layerZ[dd.Layer]] = true
+	}
+	for _, b := range d.BarInstruments {
+		zSet[layerZ[b.Layer]] = true
 	}
 	groups := make([]int, 0, len(zSet))
 	for z := range zSet {
@@ -1014,6 +1017,18 @@ func Render(d *model.Diagram, lib *SymbolLibrary, w io.Writer, mode RenderMode, 
 				wroteDDComment = true
 			}
 			writeDigitalDeviceLayered(w, dd, mode)
+		}
+
+		wroteBarComment := false
+		for _, b := range d.BarInstruments {
+			if layerZ[b.Layer] != group {
+				continue
+			}
+			if !wroteBarComment {
+				fmt.Fprintf(w, "<!-- Bar instrument:%s -->\n", model.BarInstrumentShape)
+				wroteBarComment = true
+			}
+			writeBarInstrumentLayered(w, lib, b, mode)
 		}
 	}
 
@@ -1108,6 +1123,15 @@ func RenderFragments(d *model.Diagram, lib *SymbolLibrary, ids []int, mode Rende
 		var buf bytes.Buffer
 		writeDigitalDeviceLayered(&buf, dd, mode)
 		fragments[dd.ID] = buf.String()
+	}
+
+	for _, b := range d.BarInstruments {
+		if !want[b.ID] {
+			continue
+		}
+		var buf bytes.Buffer
+		writeBarInstrumentLayered(&buf, lib, b, mode)
+		fragments[b.ID] = buf.String()
 	}
 
 	if len(missing) > 0 {

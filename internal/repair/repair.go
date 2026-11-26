@@ -105,6 +105,9 @@ func EnsureIDs(d *model.Diagram) bool {
 			for _, dd := range d.DigitalDevices {
 				m = max(m, dd.ID)
 			}
+			for _, b := range d.BarInstruments {
+				m = max(m, b.ID)
+			}
 			for _, f := range d.Functions {
 				m = max(m, f.ID)
 			}
@@ -150,6 +153,9 @@ func ensureUniqueIDs(d *model.Diagram) {
 	}
 	for i := range d.DigitalDevices {
 		keep(&d.DigitalDevices[i].ID)
+	}
+	for i := range d.BarInstruments {
+		keep(&d.BarInstruments[i].ID)
 	}
 	for i := range d.Labels {
 		keep(&d.Labels[i].ID)

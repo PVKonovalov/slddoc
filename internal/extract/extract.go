@@ -18,6 +18,7 @@ type Report struct {
 	Connectors     int
 	Labels         int
 	DigitalDevices int
+	BarInstruments int
 	Nodes          int
 	// Skipped counts top-level nodes with a data-type code Extract does not
 	// (yet) support, keyed by that code (e.g. "310" for a decorative container).
@@ -372,6 +373,14 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 					lbl.Group = parseGroup(n)
 					d.Labels = append(d.Labels, lbl)
 				}
+			}
+			continue
+		}
+		if dt == model.BarInstrumentShape {
+			if b, ok := parseBarInstrument(n); ok {
+				d.BarInstruments = append(d.BarInstruments, b)
+			} else {
+				report.Failed = append(report.Failed, n.Attr("id"))
 			}
 			continue
 		}
@@ -1051,6 +1060,7 @@ func Extract(raw []byte, source string, voltageHints map[string]string) (*model.
 	report.Connectors = len(d.Connectors)
 	report.Labels = len(d.Labels)
 	report.DigitalDevices = len(d.DigitalDevices)
+	report.BarInstruments = len(d.BarInstruments)
 	report.Nodes = len(d.Nodes)
 	return d, report, nil
 }

@@ -42,11 +42,11 @@ field as possibly absent.
 ## 2. Ids
 
 Every `Layer`, `VoltageClass`, `Node`, `Element`, `Connector`, `Label`,
-`DigitalDevice` and `Function` carries an `id`:
+`DigitalDevice`, `BarInstrument` and `Function` carries an `id`:
 
 - an id is a **plain positive integer**, never a string;
-- there is **one shared id space** for elements, connectors, labels and digital
-  devices — no two of them share an id (the SVG uses the same bare integer as
+- there is **one shared id space** for elements, connectors, labels, digital
+  devices and bar instruments — no two of them share an id (the SVG uses the same bare integer as
   its DOM `id`);
 - `0` means **"unset"** in every field that *references* an id (`voltage`, `for`,
   `defaultVoltage`, ...), since a real id is never 0. The one exception is
@@ -77,6 +77,7 @@ The element `shape` attribute is **not** an id — it is a symbol-library key
   <connectors>      <connector ...>...    ... </connectors>
   <labels>          <label ...>text       ... </labels>
   <digitalDevices>  <digitalDevice .../>  ... </digitalDevices>
+  <barInstruments>  <barInstrument ...>   ... </barInstruments>
   <functions>       <function .../>       ... </functions>
   <history>         <revision .../>       ... </history>
 </diagram>
@@ -303,6 +304,53 @@ text-style attributes as `<label>` (`id`, `layer`, `group`, `x`, `y`, `size`, `a
 | `value` | string | yes | Placeholder value shown in place of a live reading, e.g. `0.00` |
 | `unit` | string | no | Unit suffix, e.g. `MW`, drawn right after the value |
 
+### 4.7.1 `<barInstruments>` / `<barInstrument>`
+
+A bar instrument (type code `320008`, this project's own item, no xsde2svg shape): a measured value drawn as a bar
+along a track from `min` to `max`, coloured by the zone of the value. Optional; older files have none. Carries
+`id`, `layer`, `group` and the binding attributes of §4.10 (`precision`, `features`, `componentType`,
+`componentEdited`, `<bindings>`), plus:
+
+| Attribute | Type | Req. | Meaning |
+|---|---|---|---|
+| `x`, `y` | number | yes | The track's min end, on its axis |
+| `orient` | `h` \| `v` | no | `h` (absent): grows to the right; `v`: grows upward |
+| `length`, `thickness` | number | no | Track length and bar thickness; absent: the renderer's default (`bar_instrument` config) |
+| `name` | string | no | SCADA tag name (`data-name`) |
+| `unit` | string | no | Unit shown after the value |
+| `min`, `max` | number | yes | The range; `min < max` |
+| `origin` | number | no | Where the bar starts, within the range; absent: `min` |
+| `lowAlarm`, `lowWarning`, `highWarning`, `highAlarm` | number | no | Setpoints set in the editor, ordered `lowAlarm ≤ lowWarning ≤ highWarning ≤ highAlarm`, within the range; absent: not set |
+| `deadband` | number ≥ 0 | no | Hysteresis of zone changes, applied by the viewer |
+| `value` | number | yes | The current (default) value shown until live data arrives; may lie outside the range |
+| `valueSize` | number | no | Font size of the value text, px; absent or 0: the renderer's default (12 unless configured); not negative |
+| `showValue`, `showScale`, `showZones` | bool | no | Display options; absent: the renderer's default |
+
+An optional child `<colors track normal warning alarm bad/>` overrides the renderer's default colours; an absent
+attribute keeps the default. The setpoints may also be bound (§4.10, kinds `setpointLA`…`setpointHA`). `Load` keeps
+an instrument whose values break the rules above; `ValidateBarInstruments` reports it.
+
+Zones: `alarm` when the value is below `lowAlarm` or above `highAlarm`, else `warning` when below `lowWarning` or
+above `highWarning`, else `normal`; an unset setpoint is skipped.
+
+`Render` writes one `<g id data-type="320008" data-name data-orient data-len data-thickness data-min data-max
+data-origin [data-la data-lw data-hw data-ha] [data-deadband] data-precision [data-unit] data-value data-colors
+transform="translate(x,y)">` holding a `<g class="bar-axis">` (with `transform="rotate(-90)"` when vertical) with
+`bar-track`, `bar-zones` (`bar-zone-la/lw/hw/ha`, when zones are shown), `bar-limits` (`bar-limit-la/lw/hw/ha`, all
+four always, hidden when unset), `bar-origin` (when `origin` ≠ `min`), `bar-fill`, `bar-over-max`, `bar-over-min`
+and `bar-scale` (when shown), then an upright `<text class="bar-value">` (when shown). This markup is the contract
+with the SCADA viewer, which moves the bar end, recolours it and updates the text from live data. `Extract` reads it
+back; its colours come back as `<colors>`.
+
+```xml
+<barInstrument id="31" layer="0" x="400" y="120" length="150" thickness="6" name="U" unit="kV" min="0" max="150"
+    lowWarning="100" highWarning="121" highAlarm="126" value="123.4" precision="1">
+  <bindings>
+    <binding source="rsdu" kind="meas1" ref="2011:9" option="GLT_ANALOG_OPT_INSTANT"/>
+  </bindings>
+</barInstrument>
+```
+
 ### 4.8 `<history>` / `<revision>`
 
 The diagram's save history, oldest first. sld-editor's server appends one
@@ -340,7 +388,7 @@ Terminal with the second.
 
 Links of diagram items to objects of a SCADA data provider, e.g. RSDU. Not rendered; `Extract`, `Repair` and the CIM export/import ignore them.
 
-An `<element>`, `<digitalDevice>`, `<label>` or `<connector>` may carry a `<bindings>` list and three attributes. A
+An `<element>`, `<digitalDevice>`, `<barInstrument>`, `<label>` or `<connector>` may carry a `<bindings>` list and three attributes. A
 `<label>` writes `<bindings>` after its text; reading drops the indentation before it, so a bound label's text can't
 end in a line break followed by blanks:
 
@@ -356,7 +404,7 @@ end in a line break followed by blanks:
 | Attribute | Type | Req. | Meaning |
 |---|---|---|---|
 | `source` | string | yes | Provider, e.g. `rsdu` |
-| `kind` | `equipment` \| `meas1` \| `meas2` \| `jump` | yes | What the binding supplies: the equipment, the main parameter, the additional parameter, a scheme/panel/report to open |
+| `kind` | `equipment` \| `meas1` \| `meas2` \| `jump` \| `setpointLA` \| `setpointLW` \| `setpointHW` \| `setpointHA` | yes | What the binding supplies: the equipment, the main parameter, the additional parameter, a scheme/panel/report to open, or a bar instrument's low alarm, low warning, high warning or high alarm setpoint (only on a `<barInstrument>`) |
 | `ref` | string | yes | Provider's key of the object, opaque outside it (RSDU: `tableId:id`, `SYS_TBLLST.ID` and the row id) |
 | `option` | string | no | How the value is read (RSDU: `SYS_GTOPT.DEFINE_ALIAS`) |
 | `scale` | int | no | Value multiplier; absent/0 = 1, negative inverts a discrete value |

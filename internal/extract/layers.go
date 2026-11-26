@@ -86,6 +86,9 @@ func addMissingLayers(d *model.Diagram) {
 	for _, dd := range d.DigitalDevices {
 		note(dd.Layer)
 	}
+	for _, b := range d.BarInstruments {
+		note(b.Layer)
+	}
 	sort.Ints(missing)
 	for _, id := range missing {
 		d.Layers = append(d.Layers, model.Layer{ID: id, Name: fmt.Sprintf("Layer %d", id)})

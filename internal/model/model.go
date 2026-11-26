@@ -63,6 +63,7 @@ type Diagram struct {
 	Connectors     []Connector         `xml:"connectors>connector" json:"connectors"`
 	Labels         []Label             `xml:"labels>label" json:"labels"`
 	DigitalDevices []DigitalDevice     `xml:"digitalDevices>digitalDevice" json:"digitalDevices"`
+	BarInstruments []BarInstrument     `xml:"barInstruments>barInstrument,omitempty" json:"barInstruments,omitempty"`
 	// Functions is the diagram's functional hierarchy (IEC 81346): voltage levels and the units in them.
 	Functions []Function `xml:"functions>function,omitempty" json:"functions,omitempty"`
 
@@ -1231,8 +1232,9 @@ type Point struct {
 	Y float64 `xml:"y,attr" json:"y"`
 }
 
-// Label is a standalone text caption. For carries the id of the Element or
-// link-to-object Connector it annotates (0 means unset — a standalone label).
+// Label is a standalone text caption. For carries the id of the Element,
+// link-to-object Connector or BarInstrument it annotates (0 means unset — a
+// standalone label).
 type Label struct {
 	// ID, like every other id-shaped field in this model, is a plain
 	// positive integer the frontend's own IdSequence assigns (0 means
@@ -1371,7 +1373,7 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 
 // emptyPathWrapperLine matches a whole line consisting solely of one of
 // this model's nested "parent>child" xml tags — Diagram's own
-// Layers/VoltageClasses/Nodes/Elements/Connectors/Labels/DigitalDevices,
+// Layers/VoltageClasses/Nodes/Elements/Connectors/Labels/DigitalDevices/BarInstruments,
 // and Element's own Points ("geometry>point"), Windings
 // ("windings>winding"), and a Table2's own RowHeights/ColumnWidths/Cells
 // ("rows>row"/"columns>column"/"cells>cell"), and Element's/DigitalDevice's
@@ -1398,12 +1400,12 @@ var emptyElement = regexp.MustCompile(`<([A-Za-z][\w:.-]*)((?:\s+[A-Za-z_:][\w:.
 // Element's own tag newly empty, which emptyElement then collapses to
 // self-closing in the usual way.
 var emptyPathWrapperLine = regexp.MustCompile(
-	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|functions|history|rows|columns|cells|sectors|bindings)></[A-Za-z][\w:.-]*>`,
+	`\n[ \t]*<(?:geometry|windings|layers|voltageClasses|stateColors|nodes|elements|connectors|labels|digitalDevices|barInstruments|functions|history|rows|columns|cells|sectors|bindings)></[A-Za-z][\w:.-]*>`,
 )
 
-// emptyDigitalDevice matches a digitalDevice left with only whitespace once emptyPathWrapperLine removed its empty
-// <bindings>; it is written self-closing, as before DigitalDevice had children.
-var emptyDigitalDevice = regexp.MustCompile(`<digitalDevice((?:\s+[A-Za-z_:][\w:.-]*="[^"]*")*)>\s*</digitalDevice>`)
+// emptyDigitalDevice matches a digitalDevice or barInstrument left with only whitespace once emptyPathWrapperLine
+// removed its empty <bindings>; it is written self-closing, as before DigitalDevice had children.
+var emptyDigitalDevice = regexp.MustCompile(`<(digitalDevice|barInstrument)((?:\s+[A-Za-z_:][\w:.-]*="[^"]*")*)>\s*</(?:digitalDevice|barInstrument)>`)
 
 // Save writes d as indented XML.
 func (d *Diagram) Save(w io.Writer) error {
@@ -1417,7 +1419,7 @@ func (d *Diagram) Save(w io.Writer) error {
 		return fmt.Errorf("slddoc: encoding diagram: %w", err)
 	}
 	stripped := emptyPathWrapperLine.ReplaceAll(buf.Bytes(), nil)
-	stripped = emptyDigitalDevice.ReplaceAll(stripped, []byte("<digitalDevice$1/>"))
+	stripped = emptyDigitalDevice.ReplaceAll(stripped, []byte("<$1$2/>"))
 	out := emptyElement.ReplaceAll(stripped, []byte("<$1$2/>"))
 	if _, err := w.Write(out); err != nil {
 		return err

@@ -2,7 +2,7 @@ package model
 
 // AssignUniqueIDs makes every id Extract produced unique across the shared
 // id space (Node, VoltageClass, Element, Connector, Label, DigitalDevice,
-// Layer). Nodes and voltage classes are Extract's own (numbered 1..N by
+// BarInstrument, Layer). Nodes and voltage classes are Extract's own (numbered 1..N by
 // buildTopology/buildVoltageClasses, which collides with the source's own
 // small ids), so they are all renumbered from next, every reference
 // following. Then an element, connector, digital device or label whose id
@@ -92,6 +92,9 @@ func AssignUniqueIDs(d *Diagram, next int) int {
 	for i := range d.DigitalDevices {
 		unique(&d.DigitalDevices[i].ID)
 	}
+	for i := range d.BarInstruments {
+		unique(&d.BarInstruments[i].ID)
+	}
 	for i := range d.Labels {
 		unique(&d.Labels[i].ID)
 	}
@@ -116,6 +119,9 @@ func AssignUniqueIDs(d *Diagram, next int) int {
 	}
 	for i := range d.DigitalDevices {
 		regroup(&d.DigitalDevices[i].Group)
+	}
+	for i := range d.BarInstruments {
+		regroup(&d.BarInstruments[i].Group)
 	}
 	for i := range d.Labels {
 		regroup(&d.Labels[i].Group)

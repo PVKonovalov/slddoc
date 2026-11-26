@@ -17,6 +17,7 @@ import (
 type SymbolLibrary struct {
 	templates map[string]string
 	lineHalos model.LineHalos
+	bar       *BarDefaults
 }
 
 // SetLineHalos sets the halos Render draws for a Line's composite styles; nil draws none.

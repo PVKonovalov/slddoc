@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -16,7 +17,21 @@ const (
 	BindingMeas1     BindingKind = "meas1"     // main parameter ("Parameters")
 	BindingMeas2     BindingKind = "meas2"     // additional parameter ("Additional parameters")
 	BindingJump      BindingKind = "jump"      // another scheme, panel or report opened from the item
+
+	// A bar instrument's setpoints from SCADA: low alarm, low warning, high warning, high alarm.
+	BindingSetpointLA BindingKind = "setpointLA"
+	BindingSetpointLW BindingKind = "setpointLW"
+	BindingSetpointHW BindingKind = "setpointHW"
+	BindingSetpointHA BindingKind = "setpointHA"
 )
+
+// SetpointKinds are the setpoint binding kinds, low alarm first; only a bar instrument has them.
+var SetpointKinds = []BindingKind{BindingSetpointLA, BindingSetpointLW, BindingSetpointHW, BindingSetpointHA}
+
+// IsSetpointKind tells whether k is one of SetpointKinds.
+func IsSetpointKind(k BindingKind) bool {
+	return k == BindingSetpointLA || k == BindingSetpointLW || k == BindingSetpointHW || k == BindingSetpointHA
+}
 
 // BindingStatus is how a binding differs from what the provider has; empty: the provider has it as it is.
 type BindingStatus string
@@ -112,18 +127,23 @@ func ReadScheme(r io.Reader) (*SchemeRef, error) {
 
 var bindingKinds = map[BindingKind]bool{
 	BindingEquipment: true, BindingMeas1: true, BindingMeas2: true, BindingJump: true,
+	BindingSetpointLA: true, BindingSetpointLW: true, BindingSetpointHW: true, BindingSetpointHA: true,
 }
 
-// ValidateBindings checks every binding of d: a known kind, a non-empty source and ref, and at most one binding of
-// each kind per item. It returns all problems found joined into one error, or nil.
+// ValidateBindings checks every binding of d: a known kind, a non-empty source and ref, at most one binding of each
+// kind per item, and setpoint kinds only on a bar instrument. It returns all problems found joined into one error, or nil.
 func ValidateBindings(d *Diagram) error {
 	var errs []error
 	check := func(item string, bs []Binding) {
 		seen := map[BindingKind]bool{}
+		bar := strings.HasPrefix(item, "bar instrument ")
 		for _, b := range bs {
 			if err := validateBinding(b); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", item, err))
 				continue
+			}
+			if IsSetpointKind(b.Kind) && !bar {
+				errs = append(errs, fmt.Errorf("%s: %q binding is only for a bar instrument", item, b.Kind))
 			}
 			if seen[b.Kind] {
 				errs = append(errs, fmt.Errorf("%s: more than one %q binding", item, b.Kind))
@@ -147,6 +167,9 @@ func ValidateBindings(d *Diagram) error {
 	}
 	for _, dd := range d.DigitalDevices {
 		check(fmt.Sprintf("digital device %d", dd.ID), dd.Bindings)
+	}
+	for _, b := range d.BarInstruments {
+		check(fmt.Sprintf("bar instrument %d", b.ID), b.Bindings)
 	}
 	for _, l := range d.Labels {
 		check(fmt.Sprintf("label %d", l.ID), l.Bindings)
