@@ -516,6 +516,7 @@ larger side.
 | `rx` | number | Rectangle | Corner radius; 0 = square corners, capped at half the shorter side |
 | `terminal` | enum | any symbol whose template has `{terminal:top|bottom}` (StaticVarCompensator) | `top` (default) or `bottom`: the side of the body the terminal is on; the anchor stays the terminal |
 | `terminal` | enum | TwoTerminalBox | empty (default): terminals above and below the box; `left` or `right`: left and right of it |
+| `terminal` | enum | Device | `top` (default), `right`, `bottom` or `left`: the side its terminal is on as seen on the diagram, whatever its `orient` (`UprightTerminal`) |
 | `largeArc`, `sweep` | bool | Arc | The SVG arc's own large-arc and sweep flags |
 | `square` | bool | PostPole | Square marker instead of round |
 | `radius` | number | Lamp, FaultPassageIndicator, JunctionPoint (default 3), PostPole, Fork (arm length, default 10), Circle (default 20) | Circle radius (PostPole square: half-width) |
@@ -681,6 +682,7 @@ extendable per site); this is the default set.
 | Load | 330001 | 1 | Editor's own symbol (consumer) |
 | NetworkInfeed | 330002 | 1 | Editor's own symbol (outside network) |
 | StaticVarCompensator | 330003 | 1 | Editor's own symbol; `propertyText` (default `SVC`, template `{text:SVC}`), `terminal` (`top` default, `bottom`: the box above the terminal; template `{terminal:top|bottom}`) |
+| Device | 130 | 1 | energy meter; its terminal is on the side `terminal` names on the diagram, `orient` turning only the square (template `{terminalSide:top|right|bottom|left}` inside the counter-rotated group); `propertyText` (default `Wh`, template `{text:Wh}`) |
 | TwoTerminalBox | 330004 | 2 | Editor's own generic in-line box, never turned (no `orient`); port 1 above and port 2 below it, or with `terminal` `left` (or `right`) port 1 left and port 2 right of it (template `{terminalAxis:vertical|horizontal}`); `propertyText` (empty by default, template `{text:}`); no CIM equipment, the CIM export passes its connection through |
 | PowerflowIndicator | 320001 | — | decorative; `state` = direction, `textColor`; SVG `data-text="0:→,1:←"`, the glyph per state for rdss-dms |
 | Line / Road | 1 / 335 | — | decorative; `<geometry>` |

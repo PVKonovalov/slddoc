@@ -576,6 +576,12 @@ func SymbolTerminals(el *model.Element, terminals map[string][]model.Point) []mo
 		half = el.Span / 2
 	}
 	side := model.SideTerminals(el)
+	at := el
+	if model.UprightTerminal(el) {
+		upright := *el
+		upright.Orient, upright.Mirror = model.TerminalAngle(el.Terminal), false
+		at = &upright
+	}
 	out := make([]model.Point, len(ts))
 	for i, t := range ts {
 		if side {
@@ -585,7 +591,7 @@ func SymbolTerminals(el *model.Element, terminals map[string][]model.Point) []mo
 		if half > math.Abs(y) && y != 0 {
 			y = math.Copysign(half, y)
 		}
-		out[i] = PlaceLocal(el, model.Point{X: x, Y: y})
+		out[i] = PlaceLocal(at, model.Point{X: x, Y: y})
 	}
 	return out
 }

@@ -232,6 +232,25 @@ func applyTerminalAxis(tmpl string, side bool) string {
 	})
 }
 
+// terminalSideRe matches a template's {terminalSide:top|right|bottom|left} placeholder: the fragment of the element's
+// Terminal, top when empty.
+var terminalSideRe = regexp.MustCompile(`\{terminalSide:([^|}]*)\|([^|}]*)\|([^|}]*)\|([^}]*)\}`)
+
+func applyTerminalSide(tmpl string, dir model.TerminalDirection) string {
+	return terminalSideRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		g := terminalSideRe.FindStringSubmatch(m)
+		switch dir {
+		case model.TerminalRight:
+			return g[2]
+		case model.TerminalBottom:
+			return g[3]
+		case model.TerminalLeft:
+			return g[4]
+		}
+		return g[1]
+	})
+}
+
 func applyTerminal(tmpl string, dir model.TerminalDirection) string {
 	return terminalRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		g := terminalRe.FindStringSubmatch(m)
@@ -767,6 +786,7 @@ func renderElementLocal(w io.Writer, lib *SymbolLibrary, voltageColor map[int]st
 		return
 	}
 	body := applyTerminalAxis(applyTerminal(applyStateLine(applyTapChanger(tmpl, e.TapChanger), e.State), e.Terminal), model.SideTerminals(&e))
+	body = applyTerminalSide(body, e.Terminal)
 	// {counterRotate} is the negated Orient — wrapping a template fragment
 	// in <g transform="rotate({counterRotate})"> cancels the outer <g
 	// transform="...rotate(Orient)"> this function itself emits below, so

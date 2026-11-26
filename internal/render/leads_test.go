@@ -25,3 +25,14 @@ func TestRenderLeadExtension(t *testing.T) {
 		t.Errorf("lead extension must keep the stroke width under the size step:\n%s", buf.String())
 	}
 }
+
+// TestApplyTerminalSide picks the {terminalSide:top|right|bottom|left} fragment of the element's Terminal, top when
+// empty.
+func TestApplyTerminalSide(t *testing.T) {
+	tmpl := `<path d="{terminalSide:T|R|B|L}"/>`
+	for dir, want := range map[model.TerminalDirection]string{"": "T", model.TerminalTop: "T", model.TerminalRight: "R", model.TerminalBottom: "B", model.TerminalLeft: "L"} {
+		if got := applyTerminalSide(tmpl, dir); got != `<path d="`+want+`"/>` {
+			t.Errorf("terminal %q: got %s", dir, got)
+		}
+	}
+}

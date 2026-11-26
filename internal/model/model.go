@@ -377,7 +377,8 @@ const (
 	// the center.
 	ClassAnchorPole Class = "AnchorPole"
 	// ClassDevice (shape 130, Device) is an energy meter: a 30x30 square with a line 10 above its center and an
-	// upright "Wh", drawn in its Voltage color. No Ports.
+	// upright text (PropertyText, "Wh" by default), drawn in its Voltage color. One Port, on the side its Terminal
+	// names as seen on the diagram (UprightTerminal).
 	ClassDevice Class = "Device"
 	// ClassZoneDivision (shape 60, Zone division) marks the boundary of two zones on a wire: a 10-long stroke down
 	// from its anchor in its Voltage color under a magenta "Z", with terminals at both ends. Conducting.
@@ -831,6 +832,7 @@ type Element struct {
 	// Terminal is the side a symbol with a {terminal:top|bottom} template (Static var compensator, 330003) has its
 	// terminal on: TerminalBottom draws the body above the terminal, anything else (empty = TerminalTop) below it.
 	// For a Two-terminal box (330004) TerminalLeft or TerminalRight puts its terminals left and right (SideTerminals).
+	// For a Device (130) it is the side of its terminal as seen on the diagram, whatever its Orient (UprightTerminal).
 	Terminal TerminalDirection `xml:"terminal,attr,omitempty" json:"terminal,omitempty"`
 	// LineStyle is a Line's (shape 1) own dash pattern, a Rectangle's (3)
 	// border dash (the Container's (310) solid/dotted/dashed), a Table's (312)
@@ -1056,6 +1058,25 @@ const (
 // (above and below) are then taken with x and y swapped.
 func SideTerminals(e *Element) bool {
 	return e.Class == ClassTwoTerminalBox && (e.Terminal == TerminalLeft || e.Terminal == TerminalRight)
+}
+
+// UprightTerminal reports whether e's terminal ignores its Orient and Mirror: a Device (meter) has its one terminal on
+// the side its Terminal names (top when empty) as seen on the diagram.
+func UprightTerminal(e *Element) bool {
+	return e.Class == ClassDevice
+}
+
+// TerminalAngle is the rotation from the top to side d: 0 (top or empty), 90 (right), 180 (bottom) or -90 (left).
+func TerminalAngle(d TerminalDirection) int {
+	switch d {
+	case TerminalRight:
+		return 90
+	case TerminalBottom:
+		return 180
+	case TerminalLeft:
+		return -90
+	}
+	return 0
 }
 
 // TerminalDirection is which side of a winding's own circle its lead (and
